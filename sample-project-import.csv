@@ -1,0 +1,4 @@
+id,name,pm,location,startWeek,durationWeeks,phase,status,crew,superintendent
+J-25001,Sample Concrete Pad,C. Strong,Atlanta GA,0,2,Layout / Pour,Planned,Crew A,Luis M.
+J-25002,Sample Retaining Wall,C. Strong,Duluth GA,2,3,Form / Rebar,Confirmed,Crew B,Jose R.
+J-25003,Sample Sidewalk Package,A. Nelson,Marietta GA,4,2,Place / Finish,At Risk,Crew C,Mark T.
