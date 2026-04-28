@@ -1,15 +1,28 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, CalendarDays, Users, BriefcaseBusiness, X } from "lucide-react";
+import { Plus, Trash2, CalendarDays, Users, BriefcaseBusiness, X, ZoomIn } from "lucide-react";
 
-const STORAGE_KEY = "ggc_resource_planning_projects";
+const STORAGE_KEY = "ggc_resource_planning_projects_v2";
+
+const divisions = ["Hardscape", "Commercial", "Industrial", "Tilt"];
+
+const divisionStyles = {
+  Hardscape: "bg-emerald-700",
+  Commercial: "bg-blue-700",
+  Industrial: "bg-orange-600",
+  Tilt: "bg-purple-700",
+};
 
 const startingProjects = [
   {
     id: crypto.randomUUID(),
     name: "Eastside Apartments",
     client: "Evergreen Development",
+    division: "Commercial",
     superintendent: "Mike Reynolds",
-    crew: "Crew A",
+    crew1: "Crew A",
+    crew2: "Crew B",
+    crew3: "",
+    crew4: "",
     start: "2026-04-20",
     end: "2026-05-22",
     status: "Active",
@@ -18,8 +31,12 @@ const startingProjects = [
     id: crypto.randomUUID(),
     name: "Northview School",
     client: "Northview County Schools",
+    division: "Hardscape",
     superintendent: "Carlos Vega",
-    crew: "Crew B",
+    crew1: "Crew C",
+    crew2: "",
+    crew3: "",
+    crew4: "",
     start: "2026-04-28",
     end: "2026-06-05",
     status: "Active",
@@ -28,8 +45,12 @@ const startingProjects = [
     id: crypto.randomUUID(),
     name: "Peachtree Retail",
     client: "Summit Retail Group",
+    division: "Tilt",
     superintendent: "Mike Reynolds",
-    crew: "Crew B",
+    crew1: "Crew D",
+    crew2: "Crew E",
+    crew3: "Crew F",
+    crew4: "",
     start: "2026-05-12",
     end: "2026-06-18",
     status: "Scheduled",
@@ -39,25 +60,129 @@ const startingProjects = [
 const blankProject = {
   name: "",
   client: "",
+  division: "Hardscape",
   superintendent: "",
-  crew: "",
+  crew1: "",
+  crew2: "",
+  crew3: "",
+  crew4: "",
   start: "",
   end: "",
   status: "Scheduled",
 };
 
+const zoomModes = ["Days", "Weeks", "Months", "Quarters", "Years"];
+
+function toDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function addDays(date, days) {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
+function addMonths(date, months) {
+  const result = new Date(date);
+  result.setMonth(result.getMonth() + months);
+  return result;
+}
+
+function startOfWeek(date) {
+  const result = new Date(date);
+  const day = result.getDay();
+  result.setDate(result.getDate() - day);
+  return result;
+}
+
+function startOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function startOfQuarter(date) {
+  const quarterMonth = Math.floor(date.getMonth() / 3) * 3;
+  return new Date(date.getFullYear(), quarterMonth, 1);
+}
+
+function startOfYear(date) {
+  return new Date(date.getFullYear(), 0, 1);
+}
+
 function daysBetween(start, end) {
-  const startDate = new Date(start);
-  const endDate = new Date(end);
+  const startDate = start instanceof Date ? start : new Date(start);
+  const endDate = end instanceof Date ? end : new Date(end);
   if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return 0;
   return Math.max(1, Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1);
 }
 
 function formatDate(date) {
   if (!date) return "Not set";
-  const parsed = new Date(date);
+  const parsed = date instanceof Date ? date : new Date(date);
   if (Number.isNaN(parsed.getTime())) return "Not set";
   return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatTick(date, zoom) {
+  if (zoom === "Days") return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  if (zoom === "Weeks") return `Week of ${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+  if (zoom === "Months") return date.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+  if (zoom === "Quarters") return `Q${Math.floor(date.getMonth() / 3) + 1} ${date.getFullYear()}`;
+  return String(date.getFullYear());
+}
+
+function buildTimeline(projects, zoom) {
+  const starts = projects.map((p) => toDate(p.start)).filter(Boolean);
+  const ends = projects.map((p) => toDate(p.end)).filter(Boolean);
+
+  let min = starts.length ? new Date(Math.min(...starts)) : new Date();
+  let max = ends.length ? new Date(Math.max(...ends)) : addDays(new Date(), 30);
+
+  if (zoom === "Days") {
+    min = addDays(min, -3);
+    max = addDays(max, 3);
+  }
+  if (zoom === "Weeks") {
+    min = startOfWeek(addDays(min, -7));
+    max = addDays(max, 14);
+  }
+  if (zoom === "Months") {
+    min = startOfMonth(addMonths(min, -1));
+    max = addMonths(max, 1);
+  }
+  if (zoom === "Quarters") {
+    min = startOfQuarter(addMonths(min, -3));
+    max = addMonths(max, 3);
+  }
+  if (zoom === "Years") {
+    min = startOfYear(min);
+    max = addMonths(startOfYear(max), 12);
+  }
+
+  const ticks = [];
+  let cursor = new Date(min);
+
+  while (cursor <= max && ticks.length < 120) {
+    ticks.push(new Date(cursor));
+    if (zoom === "Days") cursor = addDays(cursor, 1);
+    else if (zoom === "Weeks") cursor = addDays(cursor, 7);
+    else if (zoom === "Months") cursor = addMonths(cursor, 1);
+    else if (zoom === "Quarters") cursor = addMonths(cursor, 3);
+    else cursor = addMonths(cursor, 12);
+  }
+
+  return { minDate: min, maxDate: max, totalDays: daysBetween(min, max), ticks };
+}
+
+function getProjectPeopleLabel(project) {
+  return [project.superintendent, project.crew1, project.crew2, project.crew3, project.crew4]
+    .filter(Boolean)
+    .join(" • ");
+}
+
+function getProjectCrews(project) {
+  return [project.crew1, project.crew2, project.crew3, project.crew4].filter(Boolean);
 }
 
 function StatCard({ icon: Icon, label, value }) {
@@ -83,11 +208,11 @@ function ProjectForm({ form, setForm, onSave, onCancel, editing }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
-      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl">
+      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-slate-200 p-5">
           <div>
             <h2 className="text-xl font-bold text-slate-900">{editing ? "Edit Project" : "Add Project"}</h2>
-            <p className="text-sm text-slate-500">Enter schedule and resource details.</p>
+            <p className="text-sm text-slate-500">Enter project, division, schedule, and resource details.</p>
           </div>
           <button onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">
             <X size={20} />
@@ -106,13 +231,45 @@ function ProjectForm({ form, setForm, onSave, onCancel, editing }) {
           </label>
 
           <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Division</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.division} onChange={(e) => updateField("division", e.target.value)}>
+              {divisions.map((division) => <option key={division}>{division}</option>)}
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Status</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.status} onChange={(e) => updateField("status", e.target.value)}>
+              <option>Scheduled</option>
+              <option>Active</option>
+              <option>On Hold</option>
+              <option>Complete</option>
+            </select>
+          </label>
+
+          <label className="space-y-1">
             <span className="text-sm font-medium text-slate-700">Superintendent</span>
             <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.superintendent} onChange={(e) => updateField("superintendent", e.target.value)} />
           </label>
 
           <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Crew</span>
-            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.crew} onChange={(e) => updateField("crew", e.target.value)} />
+            <span className="text-sm font-medium text-slate-700">Crew #1</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.crew1} onChange={(e) => updateField("crew1", e.target.value)} />
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Crew #2</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.crew2} onChange={(e) => updateField("crew2", e.target.value)} />
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Crew #3</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.crew3} onChange={(e) => updateField("crew3", e.target.value)} />
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Crew #4</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.crew4} onChange={(e) => updateField("crew4", e.target.value)} />
           </label>
 
           <label className="space-y-1">
@@ -123,16 +280,6 @@ function ProjectForm({ form, setForm, onSave, onCancel, editing }) {
           <label className="space-y-1">
             <span className="text-sm font-medium text-slate-700">End Date</span>
             <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.end} onChange={(e) => updateField("end", e.target.value)} />
-          </label>
-
-          <label className="space-y-1 md:col-span-2">
-            <span className="text-sm font-medium text-slate-700">Status</span>
-            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.status} onChange={(e) => updateField("status", e.target.value)}>
-              <option>Scheduled</option>
-              <option>Active</option>
-              <option>On Hold</option>
-              <option>Complete</option>
-            </select>
           </label>
         </div>
 
@@ -145,19 +292,41 @@ function ProjectForm({ form, setForm, onSave, onCancel, editing }) {
   );
 }
 
-function GanttBar({ project, minDate, totalDays }) {
-  const offset = daysBetween(minDate, project.start) - 1;
-  const length = daysBetween(project.start, project.end);
-  const left = totalDays > 0 ? (offset / totalDays) * 100 : 0;
-  const width = totalDays > 0 ? (length / totalDays) * 100 : 10;
+function GanttHeader({ timeline, zoom }) {
+  return (
+    <div className="ml-[260px] min-w-[900px] border-b border-slate-200 pb-2">
+      <div className="relative h-10">
+        {timeline.ticks.map((tick, index) => {
+          const left = (daysBetween(timeline.minDate, tick) - 1) / timeline.totalDays * 100;
+          return (
+            <div key={`${tick.toISOString()}-${index}`} className="absolute top-0 h-10 border-l border-slate-200 pl-2 text-xs font-medium text-slate-500" style={{ left: `${left}%` }}>
+              {formatTick(tick, zoom)}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function GanttBar({ project, timeline }) {
+  const start = toDate(project.start);
+  const end = toDate(project.end);
+  const offset = start ? daysBetween(timeline.minDate, start) - 1 : 0;
+  const length = start && end ? daysBetween(start, end) : 1;
+  const left = timeline.totalDays > 0 ? (offset / timeline.totalDays) * 100 : 0;
+  const width = timeline.totalDays > 0 ? (length / timeline.totalDays) * 100 : 10;
+  const colorClass = divisionStyles[project.division] || "bg-slate-700";
+  const label = getProjectPeopleLabel(project);
 
   return (
-    <div className="relative h-10 rounded-xl bg-slate-100">
+    <div className="relative h-11 rounded-xl bg-slate-100">
       <div
-        className="absolute top-1 h-8 rounded-xl bg-emerald-700 px-3 text-xs font-semibold leading-8 text-white shadow-sm"
-        style={{ left: `${Math.max(0, left)}%`, width: `${Math.max(8, width)}%` }}
+        className={`absolute top-1 h-9 overflow-hidden rounded-xl ${colorClass} px-3 text-xs font-semibold leading-9 text-white shadow-sm`}
+        style={{ left: `${Math.max(0, left)}%`, width: `${Math.max(7, width)}%` }}
+        title={label || project.name}
       >
-        {project.name}
+        {label}
       </div>
     </div>
   );
@@ -171,6 +340,7 @@ export default function App() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(blankProject);
+  const [zoom, setZoom] = useState("Weeks");
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
@@ -178,15 +348,8 @@ export default function App() {
 
   const activeProjects = projects.filter((project) => project.status !== "Complete");
   const superintendents = [...new Set(projects.map((p) => p.superintendent).filter(Boolean))];
-  const crews = [...new Set(projects.map((p) => p.crew).filter(Boolean))];
-
-  const timeline = useMemo(() => {
-    const starts = projects.map((p) => new Date(p.start)).filter((d) => !Number.isNaN(d.getTime()));
-    const ends = projects.map((p) => new Date(p.end)).filter((d) => !Number.isNaN(d.getTime()));
-    const min = starts.length ? new Date(Math.min(...starts)) : new Date();
-    const max = ends.length ? new Date(Math.max(...ends)) : new Date();
-    return { minDate: min.toISOString().slice(0, 10), totalDays: daysBetween(min, max) };
-  }, [projects]);
+  const crews = [...new Set(projects.flatMap((p) => getProjectCrews(p)).filter(Boolean))];
+  const timeline = useMemo(() => buildTimeline(projects, zoom), [projects, zoom]);
 
   function openAddForm() {
     setEditingId(null);
@@ -196,7 +359,7 @@ export default function App() {
 
   function openEditForm(project) {
     setEditingId(project.id);
-    setForm(project);
+    setForm({ ...blankProject, ...project });
     setShowForm(true);
   }
 
@@ -231,7 +394,7 @@ export default function App() {
           <div>
             <div className="h-1 w-24 rounded-full bg-emerald-700" />
             <h1 className="mt-3 text-3xl font-bold tracking-tight">GGC Resource Planning</h1>
-            <p className="mt-1 text-slate-500">Project, superintendent, and crew scheduling dashboard.</p>
+            <p className="mt-1 text-slate-500">Project, superintendent, crew, and division scheduling dashboard.</p>
           </div>
           <button onClick={openAddForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white shadow-sm hover:bg-emerald-800">
             <Plus size={18} /> Add Project
@@ -248,24 +411,45 @@ export default function App() {
         </div>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-xl font-bold">Project Gantt View</h2>
-              <p className="text-sm text-slate-500">Visual schedule based on start and end dates.</p>
+              <p className="text-sm text-slate-500">Ribbon color is based on division. Ribbon label shows superintendent and crew #1 through crew #4.</p>
             </div>
-            <p className="text-sm text-slate-500">{formatDate(timeline.minDate)}</p>
+            <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <ZoomIn size={16} className="text-slate-500" />
+              <span className="text-sm font-medium text-slate-700">Zoom</span>
+              <select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">
+                {zoomModes.map((mode) => <option key={mode}>{mode}</option>)}
+              </select>
+            </div>
           </div>
 
-          <div className="space-y-3">
-            {projects.map((project) => (
-              <div key={project.id} className="grid gap-3 md:grid-cols-[220px_1fr] md:items-center">
-                <button onClick={() => openEditForm(project)} className="text-left">
-                  <p className="font-semibold text-slate-900 hover:text-emerald-700">{project.name}</p>
-                  <p className="text-xs text-slate-500">{formatDate(project.start)} - {formatDate(project.end)}</p>
-                </button>
-                <GanttBar project={project} minDate={timeline.minDate} totalDays={timeline.totalDays} />
+          <div className="mb-4 flex flex-wrap gap-3 text-xs font-semibold">
+            {divisions.map((division) => (
+              <div key={division} className="flex items-center gap-2">
+                <span className={`h-3 w-8 rounded-full ${divisionStyles[division]}`} />
+                <span className="text-slate-600">{division}</span>
               </div>
             ))}
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
+            <GanttHeader timeline={timeline} zoom={zoom} />
+            <div className="mt-3 min-w-[1160px] space-y-3">
+              {projects.map((project) => (
+                <div key={project.id} className="grid grid-cols-[240px_1fr] gap-5 items-center">
+                  <button onClick={() => openEditForm(project)} className="text-left">
+                    <div className="flex items-center gap-2">
+                      <span className={`h-3 w-3 rounded-full ${divisionStyles[project.division] || "bg-slate-600"}`} />
+                      <p className="font-semibold text-slate-900 hover:text-emerald-700">{project.name}</p>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">{project.division} • {formatDate(project.start)} - {formatDate(project.end)}</p>
+                  </button>
+                  <GanttBar project={project} timeline={timeline} />
+                </div>
+              ))}
+            </div>
           </div>
         </section>
 
@@ -291,7 +475,7 @@ export default function App() {
                 <div key={name} className="rounded-xl border border-slate-200 p-4">
                   <p className="font-semibold">{name}</p>
                   <p className="mt-1 text-sm text-slate-500">
-                    {projects.filter((p) => p.crew === name).map((p) => p.name).join(", ")}
+                    {projects.filter((p) => getProjectCrews(p).includes(name)).map((p) => p.name).join(", ")}
                   </p>
                 </div>
               ))}
@@ -301,14 +485,18 @@ export default function App() {
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-xl font-bold">Project List</h2>
-          <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
-            <table className="w-full text-left text-sm">
+          <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full min-w-[1100px] text-left text-sm">
               <thead className="bg-slate-100 text-slate-600">
                 <tr>
                   <th className="p-3">Project</th>
+                  <th className="p-3">Division</th>
                   <th className="p-3">Client</th>
                   <th className="p-3">Superintendent</th>
-                  <th className="p-3">Crew</th>
+                  <th className="p-3">Crew #1</th>
+                  <th className="p-3">Crew #2</th>
+                  <th className="p-3">Crew #3</th>
+                  <th className="p-3">Crew #4</th>
                   <th className="p-3">Status</th>
                   <th className="p-3 text-right">Actions</th>
                 </tr>
@@ -317,9 +505,13 @@ export default function App() {
                 {projects.map((project) => (
                   <tr key={project.id} className="border-t border-slate-200">
                     <td className="p-3 font-medium">{project.name}</td>
+                    <td className="p-3">{project.division}</td>
                     <td className="p-3">{project.client}</td>
                     <td className="p-3">{project.superintendent}</td>
-                    <td className="p-3">{project.crew}</td>
+                    <td className="p-3">{project.crew1}</td>
+                    <td className="p-3">{project.crew2}</td>
+                    <td className="p-3">{project.crew3}</td>
+                    <td className="p-3">{project.crew4}</td>
                     <td className="p-3">{project.status}</td>
                     <td className="p-3 text-right">
                       <button onClick={() => openEditForm(project)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button>
@@ -347,4 +539,3 @@ export default function App() {
     </main>
   );
 }
-
