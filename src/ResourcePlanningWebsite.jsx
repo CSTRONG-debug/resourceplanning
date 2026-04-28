@@ -1,11 +1,17 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, CalendarDays, Users, BriefcaseBusiness, X, ZoomIn, Settings, Search, FolderKanban, ClipboardCheck } from "lucide-react";
 
-const PROJECTS_KEY = "ggc_resource_planning_projects_v5";
-const ASSIGNMENTS_KEY = "ggc_resource_planning_assignments_v2";
-const RESOURCES_KEY = "ggc_resource_planning_resources_v1";
-const CREWS_KEY = "ggc_resource_planning_crews_v1";
-const CERTIFICATIONS_KEY = "ggc_resource_planning_certifications_v1";
+const PROJECTS_KEY = "ggc_resource_planning_projects";
+const ASSIGNMENTS_KEY = "ggc_resource_planning_assignments";
+const RESOURCES_KEY = "ggc_resource_planning_resources";
+const CREWS_KEY = "ggc_resource_planning_crews";
+const CERTIFICATIONS_KEY = "ggc_resource_planning_certifications";
+
+const PROJECTS_LEGACY_KEYS = ["ggc_resource_planning_projects_v5", "ggc_resource_planning_projects_v4", "ggc_resource_planning_projects_v3", "ggc_resource_planning_projects_v2", "ggc_resource_planning_projects"];
+const ASSIGNMENTS_LEGACY_KEYS = ["ggc_resource_planning_assignments_v2", "ggc_resource_planning_assignments_v1", "ggc_resource_planning_assignments"];
+const RESOURCES_LEGACY_KEYS = ["ggc_resource_planning_resources_v1", "ggc_resource_planning_superintendents_v1", "ggc_resource_planning_resources"];
+const CREWS_LEGACY_KEYS = ["ggc_resource_planning_crews_v1", "ggc_resource_planning_crews"];
+const CERTIFICATIONS_LEGACY_KEYS = ["ggc_resource_planning_certifications_v1", "ggc_resource_planning_certifications"]; 
 
 const divisions = ["Hardscape", "Commercial", "Industrial", "Tilt"];
 const statuses = ["Pending Award", "Scheduled", "Active", "On Hold", "Complete"];
@@ -106,6 +112,17 @@ function formatDate(date) { if (!date) return "Not set"; const parsed = date ins
 function formatTick(date, zoom) { if (zoom === "Days") return date.toLocaleDateString(undefined, { month: "short", day: "numeric" }); if (zoom === "Weeks") return `Week of ${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`; if (zoom === "Months") return date.toLocaleDateString(undefined, { month: "short", year: "numeric" }); if (zoom === "Quarters") return `Q${Math.floor(date.getMonth() / 3) + 1} ${date.getFullYear()}`; return String(date.getFullYear()); }
 
 function loadStored(key, fallback) { try { const saved = localStorage.getItem(key); return saved ? JSON.parse(saved) : fallback; } catch { return fallback; } }
+function loadStoredAny(keys, fallback) {
+  for (const key of keys) {
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // Keep checking older keys if one value is malformed.
+    }
+  }
+  return fallback;
+}
 function toggleListValue(list, value) { return list.includes(value) ? list.filter((item) => item !== value) : [...list, value]; }
 function findProject(projects, projectId) { return projects.find((project) => project.id === projectId); }
 function getCrewDisplayName(crew) {
@@ -294,11 +311,11 @@ function ResourceDemandChart({ items, timeline, zoom, totalResources }) {
 }
 
 export default function App() {
-  const [projects, setProjects] = useState(() => loadStored(PROJECTS_KEY, startingProjects));
-  const [assignments, setAssignments] = useState(() => loadStored(ASSIGNMENTS_KEY, startingAssignments));
-  const [resources, setResources] = useState(() => loadStored(RESOURCES_KEY, startingResources));
-  const [crews, setCrews] = useState(() => loadStored(CREWS_KEY, startingCrews));
-  const [certifications, setCertifications] = useState(() => loadStored(CERTIFICATIONS_KEY, startingCertifications));
+  const [projects, setProjects] = useState(() => loadStoredAny(PROJECTS_LEGACY_KEYS, startingProjects));
+  const [assignments, setAssignments] = useState(() => loadStoredAny(ASSIGNMENTS_LEGACY_KEYS, startingAssignments));
+  const [resources, setResources] = useState(() => loadStoredAny(RESOURCES_LEGACY_KEYS, startingResources));
+  const [crews, setCrews] = useState(() => loadStoredAny(CREWS_LEGACY_KEYS, startingCrews));
+  const [certifications, setCertifications] = useState(() => loadStoredAny(CERTIFICATIONS_LEGACY_KEYS, startingCertifications));
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [showAssignmentForm, setShowAssignmentForm] = useState(false);
   const [showResourceForm, setShowResourceForm] = useState(false);
@@ -318,6 +335,7 @@ export default function App() {
   const [showCertSettings, setShowCertSettings] = useState(false);
   const [newCertification, setNewCertification] = useState("");
   const [resourceTypeFilter, setResourceTypeFilter] = useState([...resourceTypes]);
+  const [dashboardResourceTypeFilter, setDashboardResourceTypeFilter] = useState([...resourceTypes]);
   const [projectTabDivisionFilter, setProjectTabDivisionFilter] = useState([...divisions]);
 
   useEffect(() => localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects)), [projects]);
@@ -327,13 +345,26 @@ export default function App() {
   useEffect(() => localStorage.setItem(CERTIFICATIONS_KEY, JSON.stringify(certifications)), [certifications]);
 
   const ganttItems = buildGanttItems(projects, assignments);
-  const visibleItems = ganttItems.filter((item) => divisionFilter.includes(item.project.division) && statusFilter.includes(item.project.status));
+  const assignmentMatchesDashboardResourceType = (assignment) => {
+    const selectedResourceNames = resources
+      .filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType))
+      .map((resource) => resource.name);
+    return [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety]
+      .filter(Boolean)
+      .some((name) => selectedResourceNames.includes(name));
+  };
+  const visibleItems = ganttItems.filter((item) =>
+    divisionFilter.includes(item.project.division) &&
+    statusFilter.includes(item.project.status) &&
+    assignmentMatchesDashboardResourceType(item.assignment)
+  );
   const activeProjects = projects.filter((project) => project.status !== "Complete");
   const assignedCrewIds = [...new Set(assignments.flatMap((assignment) => getAssignmentCrewIds(assignment)).filter(Boolean))];
   const filteredResources = resources.filter((resource) => resourceTypeFilter.includes(resource.resourceType));
   const filteredProjectsForProjectTab = projects.filter((project) => projectTabDivisionFilter.includes(project.division));
   const timeline = useMemo(() => buildTimeline(visibleItems, zoom), [visibleItems, zoom]);
-  const projectGanttRows = assignments.map((assignment) => {
+  const visibleAssignments = assignments.filter((assignment) => assignmentMatchesDashboardResourceType(assignment));
+  const projectGanttRows = visibleAssignments.map((assignment) => {
     const project = findProject(projects, assignment.projectId);
     if (!project) return null;
     if (!divisionFilter.includes(project.division) || !statusFilter.includes(project.status)) return null;
@@ -449,10 +480,10 @@ export default function App() {
       {page === "dashboard" && (
         <section className="mx-auto max-w-7xl space-y-6 px-6 py-6">
           <div className="grid gap-4 md:grid-cols-4"><StatCard icon={BriefcaseBusiness} label="Total Projects" value={projects.length} /><StatCard icon={ClipboardCheck} label="Assignments" value={assignments.length} /><StatCard icon={Users} label="Resources" value={resources.length} /><StatCard icon={FolderKanban} label="Crews" value={crews.length} /></div>
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><h2 className="text-xl font-bold">Project Assignment Gantt View</h2><p className="text-sm text-slate-500">Each project assignment is one row. Multiple mobilizations appear on that same project row.</p></div><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><ZoomIn size={16} className="text-slate-500" /><span className="text-sm font-medium text-slate-700">Zoom</span><select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">{zoomModes.map((mode) => <option key={mode}>{mode}</option>)}</select></div></div><div className="mb-4 grid gap-3 lg:grid-cols-2"><MultiSelectFilter label="Division Filter" options={divisions} selected={divisionFilter} setSelected={setDivisionFilter} /><MultiSelectFilter label="Status Filter" options={statuses} selected={statusFilter} setSelected={setStatusFilter} /></div><div className="mb-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-8 rounded-full ${divisionStyles[division]}`} /><span className="text-slate-600">{division}</span></div>)}<div className="text-slate-400">Pending Award uses lighter shade</div></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{projectGanttRows.map((row) => <button key={row.assignment.id} onClick={() => openEditAssignmentForm(row.assignment)} className="block w-full text-left"><ProjectGanttRow assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} /></button>)}</div></div></section>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><h2 className="text-xl font-bold">Project Assignment Gantt View</h2><p className="text-sm text-slate-500">Each project assignment is one row. Multiple mobilizations appear on that same project row.</p></div><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><ZoomIn size={16} className="text-slate-500" /><span className="text-sm font-medium text-slate-700">Zoom</span><select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">{zoomModes.map((mode) => <option key={mode}>{mode}</option>)}</select></div></div><div className="mb-4 grid gap-3 lg:grid-cols-3"><MultiSelectFilter label="Division Filter" options={divisions} selected={divisionFilter} setSelected={setDivisionFilter} /><MultiSelectFilter label="Status Filter" options={statuses} selected={statusFilter} setSelected={setStatusFilter} /><MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={dashboardResourceTypeFilter} setSelected={setDashboardResourceTypeFilter} /></div><div className="mb-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-8 rounded-full ${divisionStyles[division]}`} /><span className="text-slate-600">{division}</span></div>)}<div className="text-slate-400">Pending Award uses lighter shade</div></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{projectGanttRows.map((row) => <button key={row.assignment.id} onClick={() => openEditAssignmentForm(row.assignment)} className="block w-full text-left"><ProjectGanttRow assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} /></button>)}</div></div></section>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4"><h2 className="text-xl font-bold">Resource Gantt View</h2><p className="text-sm text-slate-500">Rows are resources. Bars show the assigned project name for each mobilization.</p></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />)}</div></div></section>
           <ResourceDemandChart items={visibleItems} timeline={timeline} zoom={zoom} totalResources={resources.length} />
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-bold">Assignments</h2><p className="text-sm text-slate-500">Assign existing projects to resources and crews.</p></div><button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><ClipboardCheck size={17} /> Assign</button></div><div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1250px] text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Project</th><th className="p-3">PM</th><th className="p-3">Superintendent</th><th className="p-3">Field Coordinator</th><th className="p-3">Field Engineer</th><th className="p-3">Safety</th><th className="p-3">Crews</th><th className="p-3">Mobilizations</th><th className="p-3 text-right">Actions</th></tr></thead><tbody>{assignments.map((assignment) => { const project = findProject(projects, assignment.projectId); return <tr key={assignment.id} className="border-t border-slate-200 align-top"><td className="p-3 font-medium">{project ? `${project.projectNumber} - ${project.name}` : "Missing project"}</td><td className="p-3">{assignment.projectManager}</td><td className="p-3">{assignment.superintendent}</td><td className="p-3">{assignment.fieldCoordinator}</td><td className="p-3">{assignment.fieldEngineer}</td><td className="p-3">{assignment.safety}</td><td className="p-3">{getAssignmentCrewDisplayNames(assignment, crews).join(", ")}</td><td className="p-3">{(assignment.mobilizations || []).map((mob, index) => `#${index + 1}: ${formatDate(mob.start)} - ${formatDate(mob.end)}`).join("; ")}</td><td className="p-3 text-right"><button onClick={() => openEditAssignmentForm(assignment)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button><button onClick={() => deleteAssignment(assignment.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button></td></tr>; })}</tbody></table></div></section>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-bold">Assignments</h2><p className="text-sm text-slate-500">Assign existing projects to resources and crews.</p></div><button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><ClipboardCheck size={17} /> Assign</button></div><div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1250px] text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Project</th><th className="p-3">PM</th><th className="p-3">Superintendent</th><th className="p-3">Field Coordinator</th><th className="p-3">Field Engineer</th><th className="p-3">Safety</th><th className="p-3">Crews</th><th className="p-3">Mobilizations</th><th className="p-3 text-right">Actions</th></tr></thead><tbody>{visibleAssignments.map((assignment) => { const project = findProject(projects, assignment.projectId); return <tr key={assignment.id} className="border-t border-slate-200 align-top"><td className="p-3 font-medium">{project ? `${project.projectNumber} - ${project.name}` : "Missing project"}</td><td className="p-3">{assignment.projectManager}</td><td className="p-3">{assignment.superintendent}</td><td className="p-3">{assignment.fieldCoordinator}</td><td className="p-3">{assignment.fieldEngineer}</td><td className="p-3">{assignment.safety}</td><td className="p-3">{getAssignmentCrewDisplayNames(assignment, crews).join(", ")}</td><td className="p-3">{(assignment.mobilizations || []).map((mob, index) => `#${index + 1}: ${formatDate(mob.start)} - ${formatDate(mob.end)}`).join("; ")}</td><td className="p-3 text-right"><button onClick={() => openEditAssignmentForm(assignment)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button><button onClick={() => deleteAssignment(assignment.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button></td></tr>; })}</tbody></table></div></section>
         </section>
       )}
 
@@ -463,3 +494,4 @@ export default function App() {
     </main>
   );
 }
+
