@@ -12,6 +12,20 @@ const divisionStyles = {
   Tilt: "bg-purple-700",
 };
 
+const pendingDivisionStyles = {
+  Hardscape: "bg-emerald-300",
+  Commercial: "bg-blue-300",
+  Industrial: "bg-orange-300",
+  Tilt: "bg-purple-300",
+};
+
+const companySuperintendents = [
+  { id: "SUP-001", name: "Mike Reynolds", phone: "", email: "", division: "Commercial", status: "Active" },
+  { id: "SUP-002", name: "Carlos Vega", phone: "", email: "", division: "Hardscape", status: "Active" },
+  { id: "SUP-003", name: "Brandon Lee", phone: "", email: "", division: "Tilt", status: "Active" },
+  { id: "SUP-004", name: "", phone: "", email: "", division: "Industrial", status: "Available" },
+];
+
 const startingProjects = [
   {
     id: crypto.randomUUID(),
@@ -240,6 +254,7 @@ function ProjectForm({ form, setForm, onSave, onCancel, editing }) {
           <label className="space-y-1">
             <span className="text-sm font-medium text-slate-700">Status</span>
             <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.status} onChange={(e) => updateField("status", e.target.value)}>
+              <option>Pending Award</option>
               <option>Scheduled</option>
               <option>Active</option>
               <option>On Hold</option>
@@ -316,7 +331,9 @@ function GanttBar({ project, timeline }) {
   const length = start && end ? daysBetween(start, end) : 1;
   const left = timeline.totalDays > 0 ? (offset / timeline.totalDays) * 100 : 0;
   const width = timeline.totalDays > 0 ? (length / timeline.totalDays) * 100 : 10;
-  const colorClass = divisionStyles[project.division] || "bg-slate-700";
+  const colorClass = project.status === "Pending Award"
+    ? pendingDivisionStyles[project.division] || "bg-slate-300"
+    : divisionStyles[project.division] || "bg-slate-700";
   const label = getProjectPeopleLabel(project);
 
   return (
@@ -340,16 +357,21 @@ export default function App() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(blankProject);
-  const [zoom, setZoom] = useState("Weeks");
+  const [zoom, setZoom] = useState("Months");
+  const [divisionFilter, setDivisionFilter] = useState("All Divisions");
+  const [page, setPage] = useState("dashboard");
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
   }, [projects]);
 
+  const visibleProjects = divisionFilter === "All Divisions"
+    ? projects
+    : projects.filter((project) => project.division === divisionFilter);
   const activeProjects = projects.filter((project) => project.status !== "Complete");
   const superintendents = [...new Set(projects.map((p) => p.superintendent).filter(Boolean))];
   const crews = [...new Set(projects.flatMap((p) => getProjectCrews(p)).filter(Boolean))];
-  const timeline = useMemo(() => buildTimeline(projects, zoom), [projects, zoom]);
+  const timeline = useMemo(() => buildTimeline(visibleProjects, zoom), [visibleProjects, zoom]);
 
   function openAddForm() {
     setEditingId(null);
@@ -396,12 +418,56 @@ export default function App() {
             <h1 className="mt-3 text-3xl font-bold tracking-tight">GGC Resource Planning</h1>
             <p className="mt-1 text-slate-500">Project, superintendent, crew, and division scheduling dashboard.</p>
           </div>
-          <button onClick={openAddForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white shadow-sm hover:bg-emerald-800">
-            <Plus size={18} /> Add Project
-          </button>
+          <div className="flex flex-wrap justify-end gap-3">
+            <button onClick={() => setPage("dashboard")} className={`rounded-xl px-4 py-3 font-semibold shadow-sm ${page === "dashboard" ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>
+              Dashboard
+            </button>
+            <button onClick={() => setPage("superintendents")} className={`rounded-xl px-4 py-3 font-semibold shadow-sm ${page === "superintendents" ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>
+              Superintendents
+            </button>
+            <button onClick={openAddForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white shadow-sm hover:bg-emerald-800">
+              <Plus size={18} /> Add Project
+            </button>
+          </div>
         </div>
       </header>
 
+      {page === "superintendents" ? (
+        <section className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4">
+              <h2 className="text-2xl font-bold">Company Superintendents</h2>
+              <p className="text-sm text-slate-500">Master list of company superintendents. Placeholder phone and email fields can be filled in later.</p>
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full min-w-[800px] text-left text-sm">
+                <thead className="bg-slate-100 text-slate-600">
+                  <tr>
+                    <th className="p-3">Name</th>
+                    <th className="p-3">Primary Division</th>
+                    <th className="p-3">Phone</th>
+                    <th className="p-3">Email</th>
+                    <th className="p-3">Status</th>
+                    <th className="p-3">Current Projects</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {companySuperintendents.map((sup) => (
+                    <tr key={sup.id} className="border-t border-slate-200">
+                      <td className="p-3 font-medium">{sup.name || "Unassigned"}</td>
+                      <td className="p-3">{sup.division}</td>
+                      <td className="p-3">{sup.phone}</td>
+                      <td className="p-3">{sup.email}</td>
+                      <td className="p-3">{sup.status}</td>
+                      <td className="p-3">{projects.filter((p) => p.superintendent === sup.name).map((p) => p.name).join(", ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      ) : (
       <section className="mx-auto max-w-7xl space-y-6 px-6 py-6">
         <div className="grid gap-4 md:grid-cols-4">
           <StatCard icon={BriefcaseBusiness} label="Total Projects" value={projects.length} />
@@ -416,12 +482,21 @@ export default function App() {
               <h2 className="text-xl font-bold">Project Gantt View</h2>
               <p className="text-sm text-slate-500">Ribbon color is based on division. Ribbon label shows superintendent and crew #1 through crew #4.</p>
             </div>
-            <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <ZoomIn size={16} className="text-slate-500" />
-              <span className="text-sm font-medium text-slate-700">Zoom</span>
-              <select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">
-                {zoomModes.map((mode) => <option key={mode}>{mode}</option>)}
-              </select>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <span className="text-sm font-medium text-slate-700">Division</span>
+                <select value={divisionFilter} onChange={(e) => setDivisionFilter(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">
+                  <option>All Divisions</option>
+                  {divisions.map((division) => <option key={division}>{division}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <ZoomIn size={16} className="text-slate-500" />
+                <span className="text-sm font-medium text-slate-700">Zoom</span>
+                <select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">
+                  {zoomModes.map((mode) => <option key={mode}>{mode}</option>)}
+                </select>
+              </div>
             </div>
           </div>
 
@@ -437,7 +512,7 @@ export default function App() {
           <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
             <GanttHeader timeline={timeline} zoom={zoom} />
             <div className="mt-3 min-w-[1160px] space-y-3">
-              {projects.map((project) => (
+              {visibleProjects.map((project) => (
                 <div key={project.id} className="grid grid-cols-[240px_1fr] gap-5 items-center">
                   <button onClick={() => openEditForm(project)} className="text-left">
                     <div className="flex items-center gap-2">
@@ -526,6 +601,7 @@ export default function App() {
           </div>
         </section>
       </section>
+      )}
 
       {showForm && (
         <ProjectForm
@@ -539,3 +615,4 @@ export default function App() {
     </main>
   );
 }
+
