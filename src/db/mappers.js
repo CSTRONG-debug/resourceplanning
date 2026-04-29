@@ -10,6 +10,7 @@ export function mapProjectFromDb(p) {
     division: p.division || "Hardscape",
     specificRequirements: p.specific_requirements || [],
     status: p.status || "Scheduled",
+    includeInForecast: p.include_in_forecast || false,
   };
 }
 
@@ -75,6 +76,7 @@ export function projectToDb(project) {
     division: project.division,
     specific_requirements: project.specificRequirements || [],
     status: project.status,
+    include_in_forecast: project.includeInForecast || false,
   };
 }
 
