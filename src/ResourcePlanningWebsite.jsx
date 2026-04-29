@@ -995,7 +995,7 @@ export default function App() {
     if (!section) return;
 
     const clonedSection = section.cloneNode(true);
-    clonedSection.querySelectorAll("button, input, select, label input").forEach((element) => element.remove());
+    clonedSection.querySelectorAll("button, input, select").forEach((element) => element.remove());
     clonedSection.querySelectorAll(".overflow-x-auto").forEach((element) => {
       element.style.overflow = "visible";
     });
@@ -1006,9 +1006,47 @@ export default function App() {
       return;
     }
 
-    const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]')).map((node) => node.outerHTML).join("
-");
-    printWindow.document.write(`<!doctype html><html><head><title>${title || "GGC Export"}</title>${styles}<style>@page{size:landscape;margin:.35in}body{font-family:Arial,sans-serif;background:white!important;color:#0f172a}.export-wrap{padding:16px}.overflow-x-auto{overflow:visible!important}svg{max-width:none;height:auto}button{display:none!important}</style></head><body><div class="export-wrap">${clonedSection.outerHTML}</div><script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script></body></html>`);
+    const printHtml = `<!doctype html>
+<html>
+<head>
+<title>${title || "GGC Export"}</title>
+<style>
+@page { size: landscape; margin: 0.35in; }
+body { font-family: Arial, sans-serif; background: white; color: #0f172a; margin: 0; }
+.export-wrap { padding: 16px; }
+.overflow-x-auto { overflow: visible !important; }
+svg { max-width: none; height: auto; }
+button { display: none !important; }
+.rounded-2xl { border-radius: 16px; }
+.rounded-xl { border-radius: 12px; }
+.border { border: 1px solid #e2e8f0; }
+.bg-white { background: white; }
+.bg-slate-50 { background: #f8fafc; }
+.bg-slate-100 { background: #f1f5f9; }
+.bg-emerald-700 { background: #047857; }
+.bg-emerald-300 { background: #6ee7b7; }
+.bg-blue-700 { background: #1d4ed8; }
+.bg-blue-300 { background: #93c5fd; }
+.bg-orange-600 { background: #ea580c; }
+.bg-orange-300 { background: #fdba74; }
+.bg-purple-700 { background: #7e22ce; }
+.bg-purple-300 { background: #d8b4fe; }
+.text-white { color: white; }
+.text-slate-900 { color: #0f172a; }
+.text-slate-500 { color: #64748b; }
+.shadow-sm { box-shadow: none; }
+</style>
+</head>
+<body>
+<div class="export-wrap">${clonedSection.outerHTML}</div>
+<script>
+window.onload = function () { setTimeout(function () { window.print(); }, 350); };
+<\/script>
+</body>
+</html>`;
+
+    printWindow.document.open();
+    printWindow.document.write(printHtml);
     printWindow.document.close();
   }
 
@@ -1315,5 +1353,4 @@ export default function App() {
     </main>
   );
 }
-
 
