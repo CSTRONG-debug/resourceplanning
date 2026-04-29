@@ -1,44 +1,34 @@
-import React, { useState, useEffect, useRef } from "react";
-import { Search } from "lucide-react";
-import { toggleListValue, findProject, getCrewDisplayName } from "../../utils";
+import React from "react";
+import {
+  divisionStyles, pendingDivisionStyles,
+  divisionSvgColors, pendingDivisionSvgColors, divisions,
+} from "../../constants";
+import {
+  toDate, addDays, formatDate, formatTick,
+  timelinePercent, timelineSpanPercent,
+  rangesOverlap, getPeriodEnd,
+  getAssignmentPeopleLabel, getCrewDisplayName, getAssignmentCrewIds,
+} from "../../utils";
 
-// ─── StatCard ────────────────────────────────────────────────────────────────
+// ─── GanttHeader ──────────────────────────────────────────────────────────────
 
-export function StatCard({ icon: Icon, label, value }) {
+export function GanttHeader({ timeline, zoom }) {
+  const currentLeft = timelinePercent(timeline.currentDate, timeline);
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-slate-500">{label}</p>
-          <p className="mt-1 text-3xl font-bold text-slate-900">{value}</p>
-        </div>
-        <div className="rounded-xl bg-emerald-50 p-3 text-emerald-700">
-          <Icon size={24} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── MultiSelectFilter ───────────────────────────────────────────────────────
-
-export function MultiSelectFilter({ label, options, selected, setSelected, labels = {} }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-      <p className="mb-2 text-sm font-semibold text-slate-700">{label}</p>
-      <div className="flex flex-wrap gap-2">
-        {options.map((option) => {
-          const active = selected.includes(option);
+    <div className="grid grid-cols-[260px_1fr] border-b border-slate-200 pb-2" style={{ width: `${timeline.width + 260}px` }}>
+      <div className="sticky left-0 z-30 h-10 bg-white" />
+      <div className="relative h-10" style={{ width: `${timeline.width}px` }}>
+        {currentLeft >= 0 && currentLeft <= 100 && (
+          <div className="absolute top-0 z-20 h-10 border-l-4 border-dashed border-red-600" style={{ left: `${currentLeft}%` }}>
+            <span className="ml-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">Today</span>
+          </div>
+        )}
+        {timeline.ticks.map((tick, index) => {
+          const left = timelinePercent(tick, timeline);
           return (
-            <button
-              key={option}
-              onClick={() => setSelected((current) => toggleListValue(current, option))}
-              className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                active ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              {labels[option] || option}
-            </button>
+            <div key={`${tick.toISOString()}-${index}`} className="absolute top-0 h-10 border-l border-slate-200 pl-2 text-xs font-medium text-slate-500" style={{ left: `${left}%` }}>
+              {formatTick(tick, zoom)}
+            </div>
           );
         })}
       </div>
@@ -46,269 +36,267 @@ export function MultiSelectFilter({ label, options, selected, setSelected, label
   );
 }
 
-// ─── SearchableMultiSelect ───────────────────────────────────────────────────
+// ─── GanttSegmentBar ─────────────────────────────────────────────────────────
 
-export function SearchableMultiSelect({ label, options, selected, setSelected, getLabel }) {
-  const containerRef = useRef(null);
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    function handleClickOutside(event) {
-      if (containerRef.current && !containerRef.current.contains(event.target)) setOpen(false);
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  const filtered = options.filter((option) =>
-    getLabel(option).toLowerCase().includes(query.toLowerCase())
-  );
+export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
+  const project = item.project;
+  const isUnassigned = !item.assignment?.superintendent;
+  const colorClass = isUnassigned || project.status === "Pending Award"
+    ? pendingDivisionStyles[project.division] || "bg-slate-300"
+    : divisionStyles[project.division] || "bg-slate-700";
+  const { left, width } = timelineSpanPercent(item.start, item.end, timeline);
+  const patternStyle = isUnassigned ? {
+    border: "2px solid #111827",
+    backgroundImage: "repeating-linear-gradient(135deg, rgba(17,24,39,.35) 0 2px, transparent 2px 9px)",
+    backgroundSize: "14px 14px",
+  } : {};
+  const conflictStyle = conflict ? {
+    border: "2px solid #dc2626",
+    backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(220,38,38,.95) 8px 10px)",
+    backgroundSize: "14px 14px",
+  } : {};
+  const tooltip = [
+    project.projectNumber ? `${project.projectNumber} - ${project.name}` : project.name,
+    `${project.division} • ${project.status}`,
+    `${formatDate(item.start)} - ${formatDate(item.end)}`,
+    label ? `Assignment: ${label}` : "Unassigned",
+    conflict ? "Conflict detected" : "",
+  ].filter(Boolean).join("\n");
 
   return (
-    <div ref={containerRef} className="relative rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-      <p className="mb-2 text-sm font-semibold text-slate-700">{label}</p>
+    <div
+      className={`absolute top-1 h-9 overflow-hidden rounded-xl ${colorClass} px-3 text-xs font-semibold leading-9 shadow-sm ${isUnassigned ? "text-slate-900" : "text-white"}`}
+      style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, ...patternStyle, ...conflictStyle }}
+      title={tooltip}
+    >
+      <span className={conflict ? "rounded bg-white/90 px-1.5 py-0.5 font-bold text-red-700" : ""}>{label || "Unassigned"}</span>
+      {isUnassigned && <span className="ml-2 rounded bg-white/80 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-900">unassigned</span>}
+      {conflict && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white">conflict</span>}
+    </div>
+  );
+}
 
-      <div className="mb-2 flex flex-wrap gap-2">
-        {selected.map((value) => {
-          const option = options.find((item) => item.value === value);
-          if (!option) return null;
-          return (
-            <span key={value} className="inline-flex items-center gap-2 rounded-full bg-emerald-700 px-3 py-1 text-xs font-semibold text-white">
-              {getLabel(option)}
-              <button type="button" onClick={() => setSelected((current) => current.filter((item) => item !== value))}>×</button>
-            </span>
-          );
-        })}
+// ─── PtoOverlayBar ────────────────────────────────────────────────────────────
+
+export function PtoOverlayBar({ pto, timeline }) {
+  const start = toDate(pto.start);
+  const end = toDate(pto.end);
+  if (!start || !end || !rangesOverlap(start, addDays(end, 1), timeline.minDate, addDays(timeline.maxDate, 1))) return null;
+  const { left, width } = timelineSpanPercent(start, end, timeline);
+  return (
+    <div
+      className="absolute top-0 z-20 h-11 overflow-hidden rounded-xl border-2 border-black bg-white/70 px-3 text-xs font-bold leading-10 text-black shadow"
+      style={{ left: `${left}%`, width: `${Math.max(0.15, width)}%`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(0,0,0,.95) 8px 10px)", backgroundSize: "14px 14px" }}
+      title={`PTO ${pto.ptoId || ""}: ${formatDate(pto.start)} - ${formatDate(pto.end)}`}
+    >
+      PTO {pto.ptoId || ""}
+    </div>
+  );
+}
+
+// ─── ProjectGanttRow ──────────────────────────────────────────────────────────
+
+export function ProjectGanttRow({ assignment, project, items, timeline, crews }) {
+  return (
+    <div className="grid grid-cols-[260px_1fr] items-center gap-5">
+      <button className="sticky left-0 z-20 bg-white pr-3 text-left">
+        <div className="flex items-center gap-2">
+          <span className={`h-3 w-3 rounded-full ${project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600"}`} />
+          <p className="font-semibold text-slate-900 hover:text-emerald-700">
+            {project.projectNumber ? `${project.projectNumber} - ` : ""}{project.name}
+          </p>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">{project.division} • {project.status} • {items.length} mobilization{items.length === 1 ? "" : "s"}</p>
+      </button>
+      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
+        {items.map((item) => (
+          <GanttSegmentBar key={item.id} item={item} timeline={timeline} label={getAssignmentPeopleLabel(item.assignment, crews)} />
+        ))}
       </div>
+    </div>
+  );
+}
 
-      <div className="flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 focus-within:border-emerald-600">
-        <Search size={16} className="mr-2 text-slate-400" />
-        <input
-          className="w-full bg-transparent outline-none"
-          value={query}
-          placeholder="Search and select..."
-          onFocus={() => setOpen(true)}
-          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
-        />
+// ─── ResourceGanttRow ─────────────────────────────────────────────────────────
+
+export function ResourceGanttRow({ resource, items, timeline, onResourceClick }) {
+  const ptoItems = (resource.pto || []).filter((pto) => pto.start && pto.end);
+  const sortedItems = [...items].sort((a, b) => new Date(a.start) - new Date(b.start));
+  const conflictIds = new Set();
+
+  sortedItems.forEach((item, i) => {
+    const itemStart = toDate(item.start);
+    const itemEnd = toDate(item.end);
+    const hasEarlierOverlap = sortedItems.slice(0, i).some((prev) => {
+      const previousStart = toDate(prev.start);
+      const previousEnd = toDate(prev.end);
+      return rangesOverlap(itemStart, addDays(itemEnd, 1), previousStart, addDays(previousEnd, 1));
+    });
+    if (hasEarlierOverlap) conflictIds.add(item.id);
+  });
+
+  return (
+    <div className="grid grid-cols-[260px_1fr] items-center gap-5">
+      <div className="sticky left-0 z-20 bg-white pr-3 text-left">
+        <button onClick={() => onResourceClick?.(resource)} className="font-semibold text-slate-900 hover:text-emerald-700">{resource.name}</button>
+        <p className="mt-1 text-xs text-slate-500">
+          {resource.resourceType} • {resource.homeDivision} • {items.length} assignment{items.length === 1 ? "" : "s"}
+          {ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}
+        </p>
       </div>
+      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
+        {sortedItems.map((item) => (
+          <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} conflict={conflictIds.has(item.id)} />
+        ))}
+        {ptoItems.map((pto) => (
+          <PtoOverlayBar key={`${resource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />
+        ))}
+      </div>
+    </div>
+  );
+}
 
-      {open && (
-        <div className="absolute left-3 right-3 z-50 mt-1 max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-          {filtered.length ? filtered.map((option) => {
-            const active = selected.includes(option.value);
+// ─── CrewGanttRow ────────────────────────────────────────────────────────────
+
+export function CrewGanttRow({ crew, items, timeline }) {
+  const sortedItems = [...items].sort((a, b) => new Date(a.start) - new Date(b.start));
+  const lanes = [];
+
+  sortedItems.forEach((item) => {
+    const start = toDate(item.start);
+    const end = toDate(item.end);
+    let laneIndex = lanes.findIndex(
+      (lane) => !lane.some((placed) => rangesOverlap(start, addDays(end, 1), toDate(placed.start), addDays(toDate(placed.end), 1)))
+    );
+    if (laneIndex === -1) { laneIndex = lanes.length; lanes.push([]); }
+    lanes[laneIndex].push(item);
+  });
+
+  return (
+    <div className="grid grid-cols-[260px_1fr] items-start gap-5">
+      <div className="sticky left-0 z-20 bg-white pr-3 text-left">
+        <p className="font-semibold text-slate-900">{getCrewDisplayName(crew)}</p>
+        <p className="mt-1 text-xs text-slate-500">
+          {(crew.specialty || []).join(", ") || "No specialty"} • {items.length} assignment{items.length === 1 ? "" : "s"}
+        </p>
+      </div>
+      <div className="relative rounded-xl bg-slate-100" style={{ width: `${timeline.width}px`, height: `${Math.max(48, lanes.length * 48)}px` }}>
+        {lanes.map((lane, laneIndex) =>
+          lane.map((item) => {
+            const span = timelineSpanPercent(item.start, item.end, timeline);
+            const colorClass = item.project.status === "Pending Award"
+              ? pendingDivisionStyles[item.project.division]
+              : divisionStyles[item.project.division];
             return (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => {
-                  setSelected((current) =>
-                    current.includes(option.value)
-                      ? current.filter((value) => value !== option.value)
-                      : [...current, option.value]
-                  );
-                  setQuery("");
-                  setOpen(true);
-                }}
-                className={`block w-full px-3 py-2 text-left hover:bg-emerald-50 ${active ? "bg-emerald-50" : ""}`}
+              <div
+                key={`${crew.id}-${item.id}`}
+                className={`absolute h-9 overflow-hidden rounded-xl px-3 text-xs font-semibold leading-9 text-white shadow-sm ${colorClass || "bg-slate-700"}`}
+                style={{ left: `${span.left}%`, width: `${Math.max(2, span.width)}%`, top: `${laneIndex * 48 + 5}px` }}
               >
-                <p className="font-semibold text-slate-800">{getLabel(option)}</p>
-                {option.subLabel && <p className="text-xs text-slate-500">{option.subLabel}</p>}
-              </button>
+                {item.project.name}
+              </div>
             );
-          }) : <p className="px-3 py-2 text-sm text-slate-500">No matching options</p>}
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            className="block w-full border-t border-slate-200 px-3 py-2 text-center text-sm font-semibold text-slate-600 hover:bg-slate-50"
-          >
-            Close
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── CertificationPicker ─────────────────────────────────────────────────────
-
-export function CertificationPicker({ selected, onChange, certifications }) {
-  return (
-    <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-      {certifications.map((cert) => {
-        const active = selected.includes(cert);
-        return (
-          <button
-            key={cert}
-            type="button"
-            onClick={() => onChange(toggleListValue(selected, cert))}
-            className={`rounded-full px-3 py-1 text-xs font-semibold ${
-              active ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
-            }`}
-          >
-            {cert}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── useCloseDropdown ─────────────────────────────────────────────────────────
-
-export function useCloseDropdown(setOpen, containerRef) {
-  useEffect(() => {
-    function handleClickOutside(event) {
-      if (containerRef.current && !containerRef.current.contains(event.target)) setOpen(false);
-    }
-    function handleEsc(event) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleEsc);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEsc);
-    };
-  }, [setOpen, containerRef]);
-}
-
-// ─── SearchableResourceSelect ─────────────────────────────────────────────────
-
-export function SearchableResourceSelect({ value, onChange, resources, resourceType, placeholder }) {
-  const containerRef = useRef(null);
-  const [query, setQuery] = useState(value || "");
-  const [open, setOpen] = useState(false);
-
-  useCloseDropdown(setOpen, containerRef);
-  useEffect(() => setQuery(value || ""), [value]);
-
-  const filtered = resources.filter(
-    (r) => (resourceType ? r.resourceType === resourceType : true) &&
-      r.name.toLowerCase().includes(query.toLowerCase())
-  );
-
-  return (
-    <div ref={containerRef} className="relative">
-      <div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600">
-        <Search size={16} className="mr-2 text-slate-400" />
-        <input
-          className="w-full outline-none"
-          value={query}
-          placeholder={placeholder || "Search resource..."}
-          onFocus={() => setOpen(true)}
-          onChange={(e) => { setQuery(e.target.value); onChange(e.target.value); setOpen(true); }}
-        />
+          })
+        )}
       </div>
-      {open && (
-        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-          {filtered.length ? filtered.map((r) => (
-            <button key={r.id} type="button"
-              onClick={() => { onChange(r.name); setQuery(r.name); setOpen(false); }}
-              className="block w-full px-3 py-2 text-left hover:bg-emerald-50"
-            >
-              <p className="font-semibold text-slate-800">{r.name}</p>
-              <p className="text-xs text-slate-500">{r.resourceType} • {r.homeDivision}</p>
-            </button>
-          )) : <p className="px-3 py-2 text-sm text-slate-500">No matching resource</p>}
-        </div>
-      )}
     </div>
   );
 }
 
-// ─── SearchableProjectSelect ──────────────────────────────────────────────────
+// ─── ResourceDemandChart ──────────────────────────────────────────────────────
 
-export function SearchableProjectSelect({ value, onChange, projects }) {
-  const containerRef = useRef(null);
-  const current = findProject(projects, value);
-  const [query, setQuery] = useState(current ? `${current.projectNumber} - ${current.name}` : "");
-  const [open, setOpen] = useState(false);
+export function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPdf, onBarClick, enlarged = false }) {
+  const periods = timeline.ticks.map((tick) => {
+    const periodStart = tick;
+    const periodEnd = getPeriodEnd(tick, zoom);
+    const buckets = {};
+    divisions.forEach((d) => { buckets[d] = { current: 0, pending: 0 }; });
 
-  useCloseDropdown(setOpen, containerRef);
+    items.forEach((item) => {
+      const itemStart = toDate(item.start);
+      const itemEnd = toDate(item.end);
+      if (!itemStart || !itemEnd || !rangesOverlap(itemStart, addDays(itemEnd, 1), periodStart, periodEnd)) return;
+      if (item.project.status === "Pending Award") buckets[item.project.division].pending += 1;
+      else if (item.project.status !== "Complete") buckets[item.project.division].current += 1;
+    });
 
-  useEffect(() => {
-    const selected = findProject(projects, value);
-    setQuery(selected ? `${selected.projectNumber} - ${selected.name}` : "");
-  }, [value, projects]);
+    const segments = [];
+    divisions.forEach((d) => {
+      if (buckets[d].current > 0) segments.push({ division: d, type: "Current", value: buckets[d].current, color: divisionSvgColors[d] });
+      if (buckets[d].pending > 0) segments.push({ division: d, type: "Pending", value: buckets[d].pending, color: pendingDivisionSvgColors[d] });
+    });
 
-  const filtered = projects.filter((p) =>
-    `${p.projectNumber} ${p.name} ${p.client}`.toLowerCase().includes(query.toLowerCase())
-  );
+    const count = divisions.reduce((sum, d) => sum + buckets[d].current + buckets[d].pending, 0);
+    return { label: formatTick(tick, zoom), tick, segments, count };
+  });
 
-  return (
-    <div ref={containerRef} className="relative">
-      <div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600">
-        <Search size={16} className="mr-2 text-slate-400" />
-        <input
-          className="w-full outline-none"
-          value={query}
-          placeholder="Search project..."
-          onFocus={() => setOpen(true)}
-          onChange={(e) => { setQuery(e.target.value); onChange(""); setOpen(true); }}
-        />
-      </div>
-      {open && (
-        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-          {filtered.length ? filtered.map((p) => (
-            <button key={p.id} type="button"
-              onClick={() => { onChange(p.id); setQuery(`${p.projectNumber} - ${p.name}`); setOpen(false); }}
-              className="block w-full px-3 py-2 text-left hover:bg-emerald-50"
-            >
-              <p className="font-semibold text-slate-800">{p.projectNumber} - {p.name}</p>
-              <p className="text-xs text-slate-500">{p.client} • {p.division} • {p.status}</p>
-            </button>
-          )) : <p className="px-3 py-2 text-sm text-slate-500">No matching project</p>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── SearchableCrewSelect ─────────────────────────────────────────────────────
-
-export function SearchableCrewSelect({ value, onChange, crews }) {
-  const containerRef = useRef(null);
-  const current = crews.find((c) => c.id === value);
-  const [query, setQuery] = useState(current ? getCrewDisplayName(current) : "");
-  const [open, setOpen] = useState(false);
-
-  useCloseDropdown(setOpen, containerRef);
-
-  useEffect(() => {
-    const selected = crews.find((c) => c.id === value);
-    setQuery(selected ? getCrewDisplayName(selected) : "");
-  }, [value, crews]);
-
-  const filtered = crews.filter((c) =>
-    `${c.crewName} ${c.foremanName} ${(c.specialty || []).join(" ")}`.toLowerCase().includes(query.toLowerCase())
-  );
+  const rawMaxValue = Math.max(totalResources, ...periods.map((p) => p.count), 1);
+  const yAxisMax = Math.max(5, Math.ceil(rawMaxValue / 5) * 5);
+  const width = Math.max(enlarged ? 1600 : 1160, timeline.width || 1160);
+  const height = enlarged ? 480 : 340;
+  const margin = { top: 28, right: 24, bottom: 70, left: 58 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const y = (value) => margin.top + plotHeight - (value / yAxisMax) * plotHeight;
+  const barWidth = Math.max(36, Math.min(90, plotWidth / Math.max(periods.length, 1) - 16));
+  const yTicks = Array.from({ length: 6 }, (_, i) => Math.round((yAxisMax / 5) * i));
 
   return (
-    <div ref={containerRef} className="relative">
-      <div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600">
-        <Search size={16} className="mr-2 text-slate-400" />
-        <input
-          className="w-full outline-none"
-          value={query}
-          placeholder="Search crew..."
-          onFocus={() => setOpen(true)}
-          onChange={(e) => { setQuery(e.target.value); onChange(""); setOpen(true); }}
-        />
-      </div>
-      {open && (
-        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-          {filtered.length ? filtered.map((c) => (
-            <button key={c.id} type="button"
-              onClick={() => { onChange(c.id); setQuery(getCrewDisplayName(c)); setOpen(false); }}
-              className="block w-full px-3 py-2 text-left hover:bg-emerald-50"
-            >
-              <p className="font-semibold text-slate-800">{getCrewDisplayName(c)}</p>
-              <p className="text-xs text-slate-500">{(c.specialty || []).join(", ")}</p>
-            </button>
-          )) : <p className="px-3 py-2 text-sm text-slate-500">No matching crew</p>}
+    <section id="resource-demand-graph" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => window.dispatchEvent(new CustomEvent("ggc-expand-demand"))} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button>
+            <h2 className="text-xl font-bold">Resource Demand Graph</h2>
+          </div>
+          <p className="text-sm text-slate-500">Y-axis is project count. The red dashed line represents total filtered resources.</p>
         </div>
-      )}
-    </div>
+        <button onClick={onExportPdf} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
+      </div>
+
+      <div className="overflow-x-auto">
+        <svg width={width} height={height} className="rounded-xl border border-slate-200 bg-slate-50">
+          <line x1={margin.left} y1={margin.top} x2={margin.left} y2={margin.top + plotHeight} stroke="#94a3b8" />
+          <line x1={margin.left} y1={margin.top + plotHeight} x2={margin.left + plotWidth} y2={margin.top + plotHeight} stroke="#94a3b8" />
+          {yTicks.map((tick) => (
+            <g key={tick}>
+              <line x1={margin.left} y1={y(tick)} x2={margin.left + plotWidth} y2={y(tick)} stroke="#e2e8f0" />
+              <text x={margin.left - 12} y={y(tick) + 4} textAnchor="end" fontSize="12" fontWeight="600" fill="#64748b">{tick}</text>
+            </g>
+          ))}
+          <line x1={margin.left} y1={y(totalResources)} x2={margin.left + plotWidth} y2={y(totalResources)} stroke="#dc2626" strokeWidth="4" strokeDasharray="8 6" />
+          <rect x={margin.left + plotWidth - 124} y={y(totalResources) - 26} width="124" height="22" rx="5" fill="#dc2626" />
+          <text x={margin.left + plotWidth - 62} y={y(totalResources) - 11} textAnchor="middle" fontSize="12" fontWeight="700" fill="white">Total Resources: {totalResources}</text>
+          {periods.map((period, index) => {
+            const x = margin.left + index * (plotWidth / Math.max(periods.length, 1)) + (plotWidth / Math.max(periods.length, 1) - barWidth) / 2;
+            let stackedValue = 0;
+            return (
+              <g key={`${period.label}-${index}`}>
+                {period.segments.map((segment) => {
+                  const segmentHeight = (segment.value / yAxisMax) * plotHeight;
+                  const rectY = y(stackedValue + segment.value);
+                  stackedValue += segment.value;
+                  return (
+                    <rect key={`${segment.division}-${segment.type}`} x={x} y={rectY} width={barWidth} height={segmentHeight} rx="5" fill={segment.color} onClick={() => onBarClick?.({ period, segment })} style={{ cursor: "pointer" }}>
+                      <title>{segment.division} {segment.type}: {segment.value}</title>
+                    </rect>
+                  );
+                })}
+                <text x={x + barWidth / 2} y={height - 36} textAnchor="middle" fontSize="10" fill="#475569">{period.label}</text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-3 text-xs font-semibold">
+        {divisions.map((d) => (
+          <div key={d} className="flex items-center gap-2">
+            <span className={`h-3 w-6 rounded-full ${divisionStyles[d]}`} /><span>{d} Current</span>
+            <span className={`ml-2 h-3 w-6 rounded-full ${pendingDivisionStyles[d]}`} /><span>{d} Pending</span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
