@@ -236,8 +236,8 @@ function StatCard({ icon: Icon, label, value }) {
   return <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><div><p className="text-sm text-slate-500">{label}</p><p className="mt-1 text-3xl font-bold text-slate-900">{value}</p></div><div className="rounded-xl bg-emerald-50 p-3 text-emerald-700"><Icon size={24} /></div></div></div>;
 }
 
-function MultiSelectFilter({ label, options, selected, setSelected }) {
-  return <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><p className="mb-2 text-sm font-semibold text-slate-700">{label}</p><div className="flex flex-wrap gap-2">{options.map((option) => { const active = selected.includes(option); return <button key={option} onClick={() => setSelected((current) => toggleListValue(current, option))} className={`rounded-full px-3 py-1 text-xs font-semibold ${active ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"}`}>{option}</button>; })}</div></div>;
+function MultiSelectFilter({ label, options, selected, setSelected, labels = {} }) {
+  return <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><p className="mb-2 text-sm font-semibold text-slate-700">{label}</p><div className="flex flex-wrap gap-2">{options.map((option) => { const active = selected.includes(option); return <button key={option} onClick={() => setSelected((current) => toggleListValue(current, option))} className={`rounded-full px-3 py-1 text-xs font-semibold ${active ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"}`}>{labels[option] || option}</button>; })}</div></div>;
 }
 
 function SearchableResourceSelect({ value, onChange, resources, resourceType, placeholder }) {
@@ -344,7 +344,7 @@ function ProjectGanttRow({ assignment, project, items, timeline, crews }) {
   return <div className="grid grid-cols-[240px_1fr] items-center gap-5"><button className="text-left"><div className="flex items-center gap-2"><span className={`h-3 w-3 rounded-full ${project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600"}`} /><p className="font-semibold text-slate-900 hover:text-emerald-700">{project.projectNumber ? `${project.projectNumber} - ` : ""}{project.name}</p></div><p className="mt-1 text-xs text-slate-500">{project.division} • {project.status} • {items.length} mobilization{items.length === 1 ? "" : "s"}</p></button><div className="relative h-11 rounded-xl bg-slate-100">{items.map((item) => <GanttSegmentBar key={item.id} item={item} timeline={timeline} label={label} />)}</div></div>;
 }
 
-function ResourceGanttRow({ resource, items, timeline }) {
+function ResourceGanttRow({ resource, items, timeline, onResourceClick }) {
   const ptoItems = (resource.pto || []).filter((pto) => pto.start && pto.end);
   const sortedItems = [...items].sort((a, b) => new Date(a.start) - new Date(b.start));
   const conflictIds = new Set();
@@ -353,18 +353,34 @@ function ResourceGanttRow({ resource, items, timeline }) {
     const itemStart = toDate(item.start);
     const itemEnd = toDate(item.end);
     if (!itemStart || !itemEnd) return;
-
     const hasEarlierOverlap = sortedItems.slice(0, index).some((previous) => {
       const previousStart = toDate(previous.start);
       const previousEnd = toDate(previous.end);
       if (!previousStart || !previousEnd) return false;
       return rangesOverlap(itemStart, addDays(itemEnd, 1), previousStart, addDays(previousEnd, 1));
     });
-
     if (hasEarlierOverlap) conflictIds.add(item.id);
   });
 
-  return <div className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><p className="font-semibold text-slate-900">{resource.name}</p><p className="mt-1 text-xs text-slate-500">{resource.resourceType} • {resource.homeDivision} • {items.length} assignment{items.length === 1 ? "" : "s"}{ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}</p></div><div className="relative h-11 rounded-xl bg-slate-100">{sortedItems.map((item) => <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} conflict={conflictIds.has(item.id)} />)}{ptoItems.map((pto) => <PtoOverlayBar key={`${resource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />)}</div></div>;
+  return <div className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><button onClick={() => onResourceClick?.(resource)} className="font-semibold text-slate-900 hover:text-emerald-700">{resource.name}</button><p className="mt-1 text-xs text-slate-500">{resource.resourceType} • {resource.homeDivision} • {items.length} assignment{items.length === 1 ? "" : "s"}{ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}</p></div><div className="relative h-11 rounded-xl bg-slate-100">{sortedItems.map((item) => <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} conflict={conflictIds.has(item.id)} />)}{ptoItems.map((pto) => <PtoOverlayBar key={`${resource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />)}</div></div>;
+}
+
+function CrewGanttRow({ crew, items, timeline }) {
+  const sortedItems = [...items].sort((a, b) => new Date(a.start) - new Date(b.start));
+  const lanes = [];
+
+  sortedItems.forEach((item) => {
+    const start = toDate(item.start);
+    const end = toDate(item.end);
+    let laneIndex = lanes.findIndex((lane) => !lane.some((placed) => rangesOverlap(start, addDays(end, 1), toDate(placed.start), addDays(toDate(placed.end), 1))));
+    if (laneIndex === -1) {
+      laneIndex = lanes.length;
+      lanes.push([]);
+    }
+    lanes[laneIndex].push(item);
+  });
+
+  return <div className="grid grid-cols-[260px_1fr] items-start gap-5"><div className="text-left"><p className="font-semibold text-slate-900">{getCrewDisplayName(crew)}</p><p className="mt-1 text-xs text-slate-500">{(crew.specialty || []).join(", ") || "No specialty"} • {items.length} assignment{items.length === 1 ? "" : "s"}</p></div><div className="relative rounded-xl bg-slate-100" style={{ height: `${Math.max(48, lanes.length * 48)}px` }}>{lanes.map((lane, laneIndex) => lane.map((item) => <div key={`${crew.id}-${item.id}`} className="absolute h-9 overflow-hidden rounded-xl px-3 text-xs font-semibold leading-9 text-white shadow-sm" style={{ ...(() => { const span = timelineSpanPercent(item.start, item.end, timeline); return { left: `${span.left}%`, width: `${Math.max(2, span.width)}%`, top: `${laneIndex * 48 + 5}px` }; })() }}><div className={`${item.project.status === "Pending Award" ? pendingDivisionStyles[item.project.division] : divisionStyles[item.project.division]} absolute inset-0 -z-10`} />{item.project.name}</div>))}</div></div>;
 }
 
 function getPeriodEnd(start, zoom) {
@@ -672,6 +688,8 @@ export default function App() {
   const [showUserSettings, setShowUserSettings] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ username: "", password: "" });
   const [appUsers, setAppUsers] = useState([]);
+  const [crewGanttFilter, setCrewGanttFilter] = useState([]);
+  const [focusedResource, setFocusedResource] = useState(null);
   const [projectSort, setProjectSort] = useState({ key: "projectNumber", direction: "asc" });
   const [resourceSort, setResourceSort] = useState({ key: "name", direction: "asc" });
   const [crewSort, setCrewSort] = useState({ key: "crewName", direction: "asc" });
@@ -711,7 +729,9 @@ export default function App() {
 
       setProjects((projectsRes.data || []).map(mapProjectFromDb));
       setResources((resourcesRes.data || []).map(mapResourceFromDb));
-      setCrews((crewsRes.data || []).map(mapCrewFromDb));
+      const mappedCrews = (crewsRes.data || []).map(mapCrewFromDb);
+      setCrews(mappedCrews);
+      setCrewGanttFilter((current) => current.length ? current : mappedCrews.map((crew) => crew.id));
       setAssignments((assignmentsRes.data || []).map((assignment) => mapAssignmentFromDb(assignment, mobilizationsRes.data || [])));
     }
 
@@ -776,6 +796,19 @@ export default function App() {
     if (!items.length) return null;
     return { resource, items };
   }).filter(Boolean);
+
+  const crewGanttRows = crews
+    .filter((crew) => crewGanttFilter.includes(crew.id))
+    .map((crew) => {
+      const items = timelineVisibleItems.filter((item) => getAssignmentCrewIds(item.assignment).includes(crew.id));
+      if (!items.length) return null;
+      return { crew, items };
+    })
+    .filter(Boolean);
+
+  const focusedResourceItems = focusedResource
+    ? timelineVisibleItems.filter((item) => [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].includes(focusedResource.name))
+    : [];
 
   function openAddProjectForm() { setEditingProjectId(null); setProjectForm(blankProject); setShowProjectForm(true); }
   function openEditProjectForm(project) { setEditingProjectId(project.id); setProjectForm({ ...blankProject, ...project }); setShowProjectForm(true); }
@@ -1245,6 +1278,22 @@ window.onload = function () { setTimeout(function () { window.print(); }, 350); 
     await loadAppUsers();
   }
 
+  async function deleteAppUser(username) {
+    if (username === currentUser) {
+      alert("You cannot delete the user currently signed in.");
+      return;
+    }
+    if (!confirm(`Delete login user ${username}?`)) return;
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    const { error } = await supabase.rpc("delete_app_user", { input_username: username });
+    if (error) {
+      console.error(error);
+      alert("Could not delete user. Make sure the delete_app_user SQL function exists.");
+      return;
+    }
+    await loadAppUsers();
+  }
+
   function logout() {
     sessionStorage.removeItem("ggc_current_user");
     setCurrentUser("");
@@ -1336,15 +1385,16 @@ window.onload = function () { setTimeout(function () { window.print(); }, 350); 
         <section className="mx-auto max-w-7xl space-y-6 px-6 py-6">
           <div className="grid gap-4 md:grid-cols-4"><StatCard icon={BriefcaseBusiness} label="Total Projects" value={projects.length} /><StatCard icon={ClipboardCheck} label="Assignments" value={assignments.length} /><StatCard icon={Users} label="Resources" value={resources.length} /><StatCard icon={FolderKanban} label="Crews" value={crews.length} /></div>
           <section id="project-assignment-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><div className="flex items-center gap-2"><button onClick={() => setExpandedView("project")} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button><h2 className="text-xl font-bold">Project Assignment Gantt View</h2></div><p className="text-sm text-slate-500">Each project assignment is one row. Multiple mobilizations appear on that same project row.</p></div><div className="flex flex-wrap items-center gap-3"><button onClick={exportDashboardExcel} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button><button onClick={() => exportSectionPdf("project-assignment-gantt", "Project Assignment Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><ZoomIn size={16} className="text-slate-500" /><span className="text-sm font-medium text-slate-700">Zoom</span><select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">{zoomModes.map((mode) => <option key={mode}>{mode}</option>)}</select></div></div></div><div className="mb-4 grid gap-3 lg:grid-cols-3"><MultiSelectFilter label="Project Division Filter" options={divisions} selected={divisionFilter} setSelected={setDivisionFilter} /><MultiSelectFilter label="Status Filter" options={statuses} selected={statusFilter} setSelected={setStatusFilter} /><MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={dashboardResourceTypeFilter} setSelected={setDashboardResourceTypeFilter} /></div><div className="mb-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-8 rounded-full ${divisionStyles[division]}`} /><span className="text-slate-600">{division}</span></div>)}<div className="text-slate-400">Pending Award uses lighter shade</div></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{projectGanttRows.map((row) => <button key={row.assignment.id} onClick={() => openEditAssignmentForm(row.assignment)} className="block w-full text-left"><ProjectGanttRow assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} /></button>)}</div></div></section>
-          <section id="resource-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><div className="flex items-center gap-2"><button onClick={() => setExpandedView("resource")} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button><h2 className="text-xl font-bold">Resource Gantt View</h2></div><p className="text-sm text-slate-500">Rows are resources. Bars show the assigned project name for each mobilization.</p></div><button onClick={() => exportSectionPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />)}</div></div></section>
+          <section id="resource-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><div className="flex items-center gap-2"><button onClick={() => setExpandedView("resource")} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button><h2 className="text-xl font-bold">Resource Gantt View</h2></div><p className="text-sm text-slate-500">Rows are resources. Bars show the assigned project name for each mobilization.</p></div><button onClick={() => exportSectionPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}</div></div></section>
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><MultiSelectFilter label="Resource Demand Home Division Filter" options={divisions} selected={demandHomeDivisionFilter} setSelected={setDemandHomeDivisionFilter} /></div><ResourceDemandChart items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} />
+          <section id="crew-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><div className="flex items-center gap-2"><button onClick={() => setExpandedView("crew")} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button><h2 className="text-xl font-bold">Crew Gantt View</h2></div><p className="text-sm text-slate-500">Rows are crews. Overlapping projects stack below each other within the same crew row.</p></div><button onClick={() => exportSectionPdf("crew-gantt", "Crew Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button></div><div className="mb-4"><MultiSelectFilter label="Crew Name Filter" options={crews.map((crew) => crew.id)} selected={crewGanttFilter} setSelected={setCrewGanttFilter} labels={Object.fromEntries(crews.map((crew) => [crew.id, getCrewDisplayName(crew)]))} /></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{crewGanttRows.map((row) => <CrewGanttRow key={row.crew.id} crew={row.crew} items={row.items} timeline={timeline} />)}</div></div></section>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-bold">Assignments</h2><p className="text-sm text-slate-500">Assign existing projects to resources and crews.</p></div><div className="flex flex-wrap gap-3"><label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importAssignmentsCsv} className="hidden" /></label><button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><ClipboardCheck size={17} /> Assign</button></div></div><div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1250px] text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Project</th><th className="p-3">PM</th><th className="p-3">Superintendent</th><th className="p-3">Field Coordinator</th><th className="p-3">Field Engineer</th><th className="p-3">Safety</th><th className="p-3">Crews</th><th className="p-3">Mobilizations</th><th className="p-3 text-right">Actions</th></tr></thead><tbody>{visibleAssignments.map((assignment) => { const project = findProject(projects, assignment.projectId); return <tr key={assignment.id} className="border-t border-slate-200 align-top"><td className="p-3 font-medium">{project ? `${project.projectNumber} - ${project.name}` : "Missing project"}</td><td className="p-3">{assignment.projectManager}</td><td className="p-3">{assignment.superintendent}</td><td className="p-3">{assignment.fieldCoordinator}</td><td className="p-3">{assignment.fieldEngineer}</td><td className="p-3">{assignment.safety}</td><td className="p-3">{getAssignmentCrewDisplayNames(assignment, crews).join(", ")}</td><td className="p-3">{(assignment.mobilizations || []).map((mob, index) => `#${index + 1}: ${formatDate(mob.start)} - ${formatDate(mob.end)}`).join("; ")}</td><td className="p-3 text-right"><button onClick={() => openEditAssignmentForm(assignment)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button><button onClick={() => deleteAssignment(assignment.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button></td></tr>; })}</tbody></table></div></section>
         </section>
       )}
 
-      {showUserSettings && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4"><div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-bold">User Settings</h2><p className="text-sm text-slate-500">Add users who can log in to this system.</p></div><button onClick={() => setShowUserSettings(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button></div><div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]"><input placeholder="Username" value={newUserForm.username} onChange={(e) => setNewUserForm((current) => ({ ...current, username: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /><input placeholder="Password" type="password" value={newUserForm.password} onChange={(e) => setNewUserForm((current) => ({ ...current, password: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /><button onClick={addAppUser} className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800">Add User</button></div><div className="mt-5 rounded-xl border border-slate-200"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Username</th><th className="p-3">Created</th></tr></thead><tbody>{appUsers.map((user) => <tr key={user.username} className="border-t border-slate-200"><td className="p-3 font-semibold">{user.username}</td><td className="p-3">{user.created_at ? formatDate(user.created_at) : ""}</td></tr>)}</tbody></table></div></div></div>}
+      {showUserSettings && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4"><div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-bold">User Settings</h2><p className="text-sm text-slate-500">Add users who can log in to this system.</p></div><button onClick={() => setShowUserSettings(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button></div><div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]"><input placeholder="Username" value={newUserForm.username} onChange={(e) => setNewUserForm((current) => ({ ...current, username: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /><input placeholder="Password" type="password" value={newUserForm.password} onChange={(e) => setNewUserForm((current) => ({ ...current, password: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /><button onClick={addAppUser} className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800">Add User</button></div><div className="mt-5 rounded-xl border border-slate-200"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Username</th><th className="p-3">Created</th><th className="p-3 text-right">Action</th></tr></thead><tbody>{appUsers.map((user) => <tr key={user.username} className="border-t border-slate-200"><td className="p-3 font-semibold">{user.username}</td><td className="p-3">{user.created_at ? formatDate(user.created_at) : ""}</td><td className="p-3 text-right"><button onClick={() => deleteAppUser(user.username)} className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50">Delete</button></td></tr>)}</tbody></table></div></div></div>}
 
-      {expandedView && <div className="fixed inset-0 z-[60] bg-slate-950/70 p-4"><div className="h-full overflow-auto rounded-2xl bg-white p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><h2 className="text-2xl font-bold">{expandedView === "project" ? "Project Assignment Gantt View" : expandedView === "resource" ? "Resource Gantt View" : "Resource Demand Graph"}</h2><button onClick={() => setExpandedView(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div>{expandedView === "project" && <div id="expanded-project-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{projectGanttRows.map((row) => <ProjectGanttRow key={row.assignment.id} assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} />)}</div></div>}{expandedView === "resource" && <div id="expanded-resource-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />)}</div></div>}{expandedView === "demand" && <ResourceDemandChart enlarged items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} />}</div></div>}
+      {expandedView && <div className="fixed inset-0 z-[60] bg-slate-950/70 p-4"><div className="h-full overflow-auto rounded-2xl bg-white p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><h2 className="text-2xl font-bold">{expandedView === "project" ? "Project Assignment Gantt View" : expandedView === "resource" ? "Resource Gantt View" : "Resource Demand Graph"}</h2><button onClick={() => setExpandedView(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div>{expandedView === "project" && <div id="expanded-project-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{projectGanttRows.map((row) => <ProjectGanttRow key={row.assignment.id} assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} />)}</div></div>}{expandedView === "resource" && <div id="expanded-resource-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}</div></div>}{expandedView === "demand" && <ResourceDemandChart enlarged items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} />}</div></div>}
 
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} editing={Boolean(editingProjectId)} certifications={certifications} />}
       {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={crews} />}
