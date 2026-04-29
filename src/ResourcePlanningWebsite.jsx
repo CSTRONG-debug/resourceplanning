@@ -842,8 +842,52 @@ export default function App() {
 
   function openAddAssignmentForm() { setEditingAssignmentId(null); setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "" }] }); setShowAssignmentForm(true); }
   function openEditAssignmentForm(assignment) { setEditingAssignmentId(assignment.id); setAssignmentForm({ ...blankAssignment, ...assignment, mobilizations: assignment.mobilizations?.length ? assignment.mobilizations : [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "" }] }); setShowAssignmentForm(true); }
-  function saveAssignment() { if (!assignmentForm.projectId) { alert("Project is required."); return; } if (!(assignmentForm.mobilizations || []).some((mob) => mob.start && mob.end)) { alert("At least one mobilization with start and end date is required."); return; } if (editingAssignmentId) setAssignments((current) => current.map((assignment) => (assignment.id === editingAssignmentId ? { ...assignmentForm, id: editingAssignmentId } : assignment))); else setAssignments((current) => [{ ...assignmentForm, id: crypto.randomUUID() }, ...current]); setShowAssignmentForm(false); setEditingAssignmentId(null); setAssignmentForm(blankAssignment); }
-  function deleteAssignment(id) { const assignment = assignments.find((item) => item.id === id); const project = assignment ? findProject(projects, assignment.projectId) : null; if (!confirm(`Delete assignment for ${project?.name || "this project"}?`)) return; setAssignments((current) => current.filter((assignment) => assignment.id !== id)); }
+  async function saveAssignment() {
+    if (!assignmentForm.projectId) { alert("Project is required."); return; }
+    if (!(assignmentForm.mobilizations || []).some((mob) => mob.start && mob.end)) { alert("At least one mobilization with start and end date is required."); return; }
+    if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
+
+    const assignmentPayload = assignmentToDb(assignmentForm);
+    let savedAssignment;
+
+    if (editingAssignmentId) {
+      const { data, error } = await supabase.from("assignments").update(assignmentPayload).eq("id", editingAssignmentId).select().single();
+      if (error) { console.error(error); alert("Could not update assignment."); return; }
+      savedAssignment = data;
+      const deleteExisting = await supabase.from("mobilizations").delete().eq("assignment_id", editingAssignmentId);
+      if (deleteExisting.error) { console.error(deleteExisting.error); alert("Could not update mobilizations."); return; }
+    } else {
+      const { data, error } = await supabase.from("assignments").insert(assignmentPayload).select().single();
+      if (error) { console.error(error); alert("Could not save assignment."); return; }
+      savedAssignment = data;
+    }
+
+    const validMobilizations = (assignmentForm.mobilizations || []).filter((mob) => mob.start && mob.end).map((mob) => mobilizationToDb(mob, savedAssignment.id));
+    let savedMobilizations = [];
+
+    if (validMobilizations.length) {
+      const { data, error } = await supabase.from("mobilizations").insert(validMobilizations).select();
+      if (error) { console.error(error); alert("Could not save mobilizations."); return; }
+      savedMobilizations = data || [];
+    }
+
+    const mappedAssignment = mapAssignmentFromDb(savedAssignment, savedMobilizations);
+    if (editingAssignmentId) setAssignments((current) => current.map((assignment) => (assignment.id === editingAssignmentId ? mappedAssignment : assignment)));
+    else setAssignments((current) => [mappedAssignment, ...current]);
+
+    setShowAssignmentForm(false);
+    setEditingAssignmentId(null);
+    setAssignmentForm(blankAssignment);
+  }
+  async function deleteAssignment(id) {
+    const assignment = assignments.find((item) => item.id === id);
+    const project = assignment ? findProject(projects, assignment.projectId) : null;
+    if (!confirm(`Delete assignment for ${project?.name || "this project"}?`)) return;
+    if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
+    const { error } = await supabase.from("assignments").delete().eq("id", id);
+    if (error) { console.error(error); alert("Could not delete assignment."); return; }
+    setAssignments((current) => current.filter((assignment) => assignment.id !== id));
+  }
 
   function openAddResourceForm() { setEditingResourceId(null); setResourceForm(blankResource); setShowResourceForm(true); }
   function openEditResourceForm(resource) { setEditingResourceId(resource.id); setResourceForm({ ...blankResource, ...resource }); setShowResourceForm(true); }
@@ -1062,7 +1106,8 @@ export default function App() {
   }
 
   function importAssignmentsCsv(event) {
-    readCsvFile(event, (rows) => {
+    readCsvFile(event, async (rows) => {
+      if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
       const findProjectId = (row) => {
         const value = row.projectnumber || row.project || row.projectname || "";
         const match = projects.find((project) => project.projectNumber === value || project.name === value || `${project.projectNumber} - ${project.name}` === value);
@@ -1071,10 +1116,10 @@ export default function App() {
       const findCrewId = (value) => {
         const text = String(value || "").trim();
         const match = crews.find((crew) => crew.id === text || crew.crewName === text || getCrewDisplayName(crew) === text);
-        return match?.id || "";
+        return match?.id || null;
       };
+
       const imported = rows.map((row) => ({
-        id: crypto.randomUUID(),
         projectId: findProjectId(row),
         projectManager: row.projectmanager || row.pm || "",
         superintendent: row.superintendent || "",
@@ -1087,7 +1132,24 @@ export default function App() {
         crew4Id: findCrewId(row.crew4 || row.crew4name),
         mobilizations: [{ id: crypto.randomUUID(), start: row.start || row.startdate || "", durationWeeks: row.durationweeks || "", end: row.end || row.enddate || "" }],
       })).filter((assignment) => assignment.projectId);
-      if (imported.length) setAssignments((current) => [...imported, ...current]);
+
+      if (!imported.length) { alert("No valid assignments found. Make sure project numbers/names match existing projects."); return; }
+
+      const savedAssignments = [];
+      for (const assignment of imported) {
+        const { data, error } = await supabase.from("assignments").insert(assignmentToDb(assignment)).select().single();
+        if (error) { console.error(error); continue; }
+        const validMobilizations = (assignment.mobilizations || []).filter((mob) => mob.start && mob.end).map((mob) => mobilizationToDb(mob, data.id));
+        let savedMobilizations = [];
+        if (validMobilizations.length) {
+          const mobResult = await supabase.from("mobilizations").insert(validMobilizations).select();
+          if (mobResult.error) console.error(mobResult.error);
+          savedMobilizations = mobResult.data || [];
+        }
+        savedAssignments.push(mapAssignmentFromDb(data, savedMobilizations));
+      }
+
+      if (savedAssignments.length) setAssignments((current) => [...savedAssignments, ...current]);
     });
   }
 
@@ -1126,10 +1188,10 @@ export default function App() {
             <div className="overflow-x-auto rounded-xl border border-slate-200">
               <table className="w-full min-w-[850px] text-left text-sm">
                 <thead className="bg-slate-100 text-slate-600">
-                  <tr><th className="p-3">Crew Name</th><th className="p-3">Foreman Name</th><th className="p-3">Specialty</th><th className="p-3">Current Assignments</th><th className="p-3 text-right">Actions</th></tr>
+                  <tr><th onClick={() => toggleSort(setCrewSort, "crewName")} className="cursor-pointer p-3 hover:bg-slate-200">Crew Name</th><th onClick={() => toggleSort(setCrewSort, "foremanName")} className="cursor-pointer p-3 hover:bg-slate-200">Foreman Name</th><th className="p-3">Specialty</th><th className="p-3">Current Assignments</th><th className="p-3 text-right">Actions</th></tr>
                 </thead>
                 <tbody>
-                  {crews.map((crew) => (
+                  {sortedCrews.map((crew) => (
                     <tr key={crew.id} className="border-t border-slate-200 align-top">
                       <td className="p-3 font-medium">{crew.crewName}</td>
                       <td className="p-3">{crew.foremanName}</td>
@@ -1154,7 +1216,7 @@ export default function App() {
             </div>
             {showCertSettings && <div className="mb-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4"><h3 className="font-bold text-slate-900">Saved Certification Selections</h3><div className="mt-3 flex gap-2"><input value={newCertification} onChange={(e) => setNewCertification(e.target.value)} placeholder="Add certification" className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600" /><button onClick={addCertification} className="rounded-xl bg-slate-900 px-4 py-2 font-semibold text-white">Add</button></div><div className="mt-3 flex flex-wrap gap-2">{certifications.map((cert) => <span key={cert} className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm">{cert}<button onClick={() => deleteCertification(cert)} className="text-red-600">×</button></span>)}</div></div>}
             <div className="mb-4"><MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={resourceTypeFilter} setSelected={setResourceTypeFilter} /></div>
-            <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1150px] text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Name</th><th className="p-3">Resource Type</th><th className="p-3">Home Division</th><th className="p-3">Phone</th><th className="p-3">Email</th><th className="p-3">Certifications</th><th className="p-3">PTO</th><th className="p-3">Assigned Projects</th><th className="p-3 text-right">Actions</th></tr></thead><tbody>{filteredResources.map((resource) => <tr key={resource.id} className="border-t border-slate-200 align-top"><td className="p-3 font-medium">{resource.name}</td><td className="p-3">{resource.resourceType}</td><td className="p-3">{resource.homeDivision}</td><td className="p-3">{resource.phone}</td><td className="p-3">{resource.email}</td><td className="p-3">{(resource.certifications || []).join(", ")}</td><td className="p-3">{(resource.pto || []).map((pto) => `${pto.ptoId}: ${formatDate(pto.start)} - ${formatDate(pto.end)}`).join("; ")}</td><td className="p-3">{assignments.filter((a) => [a.projectManager, a.superintendent, a.fieldCoordinator, a.fieldEngineer, a.safety].includes(resource.name)).map((a) => findProject(projects, a.projectId)?.name).filter(Boolean).join(", ")}</td><td className="p-3 text-right"><button onClick={() => openEditResourceForm(resource)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button><button onClick={() => deleteResource(resource.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button></td></tr>)}</tbody></table></div>
+            <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1150px] text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th onClick={() => toggleSort(setResourceSort, "name")} className="cursor-pointer p-3 hover:bg-slate-200">Name</th><th onClick={() => toggleSort(setResourceSort, "resourceType")} className="cursor-pointer p-3 hover:bg-slate-200">Resource Type</th><th onClick={() => toggleSort(setResourceSort, "homeDivision")} className="cursor-pointer p-3 hover:bg-slate-200">Home Division</th><th className="p-3">Phone</th><th className="p-3">Email</th><th className="p-3">Certifications</th><th className="p-3">PTO</th><th className="p-3">Assigned Projects</th><th className="p-3 text-right">Actions</th></tr></thead><tbody>{sortedResources.map((resource) => <tr key={resource.id} className="border-t border-slate-200 align-top"><td className="p-3 font-medium">{resource.name}</td><td className="p-3">{resource.resourceType}</td><td className="p-3">{resource.homeDivision}</td><td className="p-3">{resource.phone}</td><td className="p-3">{resource.email}</td><td className="p-3">{(resource.certifications || []).join(", ")}</td><td className="p-3">{(resource.pto || []).map((pto) => `${pto.ptoId}: ${formatDate(pto.start)} - ${formatDate(pto.end)}`).join("; ")}</td><td className="p-3">{assignments.filter((a) => [a.projectManager, a.superintendent, a.fieldCoordinator, a.fieldEngineer, a.safety].includes(resource.name)).map((a) => findProject(projects, a.projectId)?.name).filter(Boolean).join(", ")}</td><td className="p-3 text-right"><button onClick={() => openEditResourceForm(resource)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button><button onClick={() => deleteResource(resource.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button></td></tr>)}</tbody></table></div>
           </section>
         </section>
       )}
@@ -1164,7 +1226,7 @@ export default function App() {
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><h2 className="text-2xl font-bold">Projects</h2><p className="text-sm text-slate-500">Create and edit projects here only. Resource assignments happen on the Dashboard.</p></div><div className="flex flex-wrap gap-3"><button onClick={exportProjectsExcel} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button><label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importProjectsCsv} className="hidden" /></label><button onClick={openAddProjectForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><Plus size={17} /> Add Project</button></div></div>
             <div className="mb-4"><MultiSelectFilter label="Division Filter" options={divisions} selected={projectTabDivisionFilter} setSelected={setProjectTabDivisionFilter} /></div>
-            <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1050px] text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Project #</th><th className="p-3">Project Name</th><th className="p-3">Client</th><th className="p-3">Address</th><th className="p-3">Division</th><th className="p-3">Requirements</th><th className="p-3">Status</th><th className="p-3 text-right">Actions</th></tr></thead><tbody>{filteredProjectsForProjectTab.map((project) => <tr key={project.id} className="border-t border-slate-200 align-top"><td className="p-3 font-medium">{project.projectNumber}</td><td className="p-3 font-medium">{project.name}</td><td className="p-3">{project.client}</td><td className="p-3">{project.address}</td><td className="p-3">{project.division}</td><td className="p-3">{(project.specificRequirements || []).join(", ")}</td><td className="p-3">{project.status}</td><td className="p-3 text-right"><button onClick={() => openEditProjectForm(project)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button><button onClick={() => deleteProject(project.id)} className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50"><Trash2 size={14} /> Delete</button></td></tr>)}</tbody></table></div>
+            <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1050px] text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th onClick={() => toggleSort(setProjectSort, "projectNumber")} className="cursor-pointer p-3 hover:bg-slate-200">Project #</th><th onClick={() => toggleSort(setProjectSort, "name")} className="cursor-pointer p-3 hover:bg-slate-200">Project Name</th><th onClick={() => toggleSort(setProjectSort, "client")} className="cursor-pointer p-3 hover:bg-slate-200">Client</th><th className="p-3">Address</th><th onClick={() => toggleSort(setProjectSort, "division")} className="cursor-pointer p-3 hover:bg-slate-200">Division</th><th className="p-3">Requirements</th><th onClick={() => toggleSort(setProjectSort, "status")} className="cursor-pointer p-3 hover:bg-slate-200">Status</th><th className="p-3 text-right">Actions</th></tr></thead><tbody>{sortedProjectsForProjectTab.map((project) => <tr key={project.id} className="border-t border-slate-200 align-top"><td className="p-3 font-medium">{project.projectNumber}</td><td className="p-3 font-medium">{project.name}</td><td className="p-3">{project.client}</td><td className="p-3">{project.address}</td><td className="p-3">{project.division}</td><td className="p-3">{(project.specificRequirements || []).join(", ")}</td><td className="p-3">{project.status}</td><td className="p-3 text-right"><button onClick={() => openEditProjectForm(project)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button><button onClick={() => deleteProject(project.id)} className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50"><Trash2 size={14} /> Delete</button></td></tr>)}</tbody></table></div>
           </section>
         </section>
       )}
