@@ -500,12 +500,39 @@ export default function App() {
   function exportSectionPdf(sectionId, title) {
     const section = document.getElementById(sectionId);
     if (!section) return;
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) return;
-    printWindow.document.write(`<!doctype html><html><head><title>${title}</title><style>body{font-family:Arial,sans-serif;margin:24px;color:#0f172a}button{display:none!important}.shadow-sm{box-shadow:none!important}svg{max-width:100%;height:auto}.overflow-x-auto{overflow:visible!important}.rounded-2xl,.rounded-xl{border-radius:12px}</style></head><body>${section.outerHTML}</body></html>`);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
+
+    const style = document.createElement("style");
+    style.id = "ggc-print-style";
+    style.innerHTML = `
+      @media print {
+        body * { visibility: hidden !important; }
+        #${sectionId}, #${sectionId} * { visibility: visible !important; }
+        #${sectionId} {
+          position: absolute !important;
+          left: 0 !important;
+          top: 0 !important;
+          width: 100% !important;
+          max-width: none !important;
+          margin: 0 !important;
+          box-shadow: none !important;
+          border: none !important;
+        }
+        #${sectionId} button { display: none !important; }
+        #${sectionId} .overflow-x-auto { overflow: visible !important; }
+        @page { size: landscape; margin: 0.35in; }
+      }
+    `;
+
+    document.head.appendChild(style);
+    const previousTitle = document.title;
+    document.title = title || "GGC Export";
+    window.print();
+
+    setTimeout(() => {
+      document.title = previousTitle;
+      const printStyle = document.getElementById("ggc-print-style");
+      if (printStyle) printStyle.remove();
+    }, 500);
   }
 
   return (
