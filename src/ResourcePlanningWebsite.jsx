@@ -867,42 +867,49 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
   const periods = timeline.ticks.map((tick) => {
     const periodStart = tick;
     const periodEnd = getPeriodEnd(tick, zoom);
-    const buckets = {};
-    divisions.forEach((d) => { buckets[d] = { current: 0, pending: 0 }; });
 
-    // All items active in this period (used for drilldowns)
+    // All items active in this period that pass the home-division filter (already applied upstream)
     const periodItems = items.filter((item) => {
       const itemStart = toDate(item.start);
       const itemEnd = toDate(item.end);
       return itemStart && itemEnd && rangesOverlap(itemStart, addDays(itemEnd, 1), periodStart, periodEnd);
     });
 
-    // Count each item into its resource home division bucket
+    // Bucket by PROJECT division so bar colors reflect the actual work being done.
+    // The home-division filter is already applied on the items passed in — so only
+    // assignments where the resource's home division matches show up, but the bar
+    // color (and stack position) is still the project's division color.
+    const buckets = {};
+    divisions.forEach((d) => { buckets[d] = { current: 0, pending: 0 }; });
+
     periodItems.forEach((item) => {
-      const resourceDivision = item.assignment?._resourceHomeDivision || item.project.division;
-      if (!buckets[resourceDivision]) return;
-      if (item.project.status === "Pending Award") buckets[resourceDivision].pending += 1;
-      else if (item.project.status !== "Complete") buckets[resourceDivision].current += 1;
+      const projectDivision = item.project.division;
+      if (!buckets[projectDivision]) return;
+      if (item.project.status === "Pending Award") buckets[projectDivision].pending += 1;
+      else if (item.project.status !== "Complete") buckets[projectDivision].current += 1;
     });
 
     const segments = [];
     divisions.forEach((d) => {
-      if (buckets[d].current > 0) segments.push({ division: d, type: "Current", value: buckets[d].current, color: divisionSvgColors[d],
-        // Items for this specific segment (division + type) — used for segment drilldown
-        segmentItems: periodItems.filter((item) => {
-          const rd = item.assignment?._resourceHomeDivision || item.project.division;
-          return rd === d && item.project.status !== "Pending Award" && item.project.status !== "Complete";
-        }),
+      if (buckets[d].current > 0) segments.push({
+        division: d, type: "Current", value: buckets[d].current, color: divisionSvgColors[d],
+        // Segment drilldown shows items whose project division matches AND resource division filter passes
+        segmentItems: periodItems.filter((item) =>
+          item.project.division === d &&
+          item.project.status !== "Pending Award" &&
+          item.project.status !== "Complete"
+        ),
       });
-      if (buckets[d].pending > 0) segments.push({ division: d, type: "Pending", value: buckets[d].pending, color: pendingDivisionSvgColors[d],
-        segmentItems: periodItems.filter((item) => {
-          const rd = item.assignment?._resourceHomeDivision || item.project.division;
-          return rd === d && item.project.status === "Pending Award";
-        }),
+      if (buckets[d].pending > 0) segments.push({
+        division: d, type: "Pending", value: buckets[d].pending, color: pendingDivisionSvgColors[d],
+        segmentItems: periodItems.filter((item) =>
+          item.project.division === d &&
+          item.project.status === "Pending Award"
+        ),
       });
     });
 
-    // Build a tight timeline scoped exactly to this period for drilldown Gantts
+    // Tight timeline scoped to just this period for drilldown Gantts
     const periodTimeline = {
       minDate: periodStart,
       maxDate: periodEnd,
@@ -1858,8 +1865,8 @@ export default function App() {
             <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
               <div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5">
                 <div>
-                  <h2 className="text-2xl font-bold">{segment.division} {segment.type} — {label}</h2>
-                  <p className="text-sm text-slate-500">{items.length} assignment{items.length === 1 ? "" : "s"} active for {segment.division} resources during this period</p>
+                  <h2 className="text-2xl font-bold">{segment.division} Projects ({segment.type}) — {label}</h2>
+                  <p className="text-sm text-slate-500">{items.length} {segment.division} {segment.type.toLowerCase()} project{items.length === 1 ? "" : "s"} with filtered resources active during this period</p>
                 </div>
                 <button onClick={() => setDemandDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
               </div>
