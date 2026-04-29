@@ -1,46 +1,979 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, CalendarDays, Users, BriefcaseBusiness, X, ZoomIn, Settings, FolderKanban, ClipboardCheck } from "lucide-react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
+import { Plus, Trash2, Users, BriefcaseBusiness, X, ZoomIn, Settings, FolderKanban, ClipboardCheck, Search } from "lucide-react";
 import { supabase } from "./lib/supabase";
 
-// Constants
 import {
   divisions, statuses, resourceTypes, defaultDashboardResourceTypes, zoomModes,
   blankProject, blankAssignment, blankResource, blankCrew, startingCertifications,
+  divisionStyles, pendingDivisionStyles, divisionSvgColors, pendingDivisionSvgColors,
 } from "./constants";
 
-// Utils
 import {
   buildGanttItems, buildTimeline, itemOverlapsTimeline,
   findProject, getAssignmentCrewIds, getAssignmentCrewDisplayNames,
   getAssignmentPeopleLabel, getCrewDisplayName,
-  formatDate, csvEscape, downloadTextFile, readCsvFile, splitList,
-  toggleListValue,
+  formatDate, formatTick, csvEscape, downloadTextFile, readCsvFile, splitList,
+  toggleListValue, toDate, addDays, rangesOverlap, timelinePercent,
+  timelineSpanPercent, getPeriodEnd,
 } from "./utils";
 
-// DB mappers
 import {
   mapProjectFromDb, mapResourceFromDb, mapCrewFromDb,
   mapAssignmentFromDb, mapCertificationFromDb,
   projectToDb, resourceToDb, crewToDb, assignmentToDb, mobilizationToDb,
 } from "./db/mappers";
 
-// Hooks
 import { useSupabaseRealtime } from "./hooks/useSupabaseRealtime";
 
-// UI Components
-import { StatCard, MultiSelectFilter, SearchableMultiSelect } from "./components/ui/index";
 
-// Forms
-import { ProjectForm, AssignmentForm, ResourceForm, CrewForm } from "./components/forms/index";
+// ─── StatCard ────────────────────────────────────────────────────────────────
 
-// Gantt
-import {
-  GanttHeader, GanttSegmentBar, PtoOverlayBar,
-  ProjectGanttRow, ResourceGanttRow, CrewGanttRow,
-  ResourceDemandChart,
-} from "./components/gantt/index";
+export function StatCard({ icon: Icon, label, value }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm text-slate-500">{label}</p>
+          <p className="mt-1 text-3xl font-bold text-slate-900">{value}</p>
+        </div>
+        <div className="rounded-xl bg-emerald-50 p-3 text-emerald-700">
+          <Icon size={24} />
+        </div>
+      </div>
+    </div>
+  );
+}
 
-// ─── App ──────────────────────────────────────────────────────────────────────
+// ─── MultiSelectFilter ───────────────────────────────────────────────────────
+
+export function MultiSelectFilter({ label, options, selected, setSelected, labels = {} }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+      <p className="mb-2 text-sm font-semibold text-slate-700">{label}</p>
+      <div className="flex flex-wrap gap-2">
+        {options.map((option) => {
+          const active = selected.includes(option);
+          return (
+            <button
+              key={option}
+              onClick={() => setSelected((current) => toggleListValue(current, option))}
+              className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                active ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              {labels[option] || option}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── SearchableMultiSelect ───────────────────────────────────────────────────
+
+export function SearchableMultiSelect({ label, options, selected, setSelected, getLabel }) {
+  const containerRef = useRef(null);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (containerRef.current && !containerRef.current.contains(event.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const filtered = options.filter((option) =>
+    getLabel(option).toLowerCase().includes(query.toLowerCase())
+  );
+
+  return (
+    <div ref={containerRef} className="relative rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+      <p className="mb-2 text-sm font-semibold text-slate-700">{label}</p>
+
+      <div className="mb-2 flex flex-wrap gap-2">
+        {selected.map((value) => {
+          const option = options.find((item) => item.value === value);
+          if (!option) return null;
+          return (
+            <span key={value} className="inline-flex items-center gap-2 rounded-full bg-emerald-700 px-3 py-1 text-xs font-semibold text-white">
+              {getLabel(option)}
+              <button type="button" onClick={() => setSelected((current) => current.filter((item) => item !== value))}>×</button>
+            </span>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 focus-within:border-emerald-600">
+        <Search size={16} className="mr-2 text-slate-400" />
+        <input
+          className="w-full bg-transparent outline-none"
+          value={query}
+          placeholder="Search and select..."
+          onFocus={() => setOpen(true)}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        />
+      </div>
+
+      {open && (
+        <div className="absolute left-3 right-3 z-50 mt-1 max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+          {filtered.length ? filtered.map((option) => {
+            const active = selected.includes(option.value);
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => {
+                  setSelected((current) =>
+                    current.includes(option.value)
+                      ? current.filter((value) => value !== option.value)
+                      : [...current, option.value]
+                  );
+                  setQuery("");
+                  setOpen(true);
+                }}
+                className={`block w-full px-3 py-2 text-left hover:bg-emerald-50 ${active ? "bg-emerald-50" : ""}`}
+              >
+                <p className="font-semibold text-slate-800">{getLabel(option)}</p>
+                {option.subLabel && <p className="text-xs text-slate-500">{option.subLabel}</p>}
+              </button>
+            );
+          }) : <p className="px-3 py-2 text-sm text-slate-500">No matching options</p>}
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="block w-full border-t border-slate-200 px-3 py-2 text-center text-sm font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CertificationPicker ─────────────────────────────────────────────────────
+
+export function CertificationPicker({ selected, onChange, certifications }) {
+  return (
+    <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+      {certifications.map((cert) => {
+        const active = selected.includes(cert);
+        return (
+          <button
+            key={cert}
+            type="button"
+            onClick={() => onChange(toggleListValue(selected, cert))}
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              active ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
+            }`}
+          >
+            {cert}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── useCloseDropdown ─────────────────────────────────────────────────────────
+
+export function useCloseDropdown(setOpen, containerRef) {
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (containerRef.current && !containerRef.current.contains(event.target)) setOpen(false);
+    }
+    function handleEsc(event) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEsc);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEsc);
+    };
+  }, [setOpen, containerRef]);
+}
+
+// ─── SearchableResourceSelect ─────────────────────────────────────────────────
+
+export function SearchableResourceSelect({ value, onChange, resources, resourceType, placeholder }) {
+  const containerRef = useRef(null);
+  const [query, setQuery] = useState(value || "");
+  const [open, setOpen] = useState(false);
+
+  useCloseDropdown(setOpen, containerRef);
+  useEffect(() => setQuery(value || ""), [value]);
+
+  const filtered = resources.filter(
+    (r) => (resourceType ? r.resourceType === resourceType : true) &&
+      r.name.toLowerCase().includes(query.toLowerCase())
+  );
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600">
+        <Search size={16} className="mr-2 text-slate-400" />
+        <input
+          className="w-full outline-none"
+          value={query}
+          placeholder={placeholder || "Search resource..."}
+          onFocus={() => setOpen(true)}
+          onChange={(e) => { setQuery(e.target.value); onChange(e.target.value); setOpen(true); }}
+        />
+      </div>
+      {open && (
+        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+          {filtered.length ? filtered.map((r) => (
+            <button key={r.id} type="button"
+              onClick={() => { onChange(r.name); setQuery(r.name); setOpen(false); }}
+              className="block w-full px-3 py-2 text-left hover:bg-emerald-50"
+            >
+              <p className="font-semibold text-slate-800">{r.name}</p>
+              <p className="text-xs text-slate-500">{r.resourceType} • {r.homeDivision}</p>
+            </button>
+          )) : <p className="px-3 py-2 text-sm text-slate-500">No matching resource</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SearchableProjectSelect ──────────────────────────────────────────────────
+
+export function SearchableProjectSelect({ value, onChange, projects }) {
+  const containerRef = useRef(null);
+  const current = findProject(projects, value);
+  const [query, setQuery] = useState(current ? `${current.projectNumber} - ${current.name}` : "");
+  const [open, setOpen] = useState(false);
+
+  useCloseDropdown(setOpen, containerRef);
+
+  useEffect(() => {
+    const selected = findProject(projects, value);
+    setQuery(selected ? `${selected.projectNumber} - ${selected.name}` : "");
+  }, [value, projects]);
+
+  const filtered = projects.filter((p) =>
+    `${p.projectNumber} ${p.name} ${p.client}`.toLowerCase().includes(query.toLowerCase())
+  );
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600">
+        <Search size={16} className="mr-2 text-slate-400" />
+        <input
+          className="w-full outline-none"
+          value={query}
+          placeholder="Search project..."
+          onFocus={() => setOpen(true)}
+          onChange={(e) => { setQuery(e.target.value); onChange(""); setOpen(true); }}
+        />
+      </div>
+      {open && (
+        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+          {filtered.length ? filtered.map((p) => (
+            <button key={p.id} type="button"
+              onClick={() => { onChange(p.id); setQuery(`${p.projectNumber} - ${p.name}`); setOpen(false); }}
+              className="block w-full px-3 py-2 text-left hover:bg-emerald-50"
+            >
+              <p className="font-semibold text-slate-800">{p.projectNumber} - {p.name}</p>
+              <p className="text-xs text-slate-500">{p.client} • {p.division} • {p.status}</p>
+            </button>
+          )) : <p className="px-3 py-2 text-sm text-slate-500">No matching project</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SearchableCrewSelect ─────────────────────────────────────────────────────
+
+export function SearchableCrewSelect({ value, onChange, crews }) {
+  const containerRef = useRef(null);
+  const current = crews.find((c) => c.id === value);
+  const [query, setQuery] = useState(current ? getCrewDisplayName(current) : "");
+  const [open, setOpen] = useState(false);
+
+  useCloseDropdown(setOpen, containerRef);
+
+  useEffect(() => {
+    const selected = crews.find((c) => c.id === value);
+    setQuery(selected ? getCrewDisplayName(selected) : "");
+  }, [value, crews]);
+
+  const filtered = crews.filter((c) =>
+    `${c.crewName} ${c.foremanName} ${(c.specialty || []).join(" ")}`.toLowerCase().includes(query.toLowerCase())
+  );
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600">
+        <Search size={16} className="mr-2 text-slate-400" />
+        <input
+          className="w-full outline-none"
+          value={query}
+          placeholder="Search crew..."
+          onFocus={() => setOpen(true)}
+          onChange={(e) => { setQuery(e.target.value); onChange(""); setOpen(true); }}
+        />
+      </div>
+      {open && (
+        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+          {filtered.length ? filtered.map((c) => (
+            <button key={c.id} type="button"
+              onClick={() => { onChange(c.id); setQuery(getCrewDisplayName(c)); setOpen(false); }}
+              className="block w-full px-3 py-2 text-left hover:bg-emerald-50"
+            >
+              <p className="font-semibold text-slate-800">{getCrewDisplayName(c)}</p>
+              <p className="text-xs text-slate-500">{(c.specialty || []).join(", ")}</p>
+            </button>
+          )) : <p className="px-3 py-2 text-sm text-slate-500">No matching crew</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+  CertificationPicker,
+  SearchableProjectSelect,
+  SearchableResourceSelect,
+  SearchableCrewSelect,
+} from "../ui/index";
+
+// ─── ProjectForm ──────────────────────────────────────────────────────────────
+
+export function ProjectForm({ form, setForm, onSave, onCancel, editing, certifications }) {
+  function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+      <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 p-5">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">{editing ? "Edit Project" : "Add Project"}</h2>
+            <p className="text-sm text-slate-500">Project master information only. Assignments are made from the Dashboard.</p>
+          </div>
+          <button onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+        </div>
+
+        <div className="grid gap-4 p-5 md:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Project Number</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.projectNumber} onChange={(e) => updateField("projectNumber", e.target.value)} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Project Name</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.name} onChange={(e) => updateField("name", e.target.value)} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Client</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.client} onChange={(e) => updateField("client", e.target.value)} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Division</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.division} onChange={(e) => updateField("division", e.target.value)}>
+              {divisions.map((d) => <option key={d}>{d}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-sm font-medium text-slate-700">Address</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.address} onChange={(e) => updateField("address", e.target.value)} />
+          </label>
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-sm font-medium text-slate-700">Specific Requirements / Certifications</span>
+            <CertificationPicker selected={form.specificRequirements || []} onChange={(v) => updateField("specificRequirements", v)} certifications={certifications} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Status</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.status} onChange={(e) => updateField("status", e.target.value)}>
+              {statuses.map((s) => <option key={s}>{s}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-slate-200 p-5">
+          <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+          <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Project</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── AssignmentForm ───────────────────────────────────────────────────────────
+
+export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resources, projects, crews }) {
+  function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
+
+  function calculateEndDateFromWeeks(startDate, durationWeeks) {
+    if (!startDate || durationWeeks === "" || durationWeeks === null || durationWeeks === undefined) return "";
+    const start = toDate(startDate);
+    const weeks = Number(durationWeeks);
+    if (!start || Number.isNaN(weeks) || weeks <= 0) return "";
+    const end = addBusinessDaysInclusive(start, weeks * 5);
+    return end ? end.toISOString().slice(0, 10) : "";
+  }
+
+  function updateMobilization(id, field, value) {
+    setForm((c) => ({
+      ...c,
+      mobilizations: (c.mobilizations || []).map((mob) => {
+        if (mob.id !== id) return mob;
+        const updated = { ...mob, [field]: value };
+        if (field === "start" || field === "durationWeeks") {
+          const calculatedEnd = calculateEndDateFromWeeks(updated.start, updated.durationWeeks);
+          if (calculatedEnd) updated.end = calculatedEnd;
+        }
+        return updated;
+      }),
+    }));
+  }
+
+  function addMobilization() {
+    setForm((c) => ({
+      ...c,
+      mobilizations: [...(c.mobilizations || []), { id: crypto.randomUUID(), start: "", durationWeeks: "", end: "" }],
+    }));
+  }
+
+  function removeMobilization(id) {
+    setForm((c) => ({ ...c, mobilizations: (c.mobilizations || []).filter((m) => m.id !== id) }));
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+      <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 p-5">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">{editing ? "Edit Assignment" : "Assign Project"}</h2>
+            <p className="text-sm text-slate-500">Select a project, assign resources, crews, and mobilization dates.</p>
+          </div>
+          <button onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+        </div>
+
+        <div className="grid gap-4 p-5 md:grid-cols-2">
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-sm font-medium text-slate-700">Project</span>
+            <SearchableProjectSelect value={form.projectId} onChange={(v) => updateField("projectId", v)} projects={projects} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Project Manager</span>
+            <SearchableResourceSelect value={form.projectManager} onChange={(v) => updateField("projectManager", v)} resources={resources} resourceType="Project Manager" placeholder="Search project manager..." />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Superintendent</span>
+            <SearchableResourceSelect value={form.superintendent} onChange={(v) => updateField("superintendent", v)} resources={resources} resourceType="Superintendent" placeholder="Search superintendent..." />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Field Coordinator</span>
+            <SearchableResourceSelect value={form.fieldCoordinator} onChange={(v) => updateField("fieldCoordinator", v)} resources={resources} resourceType="Field Coordinator" placeholder="Search field coordinator..." />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Field Engineer</span>
+            <SearchableResourceSelect value={form.fieldEngineer} onChange={(v) => updateField("fieldEngineer", v)} resources={resources} resourceType="Field Engineer" placeholder="Search field engineer..." />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Safety</span>
+            <SearchableResourceSelect value={form.safety} onChange={(v) => updateField("safety", v)} resources={resources} resourceType="Safety" placeholder="Search safety..." />
+          </label>
+          <div />
+          {[1, 2, 3, 4].map((n) => (
+            <label key={n} className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Crew #{n}</span>
+              <SearchableCrewSelect value={form[`crew${n}Id`]} onChange={(v) => updateField(`crew${n}Id`, v)} crews={crews} />
+            </label>
+          ))}
+
+          <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-slate-900">Mobilizations</h3>
+                <p className="text-sm text-slate-500">Use + to add additional start/end date ranges for remobilizations.</p>
+              </div>
+              <button onClick={addMobilization} type="button" className="flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white">
+                <Plus size={16} /> Add Mobilization
+              </button>
+            </div>
+            <div className="space-y-3">
+              {(form.mobilizations || []).map((mob, index) => (
+                <div key={mob.id} className="grid gap-3 rounded-xl border border-slate-200 bg-white p-3 md:grid-cols-[auto_1fr_1fr_1fr_auto]">
+                  <div className="flex items-center font-semibold text-slate-600">#{index + 1}</div>
+                  <label className="space-y-1">
+                    <span className="text-xs font-medium text-slate-600">Start Date</span>
+                    <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={mob.start} onChange={(e) => updateMobilization(mob.id, "start", e.target.value)} />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-xs font-medium text-slate-600">Duration / Weeks</span>
+                    <input type="number" min="0" step="0.5" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={mob.durationWeeks || ""} onChange={(e) => updateMobilization(mob.id, "durationWeeks", e.target.value)} placeholder="Weeks" />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-xs font-medium text-slate-600">End Date</span>
+                    <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={mob.end} onChange={(e) => updateMobilization(mob.id, "end", e.target.value)} />
+                  </label>
+                  <button type="button" onClick={() => removeMobilization(mob.id)} className="rounded-xl border border-red-200 px-3 py-2 font-medium text-red-700 hover:bg-red-50">Remove</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-slate-200 p-5">
+          <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+          <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Assignment</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ResourceForm ─────────────────────────────────────────────────────────────
+
+export function ResourceForm({ form, setForm, certifications, onSave, onCancel, editing }) {
+  const [ptoDraft, setPtoDraft] = useState({ ptoId: "", start: "", end: "" });
+  function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
+
+  function addPto() {
+    if (!ptoDraft.ptoId || !ptoDraft.start || !ptoDraft.end) { alert("PTO ID, start date, and end date are required."); return; }
+    setForm((c) => ({ ...c, pto: [...(c.pto || []), { ...ptoDraft, id: crypto.randomUUID() }] }));
+    setPtoDraft({ ptoId: "", start: "", end: "" });
+  }
+
+  function deletePto(id) {
+    setForm((c) => ({ ...c, pto: (c.pto || []).filter((item) => item.id !== id) }));
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+      <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 p-5">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">{editing ? "Edit Resource" : "Add Resource"}</h2>
+            <p className="text-sm text-slate-500">Create resource profile, role, certifications, and PTO records.</p>
+          </div>
+          <button onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+        </div>
+
+        <div className="grid gap-4 p-5 md:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Name</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.name} onChange={(e) => updateField("name", e.target.value)} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Resource Type</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.resourceType} onChange={(e) => updateField("resourceType", e.target.value)}>
+              {resourceTypes.map((t) => <option key={t}>{t}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Home Division</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.homeDivision} onChange={(e) => updateField("homeDivision", e.target.value)}>
+              {divisions.map((d) => <option key={d}>{d}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Status</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.status} onChange={(e) => updateField("status", e.target.value)}>
+              <option>Active</option><option>Available</option><option>Inactive</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Phone</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.phone} onChange={(e) => updateField("phone", e.target.value)} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Email</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.email} onChange={(e) => updateField("email", e.target.value)} />
+          </label>
+        </div>
+
+        <div className="border-t border-slate-200 p-5">
+          <h3 className="font-bold text-slate-900">Certifications</h3>
+          <div className="mt-3">
+            <CertificationPicker selected={form.certifications || []} onChange={(v) => updateField("certifications", v)} certifications={certifications} />
+          </div>
+        </div>
+
+        <div className="border-t border-slate-200 p-5">
+          <h3 className="font-bold text-slate-900">PTO</h3>
+          <div className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
+            <input placeholder="PTO ID" className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={ptoDraft.ptoId} onChange={(e) => setPtoDraft((c) => ({ ...c, ptoId: e.target.value }))} />
+            <input type="date" className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={ptoDraft.start} onChange={(e) => setPtoDraft((c) => ({ ...c, start: e.target.value }))} />
+            <input type="date" className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={ptoDraft.end} onChange={(e) => setPtoDraft((c) => ({ ...c, end: e.target.value }))} />
+            <button onClick={addPto} className="rounded-xl bg-slate-900 px-4 py-2 font-semibold text-white">Add PTO</button>
+          </div>
+          <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-100 text-slate-600">
+                <tr><th className="p-3">PTO ID</th><th className="p-3">Start</th><th className="p-3">End</th><th className="p-3 text-right">Action</th></tr>
+              </thead>
+              <tbody>
+                {(form.pto || []).map((pto) => (
+                  <tr key={pto.id} className="border-t border-slate-200">
+                    <td className="p-3">{pto.ptoId}</td>
+                    <td className="p-3">{formatDate(pto.start)}</td>
+                    <td className="p-3">{formatDate(pto.end)}</td>
+                    <td className="p-3 text-right"><button onClick={() => deletePto(pto.id)} className="text-red-700">Delete</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-slate-200 p-5">
+          <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+          <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Resource</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── CrewForm ─────────────────────────────────────────────────────────────────
+
+export function CrewForm({ form, setForm, certifications, onSave, onCancel, editing }) {
+  function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 p-5">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">{editing ? "Edit Crew" : "Add Crew"}</h2>
+            <p className="text-sm text-slate-500">Crew master information used by assignment dropdowns.</p>
+          </div>
+          <button onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+        </div>
+
+        <div className="grid gap-4 p-5 md:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Crew Name</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.crewName} onChange={(e) => updateField("crewName", e.target.value)} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Foreman Name</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.foremanName} onChange={(e) => updateField("foremanName", e.target.value)} />
+          </label>
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-sm font-medium text-slate-700">Specialty</span>
+            <CertificationPicker selected={form.specialty || []} onChange={(v) => updateField("specialty", v)} certifications={certifications} />
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-slate-200 p-5">
+          <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+          <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Crew</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+  divisionStyles, pendingDivisionStyles,
+  divisionSvgColors, pendingDivisionSvgColors, divisions,
+} from "../../constants";
+  toDate, addDays, formatDate, formatTick,
+  timelinePercent, timelineSpanPercent,
+  rangesOverlap, getPeriodEnd,
+  getAssignmentPeopleLabel, getCrewDisplayName, getAssignmentCrewIds,
+} from "../../utils";
+
+// ─── GanttHeader ──────────────────────────────────────────────────────────────
+
+export function GanttHeader({ timeline, zoom }) {
+  const currentLeft = timelinePercent(timeline.currentDate, timeline);
+  return (
+    <div className="grid grid-cols-[260px_1fr] border-b border-slate-200 pb-2" style={{ width: `${timeline.width + 260}px` }}>
+      <div className="sticky left-0 z-30 h-10 bg-white" />
+      <div className="relative h-10" style={{ width: `${timeline.width}px` }}>
+        {currentLeft >= 0 && currentLeft <= 100 && (
+          <div className="absolute top-0 z-20 h-10 border-l-4 border-dashed border-red-600" style={{ left: `${currentLeft}%` }}>
+            <span className="ml-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">Today</span>
+          </div>
+        )}
+        {timeline.ticks.map((tick, index) => {
+          const left = timelinePercent(tick, timeline);
+          return (
+            <div key={`${tick.toISOString()}-${index}`} className="absolute top-0 h-10 border-l border-slate-200 pl-2 text-xs font-medium text-slate-500" style={{ left: `${left}%` }}>
+              {formatTick(tick, zoom)}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── GanttSegmentBar ─────────────────────────────────────────────────────────
+
+export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
+  const project = item.project;
+  const isUnassigned = !item.assignment?.superintendent;
+  const colorClass = isUnassigned || project.status === "Pending Award"
+    ? pendingDivisionStyles[project.division] || "bg-slate-300"
+    : divisionStyles[project.division] || "bg-slate-700";
+  const { left, width } = timelineSpanPercent(item.start, item.end, timeline);
+  const patternStyle = isUnassigned ? {
+    border: "2px solid #111827",
+    backgroundImage: "repeating-linear-gradient(135deg, rgba(17,24,39,.35) 0 2px, transparent 2px 9px)",
+    backgroundSize: "14px 14px",
+  } : {};
+  const conflictStyle = conflict ? {
+    border: "2px solid #dc2626",
+    backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(220,38,38,.95) 8px 10px)",
+    backgroundSize: "14px 14px",
+  } : {};
+  const tooltip = [
+    project.projectNumber ? `${project.projectNumber} - ${project.name}` : project.name,
+    `${project.division} • ${project.status}`,
+    `${formatDate(item.start)} - ${formatDate(item.end)}`,
+    label ? `Assignment: ${label}` : "Unassigned",
+    conflict ? "Conflict detected" : "",
+  ].filter(Boolean).join("\n");
+
+  return (
+    <div
+      className={`absolute top-1 h-9 overflow-hidden rounded-xl ${colorClass} px-3 text-xs font-semibold leading-9 shadow-sm ${isUnassigned ? "text-slate-900" : "text-white"}`}
+      style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, ...patternStyle, ...conflictStyle }}
+      title={tooltip}
+    >
+      <span className={conflict ? "rounded bg-white/90 px-1.5 py-0.5 font-bold text-red-700" : ""}>{label || "Unassigned"}</span>
+      {isUnassigned && <span className="ml-2 rounded bg-white/80 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-900">unassigned</span>}
+      {conflict && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white">conflict</span>}
+    </div>
+  );
+}
+
+// ─── PtoOverlayBar ────────────────────────────────────────────────────────────
+
+export function PtoOverlayBar({ pto, timeline }) {
+  const start = toDate(pto.start);
+  const end = toDate(pto.end);
+  if (!start || !end || !rangesOverlap(start, addDays(end, 1), timeline.minDate, addDays(timeline.maxDate, 1))) return null;
+  const { left, width } = timelineSpanPercent(start, end, timeline);
+  return (
+    <div
+      className="absolute top-0 z-20 h-11 overflow-hidden rounded-xl border-2 border-black bg-white/70 px-3 text-xs font-bold leading-10 text-black shadow"
+      style={{ left: `${left}%`, width: `${Math.max(0.15, width)}%`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(0,0,0,.95) 8px 10px)", backgroundSize: "14px 14px" }}
+      title={`PTO ${pto.ptoId || ""}: ${formatDate(pto.start)} - ${formatDate(pto.end)}`}
+    >
+      PTO {pto.ptoId || ""}
+    </div>
+  );
+}
+
+// ─── ProjectGanttRow ──────────────────────────────────────────────────────────
+
+export function ProjectGanttRow({ assignment, project, items, timeline, crews }) {
+  return (
+    <div className="grid grid-cols-[260px_1fr] items-center gap-5">
+      <button className="sticky left-0 z-20 bg-white pr-3 text-left">
+        <div className="flex items-center gap-2">
+          <span className={`h-3 w-3 rounded-full ${project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600"}`} />
+          <p className="font-semibold text-slate-900 hover:text-emerald-700">
+            {project.projectNumber ? `${project.projectNumber} - ` : ""}{project.name}
+          </p>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">{project.division} • {project.status} • {items.length} mobilization{items.length === 1 ? "" : "s"}</p>
+      </button>
+      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
+        {items.map((item) => (
+          <GanttSegmentBar key={item.id} item={item} timeline={timeline} label={getAssignmentPeopleLabel(item.assignment, crews)} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── ResourceGanttRow ─────────────────────────────────────────────────────────
+
+export function ResourceGanttRow({ resource, items, timeline, onResourceClick }) {
+  const ptoItems = (resource.pto || []).filter((pto) => pto.start && pto.end);
+  const sortedItems = [...items].sort((a, b) => new Date(a.start) - new Date(b.start));
+  const conflictIds = new Set();
+
+  sortedItems.forEach((item, i) => {
+    const itemStart = toDate(item.start);
+    const itemEnd = toDate(item.end);
+    const hasEarlierOverlap = sortedItems.slice(0, i).some((prev) => {
+      const previousStart = toDate(prev.start);
+      const previousEnd = toDate(prev.end);
+      return rangesOverlap(itemStart, addDays(itemEnd, 1), previousStart, addDays(previousEnd, 1));
+    });
+    if (hasEarlierOverlap) conflictIds.add(item.id);
+  });
+
+  return (
+    <div className="grid grid-cols-[260px_1fr] items-center gap-5">
+      <div className="sticky left-0 z-20 bg-white pr-3 text-left">
+        <button onClick={() => onResourceClick?.(resource)} className="font-semibold text-slate-900 hover:text-emerald-700">{resource.name}</button>
+        <p className="mt-1 text-xs text-slate-500">
+          {resource.resourceType} • {resource.homeDivision} • {items.length} assignment{items.length === 1 ? "" : "s"}
+          {ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}
+        </p>
+      </div>
+      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
+        {sortedItems.map((item) => (
+          <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} conflict={conflictIds.has(item.id)} />
+        ))}
+        {ptoItems.map((pto) => (
+          <PtoOverlayBar key={`${resource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── CrewGanttRow ────────────────────────────────────────────────────────────
+
+export function CrewGanttRow({ crew, items, timeline }) {
+  const sortedItems = [...items].sort((a, b) => new Date(a.start) - new Date(b.start));
+  const lanes = [];
+
+  sortedItems.forEach((item) => {
+    const start = toDate(item.start);
+    const end = toDate(item.end);
+    let laneIndex = lanes.findIndex(
+      (lane) => !lane.some((placed) => rangesOverlap(start, addDays(end, 1), toDate(placed.start), addDays(toDate(placed.end), 1)))
+    );
+    if (laneIndex === -1) { laneIndex = lanes.length; lanes.push([]); }
+    lanes[laneIndex].push(item);
+  });
+
+  return (
+    <div className="grid grid-cols-[260px_1fr] items-start gap-5">
+      <div className="sticky left-0 z-20 bg-white pr-3 text-left">
+        <p className="font-semibold text-slate-900">{getCrewDisplayName(crew)}</p>
+        <p className="mt-1 text-xs text-slate-500">
+          {(crew.specialty || []).join(", ") || "No specialty"} • {items.length} assignment{items.length === 1 ? "" : "s"}
+        </p>
+      </div>
+      <div className="relative rounded-xl bg-slate-100" style={{ width: `${timeline.width}px`, height: `${Math.max(48, lanes.length * 48)}px` }}>
+        {lanes.map((lane, laneIndex) =>
+          lane.map((item) => {
+            const span = timelineSpanPercent(item.start, item.end, timeline);
+            const colorClass = item.project.status === "Pending Award"
+              ? pendingDivisionStyles[item.project.division]
+              : divisionStyles[item.project.division];
+            return (
+              <div
+                key={`${crew.id}-${item.id}`}
+                className={`absolute h-9 overflow-hidden rounded-xl px-3 text-xs font-semibold leading-9 text-white shadow-sm ${colorClass || "bg-slate-700"}`}
+                style={{ left: `${span.left}%`, width: `${Math.max(2, span.width)}%`, top: `${laneIndex * 48 + 5}px` }}
+              >
+                {item.project.name}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── ResourceDemandChart ──────────────────────────────────────────────────────
+
+export function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPdf, onBarClick, enlarged = false }) {
+  const periods = timeline.ticks.map((tick) => {
+    const periodStart = tick;
+    const periodEnd = getPeriodEnd(tick, zoom);
+    const buckets = {};
+    divisions.forEach((d) => { buckets[d] = { current: 0, pending: 0 }; });
+
+    items.forEach((item) => {
+      const itemStart = toDate(item.start);
+      const itemEnd = toDate(item.end);
+      if (!itemStart || !itemEnd || !rangesOverlap(itemStart, addDays(itemEnd, 1), periodStart, periodEnd)) return;
+      if (item.project.status === "Pending Award") buckets[item.project.division].pending += 1;
+      else if (item.project.status !== "Complete") buckets[item.project.division].current += 1;
+    });
+
+    const segments = [];
+    divisions.forEach((d) => {
+      if (buckets[d].current > 0) segments.push({ division: d, type: "Current", value: buckets[d].current, color: divisionSvgColors[d] });
+      if (buckets[d].pending > 0) segments.push({ division: d, type: "Pending", value: buckets[d].pending, color: pendingDivisionSvgColors[d] });
+    });
+
+    const count = divisions.reduce((sum, d) => sum + buckets[d].current + buckets[d].pending, 0);
+    return { label: formatTick(tick, zoom), tick, segments, count };
+  });
+
+  const rawMaxValue = Math.max(totalResources, ...periods.map((p) => p.count), 1);
+  const yAxisMax = Math.max(5, Math.ceil(rawMaxValue / 5) * 5);
+  const width = Math.max(enlarged ? 1600 : 1160, timeline.width || 1160);
+  const height = enlarged ? 480 : 340;
+  const margin = { top: 28, right: 24, bottom: 70, left: 58 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const y = (value) => margin.top + plotHeight - (value / yAxisMax) * plotHeight;
+  const barWidth = Math.max(36, Math.min(90, plotWidth / Math.max(periods.length, 1) - 16));
+  const yTicks = Array.from({ length: 6 }, (_, i) => Math.round((yAxisMax / 5) * i));
+
+  return (
+    <section id="resource-demand-graph" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => window.dispatchEvent(new CustomEvent("ggc-expand-demand"))} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button>
+            <h2 className="text-xl font-bold">Resource Demand Graph</h2>
+          </div>
+          <p className="text-sm text-slate-500">Y-axis is project count. The red dashed line represents total filtered resources.</p>
+        </div>
+        <button onClick={onExportPdf} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
+      </div>
+
+      <div className="overflow-x-auto">
+        <svg width={width} height={height} className="rounded-xl border border-slate-200 bg-slate-50">
+          <line x1={margin.left} y1={margin.top} x2={margin.left} y2={margin.top + plotHeight} stroke="#94a3b8" />
+          <line x1={margin.left} y1={margin.top + plotHeight} x2={margin.left + plotWidth} y2={margin.top + plotHeight} stroke="#94a3b8" />
+          {yTicks.map((tick) => (
+            <g key={tick}>
+              <line x1={margin.left} y1={y(tick)} x2={margin.left + plotWidth} y2={y(tick)} stroke="#e2e8f0" />
+              <text x={margin.left - 12} y={y(tick) + 4} textAnchor="end" fontSize="12" fontWeight="600" fill="#64748b">{tick}</text>
+            </g>
+          ))}
+          <line x1={margin.left} y1={y(totalResources)} x2={margin.left + plotWidth} y2={y(totalResources)} stroke="#dc2626" strokeWidth="4" strokeDasharray="8 6" />
+          <rect x={margin.left + plotWidth - 124} y={y(totalResources) - 26} width="124" height="22" rx="5" fill="#dc2626" />
+          <text x={margin.left + plotWidth - 62} y={y(totalResources) - 11} textAnchor="middle" fontSize="12" fontWeight="700" fill="white">Total Resources: {totalResources}</text>
+          {periods.map((period, index) => {
+            const x = margin.left + index * (plotWidth / Math.max(periods.length, 1)) + (plotWidth / Math.max(periods.length, 1) - barWidth) / 2;
+            let stackedValue = 0;
+            return (
+              <g key={`${period.label}-${index}`}>
+                {period.segments.map((segment) => {
+                  const segmentHeight = (segment.value / yAxisMax) * plotHeight;
+                  const rectY = y(stackedValue + segment.value);
+                  stackedValue += segment.value;
+                  return (
+                    <rect key={`${segment.division}-${segment.type}`} x={x} y={rectY} width={barWidth} height={segmentHeight} rx="5" fill={segment.color} onClick={() => onBarClick?.({ period, segment })} style={{ cursor: "pointer" }}>
+                      <title>{segment.division} {segment.type}: {segment.value}</title>
+                    </rect>
+                  );
+                })}
+                <text x={x + barWidth / 2} y={height - 36} textAnchor="middle" fontSize="10" fill="#475569">{period.label}</text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-3 text-xs font-semibold">
+        {divisions.map((d) => (
+          <div key={d} className="flex items-center gap-2">
+            <span className={`h-3 w-6 rounded-full ${divisionStyles[d]}`} /><span>{d} Current</span>
+            <span className={`ml-2 h-3 w-6 rounded-full ${pendingDivisionStyles[d]}`} /><span>{d} Pending</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 
 export default function App() {
   const [projects, setProjects] = useState([]);
@@ -963,4 +1896,3 @@ export default function App() {
     </main>
   );
 }
-
