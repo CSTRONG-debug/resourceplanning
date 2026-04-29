@@ -31,6 +31,20 @@ const pendingDivisionStyles = {
   Tilt: "bg-purple-300",
 };
 
+const divisionSvgColors = {
+  Hardscape: "#047857",
+  Commercial: "#1d4ed8",
+  Industrial: "#ea580c",
+  Tilt: "#7e22ce",
+};
+
+const pendingDivisionSvgColors = {
+  Hardscape: "#6ee7b7",
+  Commercial: "#93c5fd",
+  Industrial: "#fdba74",
+  Tilt: "#d8b4fe",
+};
+
 const startingCertifications = ["OSHA 10", "OSHA 30", "First Aid / CPR", "Forklift", "Aerial Lift", "Rigging", "Confined Space"];
 
 const startingResources = [
@@ -316,36 +330,41 @@ function ResourceDemandChart({ items, timeline, zoom, totalResources }) {
       const itemStart = toDate(item.start);
       const itemEnd = toDate(item.end);
       if (!itemStart || !itemEnd || !rangesOverlap(itemStart, addDays(itemEnd, 1), periodStart, periodEnd)) return;
-      const count = 1;
-      if (item.project.status === "Pending Award") buckets[item.project.division].pending += count;
-      else if (item.project.status !== "Complete") buckets[item.project.division].current += count;
+      if (item.project.status === "Pending Award") buckets[item.project.division].pending += 1;
+      else if (item.project.status !== "Complete") buckets[item.project.division].current += 1;
     });
 
     const segments = [];
     divisions.forEach((division) => {
-      if (buckets[division].current > 0) segments.push({ division, type: "Current", value: buckets[division].current, colorClass: divisionStyles[division] });
-      if (buckets[division].pending > 0) segments.push({ division, type: "Pending", value: buckets[division].pending, colorClass: pendingDivisionStyles[division] });
+      if (buckets[division].current > 0) segments.push({ division, type: "Current", value: buckets[division].current, color: divisionSvgColors[division] });
+      if (buckets[division].pending > 0) segments.push({ division, type: "Pending", value: buckets[division].pending, color: pendingDivisionSvgColors[division] });
     });
 
-    const required = divisions.reduce((sum, division) => sum + buckets[division].current + buckets[division].pending, 0);
-    return { label: formatTick(tick, zoom), buckets, segments, required };
+    const count = divisions.reduce((sum, division) => sum + buckets[division].current + buckets[division].pending, 0);
+    return { label: formatTick(tick, zoom), segments, count };
   });
 
-  const rawMaxValue = Math.max(totalResources, ...periods.map((period) => period.required), 1);
+  const rawMaxValue = Math.max(totalResources, ...periods.map((period) => period.count), 1);
   const yAxisMax = Math.max(5, Math.ceil(rawMaxValue / 5) * 5);
-  const chartHeight = 240;
-  const totalLineTopPx = chartHeight - (totalResources / yAxisMax) * chartHeight;
-  const yTicks = Array.from({ length: 6 }, (_, index) => Math.round((yAxisMax / 5) * (5 - index)));
+  const width = Math.max(1160, periods.length * 110);
+  const height = 340;
+  const margin = { top: 28, right: 24, bottom: 70, left: 58 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const y = (value) => margin.top + plotHeight - (value / yAxisMax) * plotHeight;
+  const barWidth = Math.max(36, Math.min(90, plotWidth / Math.max(periods.length, 1) - 16));
+  const yTicks = Array.from({ length: 6 }, (_, index) => Math.round((yAxisMax / 5) * index));
 
-  return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4"><h2 className="text-xl font-bold">Resource Demand Graph</h2><p className="text-sm text-slate-500">Y-axis is project count. One active project/mobilization equals 1. The red dashed line represents total filtered resources. Current work is shown by division color; Pending Award is stacked above in the lighter division shade.</p></div><div className="overflow-x-auto"><div className="relative min-w-[1160px] rounded-xl border border-slate-200 bg-slate-50 p-4"><div className="grid grid-cols-[52px_1fr] gap-3"><div className="relative" style={{ height: `${chartHeight}px` }}>{yTicks.map((tick, index) => <div key={tick} className="absolute right-0 -translate-y-1/2 text-xs font-semibold text-slate-500" style={{ top: `${(index / 5) * 100}%` }}>{tick}</div>)}</div><div className="relative" style={{ height: `${chartHeight}px` }}><div className="pointer-events-none absolute left-0 right-0 z-30 border-t-4 border-dashed border-red-600" style={{ top: `${totalLineTopPx}px` }}><span className="absolute -top-7 right-0 rounded bg-red-600 px-2 py-1 text-xs font-bold text-white shadow">Total Resources: {totalResources}</span></div>{yTicks.map((tick, index) => <div key={`grid-${tick}`} className="absolute left-0 right-0 border-t border-slate-200" style={{ top: `${(index / 5) * 100}%` }} />)}<div className="relative z-10 flex h-full items-end gap-3 border-b border-l border-slate-300 pl-3 pr-3">{periods.map((period, index) => {
-    let runningBottom = 0;
-    return <div key={`${period.label}-${index}`} className="relative flex h-full min-w-20 flex-1 flex-col justify-end"><div className="relative mx-auto w-full max-w-[260px]" style={{ height: `${chartHeight}px` }}>{period.segments.map((segment) => {
-      const height = (segment.value / yAxisMax) * chartHeight;
-      const bottom = runningBottom;
-      runningBottom += height;
-      return <div key={`${segment.division}-${segment.type}`} className={`absolute left-0 right-0 rounded-t-md ${segment.colorClass}`} style={{ height: `${height}px`, bottom: `${bottom}px` }} title={`${segment.division} ${segment.type}: ${segment.value}`} />;
-    })}</div><p className="mt-2 truncate text-center text-[10px] font-medium text-slate-500">{period.label}</p></div>;
-  })}</div></div></div><div className="mt-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-6 rounded-full ${divisionStyles[division]}`} /><span>{division} Current</span><span className={`ml-2 h-3 w-6 rounded-full ${pendingDivisionStyles[division]}`} /><span>{division} Pending</span></div>)}</div></div></div></section>;
+  return <section id="resource-demand-graph" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><h2 className="text-xl font-bold">Resource Demand Graph</h2><p className="text-sm text-slate-500">Y-axis is project count. One active project/mobilization equals 1. The red dashed line represents total filtered resources.</p></div><button onClick={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button></div><div className="overflow-x-auto"><svg width={width} height={height} className="rounded-xl border border-slate-200 bg-slate-50"><line x1={margin.left} y1={margin.top} x2={margin.left} y2={margin.top + plotHeight} stroke="#94a3b8" /><line x1={margin.left} y1={margin.top + plotHeight} x2={margin.left + plotWidth} y2={margin.top + plotHeight} stroke="#94a3b8" />{yTicks.map((tick) => <g key={tick}><line x1={margin.left} y1={y(tick)} x2={margin.left + plotWidth} y2={y(tick)} stroke="#e2e8f0" /><text x={margin.left - 12} y={y(tick) + 4} textAnchor="end" fontSize="12" fontWeight="600" fill="#64748b">{tick}</text></g>)}<line x1={margin.left} y1={y(totalResources)} x2={margin.left + plotWidth} y2={y(totalResources)} stroke="#dc2626" strokeWidth="4" strokeDasharray="8 6" /><rect x={margin.left + plotWidth - 124} y={y(totalResources) - 26} width="124" height="22" rx="5" fill="#dc2626" /><text x={margin.left + plotWidth - 62} y={y(totalResources) - 11} textAnchor="middle" fontSize="12" fontWeight="700" fill="white">Total Resources: {totalResources}</text>{periods.map((period, index) => {
+      const x = margin.left + index * (plotWidth / Math.max(periods.length, 1)) + (plotWidth / Math.max(periods.length, 1) - barWidth) / 2;
+      let stackedValue = 0;
+      return <g key={`${period.label}-${index}`}>{period.segments.map((segment) => {
+        const segmentHeight = (segment.value / yAxisMax) * plotHeight;
+        const rectY = y(stackedValue + segment.value);
+        stackedValue += segment.value;
+        return <rect key={`${segment.division}-${segment.type}`} x={x} y={rectY} width={barWidth} height={segmentHeight} rx="5" fill={segment.color}><title>{segment.division} {segment.type}: {segment.value}</title></rect>;
+      })}<text x={x + barWidth / 2} y={height - 36} textAnchor="middle" fontSize="10" fill="#475569">{period.label}</text></g>;
+    })}</svg></div><div className="mt-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-6 rounded-full ${divisionStyles[division]}`} /><span>{division} Current</span><span className={`ml-2 h-3 w-6 rounded-full ${pendingDivisionStyles[division]}`} /><span>{division} Pending</span></div>)}</div></section>;
 }
 
 function downloadTextFile(filename, content, mimeType = "text/csv;charset=utf-8;") {
@@ -473,12 +492,20 @@ export default function App() {
         getAssignmentCrewDisplayNames(item.assignment, crews).join("; "),
       ])
     ];
-    const csvContent = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+    const csvContent = rows.map((row) => row.map(csvEscape).join(",")).join("
+");
     downloadTextFile("ggc-resource-planning-dashboard.csv", csvContent);
   }
 
-  function exportDashboardPdf() {
-    window.print();
+  function exportSectionPdf(sectionId, title) {
+    const section = document.getElementById(sectionId);
+    if (!section) return;
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+    printWindow.document.write(`<!doctype html><html><head><title>${title}</title><style>body{font-family:Arial,sans-serif;margin:24px;color:#0f172a}button{display:none!important}.shadow-sm{box-shadow:none!important}svg{max-width:100%;height:auto}.overflow-x-auto{overflow:visible!important}.rounded-2xl,.rounded-xl{border-radius:12px}</style></head><body>${section.outerHTML}</body></html>`);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
   }
 
   return (
@@ -562,8 +589,8 @@ export default function App() {
       {page === "dashboard" && (
         <section className="mx-auto max-w-7xl space-y-6 px-6 py-6">
           <div className="grid gap-4 md:grid-cols-4"><StatCard icon={BriefcaseBusiness} label="Total Projects" value={projects.length} /><StatCard icon={ClipboardCheck} label="Assignments" value={assignments.length} /><StatCard icon={Users} label="Resources" value={resources.length} /><StatCard icon={FolderKanban} label="Crews" value={crews.length} /></div>
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><h2 className="text-xl font-bold">Project Assignment Gantt View</h2><p className="text-sm text-slate-500">Each project assignment is one row. Multiple mobilizations appear on that same project row.</p></div><div className="flex flex-wrap items-center gap-3"><button onClick={exportDashboardExcel} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button><button onClick={exportDashboardPdf} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><ZoomIn size={16} className="text-slate-500" /><span className="text-sm font-medium text-slate-700">Zoom</span><select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">{zoomModes.map((mode) => <option key={mode}>{mode}</option>)}</select></div></div></div><div className="mb-4 grid gap-3 lg:grid-cols-3"><MultiSelectFilter label="Division Filter" options={divisions} selected={divisionFilter} setSelected={setDivisionFilter} /><MultiSelectFilter label="Status Filter" options={statuses} selected={statusFilter} setSelected={setStatusFilter} /><MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={dashboardResourceTypeFilter} setSelected={setDashboardResourceTypeFilter} /></div><div className="mb-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-8 rounded-full ${divisionStyles[division]}`} /><span className="text-slate-600">{division}</span></div>)}<div className="text-slate-400">Pending Award uses lighter shade</div></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{projectGanttRows.map((row) => <button key={row.assignment.id} onClick={() => openEditAssignmentForm(row.assignment)} className="block w-full text-left"><ProjectGanttRow assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} /></button>)}</div></div></section>
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4"><h2 className="text-xl font-bold">Resource Gantt View</h2><p className="text-sm text-slate-500">Rows are resources. Bars show the assigned project name for each mobilization.</p></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />)}</div></div></section>
+          <section id="project-assignment-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><h2 className="text-xl font-bold">Project Assignment Gantt View</h2><p className="text-sm text-slate-500">Each project assignment is one row. Multiple mobilizations appear on that same project row.</p></div><div className="flex flex-wrap items-center gap-3"><button onClick={exportDashboardExcel} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button><button onClick={() => exportSectionPdf("project-assignment-gantt", "Project Assignment Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><ZoomIn size={16} className="text-slate-500" /><span className="text-sm font-medium text-slate-700">Zoom</span><select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">{zoomModes.map((mode) => <option key={mode}>{mode}</option>)}</select></div></div></div><div className="mb-4 grid gap-3 lg:grid-cols-3"><MultiSelectFilter label="Division Filter" options={divisions} selected={divisionFilter} setSelected={setDivisionFilter} /><MultiSelectFilter label="Status Filter" options={statuses} selected={statusFilter} setSelected={setStatusFilter} /><MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={dashboardResourceTypeFilter} setSelected={setDashboardResourceTypeFilter} /></div><div className="mb-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-8 rounded-full ${divisionStyles[division]}`} /><span className="text-slate-600">{division}</span></div>)}<div className="text-slate-400">Pending Award uses lighter shade</div></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{projectGanttRows.map((row) => <button key={row.assignment.id} onClick={() => openEditAssignmentForm(row.assignment)} className="block w-full text-left"><ProjectGanttRow assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} /></button>)}</div></div></section>
+          <section id="resource-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><h2 className="text-xl font-bold">Resource Gantt View</h2><p className="text-sm text-slate-500">Rows are resources. Bars show the assigned project name for each mobilization.</p></div><button onClick={() => exportSectionPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />)}</div></div></section>
           <ResourceDemandChart items={visibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType)).length} />
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-bold">Assignments</h2><p className="text-sm text-slate-500">Assign existing projects to resources and crews.</p></div><button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><ClipboardCheck size={17} /> Assign</button></div><div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1250px] text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Project</th><th className="p-3">PM</th><th className="p-3">Superintendent</th><th className="p-3">Field Coordinator</th><th className="p-3">Field Engineer</th><th className="p-3">Safety</th><th className="p-3">Crews</th><th className="p-3">Mobilizations</th><th className="p-3 text-right">Actions</th></tr></thead><tbody>{visibleAssignments.map((assignment) => { const project = findProject(projects, assignment.projectId); return <tr key={assignment.id} className="border-t border-slate-200 align-top"><td className="p-3 font-medium">{project ? `${project.projectNumber} - ${project.name}` : "Missing project"}</td><td className="p-3">{assignment.projectManager}</td><td className="p-3">{assignment.superintendent}</td><td className="p-3">{assignment.fieldCoordinator}</td><td className="p-3">{assignment.fieldEngineer}</td><td className="p-3">{assignment.safety}</td><td className="p-3">{getAssignmentCrewDisplayNames(assignment, crews).join(", ")}</td><td className="p-3">{(assignment.mobilizations || []).map((mob, index) => `#${index + 1}: ${formatDate(mob.start)} - ${formatDate(mob.end)}`).join("; ")}</td><td className="p-3 text-right"><button onClick={() => openEditAssignmentForm(assignment)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button><button onClick={() => deleteAssignment(assignment.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button></td></tr>; })}</tbody></table></div></section>
         </section>
@@ -576,4 +603,3 @@ export default function App() {
     </main>
   );
 }
-
