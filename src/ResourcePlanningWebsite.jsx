@@ -23,6 +23,33 @@ import {
   projectToDb, resourceToDb, crewToDb, assignmentToDb, mobilizationToDb,
 } from "./db/mappers";
 
+// Override mappers locally to include includeInForecast until db/mappers.js is deployed
+function mapProjectFromDbLocal(p) {
+  return {
+    id: p.id,
+    projectNumber: p.project_number || "",
+    name: p.name || "",
+    client: p.client || "",
+    address: p.address || "",
+    division: p.division || "Hardscape",
+    specificRequirements: p.specific_requirements || [],
+    status: p.status || "Scheduled",
+    includeInForecast: p.include_in_forecast || false,
+  };
+}
+function projectToDbLocal(project) {
+  return {
+    project_number: project.projectNumber,
+    name: project.name,
+    client: project.client,
+    address: project.address,
+    division: project.division,
+    specific_requirements: project.specificRequirements || [],
+    status: project.status,
+    include_in_forecast: project.includeInForecast || false,
+  };
+}
+
 import { useSupabaseRealtime } from "./hooks/useSupabaseRealtime";
 
 
@@ -386,6 +413,18 @@ export function ProjectForm({ form, setForm, onSave, onCancel, editing, certific
             <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.status} onChange={(e) => updateField("status", e.target.value)}>
               {statuses.map((s) => <option key={s}>{s}</option>)}
             </select>
+          </label>
+          <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 cursor-pointer hover:bg-slate-100">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded accent-emerald-600"
+              checked={form.includeInForecast || false}
+              onChange={(e) => updateField("includeInForecast", e.target.checked)}
+            />
+            <div>
+              <p className="text-sm font-semibold text-slate-800">Include in Forecast</p>
+              <p className="text-xs text-slate-500">Show this project in the Forecast tab revenue table.</p>
+            </div>
           </label>
         </div>
 
@@ -1049,12 +1088,22 @@ export default function App() {
   const [showAssignments, setShowAssignments] = useState(true);
 
   // ── Forecast state ─────────────────────────────────────────────────────────
-  const [forecastData, setForecastData] = useState({}); // { [projectId]: { contractValue, spreadRule, actuals, perProjectLockThrough } }
-  const [globalLockThrough, setGlobalLockThrough] = useState(null); // "YYYY-MM" or null
+  const [forecastData, setForecastData] = useState({});
+  const [globalLockThrough, setGlobalLockThrough] = useState(null);
   const [forecastYear, setForecastYear] = useState(new Date().getFullYear());
   const [forecastDivisionFilter, setForecastDivisionFilter] = useState([...divisions]);
   const [showForecastSettings, setShowForecastSettings] = useState(false);
   const [forecastSettingsId, setForecastSettingsId] = useState(null);
+  const [forecastSort, setForecastSort] = useState({ key: "projectNumber", direction: "asc" });
+  const [forecastSearch, setForecastSearch] = useState("");
+
+  // ── Per-tab search state ───────────────────────────────────────────────────
+  const [projectSearch, setProjectSearch] = useState("");
+  const [resourceSearch, setResourceSearch] = useState("");
+  const [crewSearch, setCrewSearch] = useState("");
+  const [dashboardProjectSearch, setDashboardProjectSearch] = useState("");
+  const [dashboardResourceSearch, setDashboardResourceSearch] = useState("");
+  const [dashboardCrewSearch, setDashboardCrewSearch] = useState("");
 
   // ── Initial Supabase load ──────────────────────────────────────────────────
   useEffect(() => {
@@ -1155,14 +1204,35 @@ export default function App() {
     return direction === "asc" ? result : -result;
   }
 
-  const filteredResources = resources.filter((r) => resourceTypeFilter.includes(r.resourceType));
+  const filteredResources = resources.filter((r) => {
+    if (!resourceTypeFilter.includes(r.resourceType)) return false;
+    if (!resourceSearch) return true;
+    const q = resourceSearch.toLowerCase();
+    return r.name.toLowerCase().includes(q) || r.resourceType.toLowerCase().includes(q) || (r.homeDivision || "").toLowerCase().includes(q) || (r.email || "").toLowerCase().includes(q);
+  });
   const sortedResources = [...filteredResources].sort((a, b) => compareValues(a[resourceSort.key], b[resourceSort.key], resourceSort.direction));
-  const sortedCrews = [...crews].sort((a, b) => compareValues(a[crewSort.key], b[crewSort.key], crewSort.direction));
-  const filteredProjectsForTab = projects.filter((p) => projectTabDivisionFilter.includes(p.division));
+  const sortedCrews = [...crews].filter((c) => {
+    if (!crewSearch) return true;
+    const q = crewSearch.toLowerCase();
+    return c.crewName.toLowerCase().includes(q) || (c.foremanName || "").toLowerCase().includes(q);
+  }).sort((a, b) => compareValues(a[crewSort.key], b[crewSort.key], crewSort.direction));
+  const filteredProjectsForTab = projects.filter((p) => {
+    if (!projectTabDivisionFilter.includes(p.division)) return false;
+    if (!projectSearch) return true;
+    const q = projectSearch.toLowerCase();
+    return (p.projectNumber || "").toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || (p.client || "").toLowerCase().includes(q);
+  });
   const sortedProjectsForTab = [...filteredProjectsForTab].sort((a, b) => compareValues(a[projectSort.key], b[projectSort.key], projectSort.direction));
 
   const projectGanttRows = projects
-    .filter((p) => divisionFilter.includes(p.division) && statusFilter.includes(p.status))
+    .filter((p) => {
+      if (!divisionFilter.includes(p.division) || !statusFilter.includes(p.status)) return false;
+      if (dashboardProjectSearch) {
+        const q = dashboardProjectSearch.toLowerCase();
+        if (!(p.projectNumber || "").toLowerCase().includes(q) && !p.name.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    })
     .map((project) => {
       const projectAssignments = visibleAssignments.filter((a) => a.projectId === project.id);
       const items = timelineVisibleItems.filter((item) => item.project.id === project.id);
@@ -1172,6 +1242,10 @@ export default function App() {
 
   const resourceGanttRows = resources.map((resource) => {
     if (!dashboardResourceTypeFilter.includes(resource.resourceType)) return null;
+    if (dashboardResourceSearch) {
+      const q = dashboardResourceSearch.toLowerCase();
+      if (!resource.name.toLowerCase().includes(q)) return null;
+    }
     const items = timelineVisibleItems.filter((item) =>
       [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].includes(resource.name)
     );
@@ -1180,7 +1254,14 @@ export default function App() {
   }).filter(Boolean);
 
   const crewGanttRows = crews
-    .filter((c) => crewGanttFilter.includes(c.id))
+    .filter((c) => {
+      if (!crewGanttFilter.includes(c.id)) return false;
+      if (dashboardCrewSearch) {
+        const q = dashboardCrewSearch.toLowerCase();
+        return c.crewName.toLowerCase().includes(q) || (c.foremanName || "").toLowerCase().includes(q);
+      }
+      return true;
+    })
     .map((crew) => {
       const items = timelineVisibleItems.filter((item) => getAssignmentCrewIds(item.assignment).includes(crew.id));
       if (!items.length) return null;
@@ -1200,15 +1281,15 @@ export default function App() {
   async function saveProject() {
     if (!projectForm.name.trim()) { alert("Project name is required."); return; }
     if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
-    const payload = projectToDb(projectForm);
+    const payload = projectToDbLocal(projectForm);
     if (editingProjectId) {
       const { data, error } = await supabase.from("projects").update(payload).eq("id", editingProjectId).select().single();
       if (error) { console.error(error); alert("Could not update project."); return; }
-      setProjects((current) => current.map((p) => (p.id === editingProjectId ? mapProjectFromDb(data) : p)));
+      setProjects((current) => current.map((p) => (p.id === editingProjectId ? mapProjectFromDbLocal(data) : p)));
     } else {
       const { data, error } = await supabase.from("projects").insert(payload).select().single();
       if (error) { console.error(error); alert("Could not save project."); return; }
-      setProjects((current) => [mapProjectFromDb(data), ...current]);
+      setProjects((current) => [mapProjectFromDbLocal(data), ...current]);
     }
     setShowProjectForm(false); setEditingProjectId(null); setProjectForm(blankProject);
   }
@@ -1490,8 +1571,55 @@ export default function App() {
     downloadTextFile(`ggc-forecast-${forecastYear}.csv`, csv);
   }
 
-  // CSV import for forecast
-  function importForecastCsv(event) {
+  // PDF export for forecast
+  function exportForecastPdf() {
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      key: `${forecastYear}-${String(i + 1).padStart(2, "0")}`,
+      label: new Date(forecastYear, i, 1).toLocaleString("default", { month: "short" }),
+    }));
+    const forecastProjects = projects
+      .filter((p) => forecastDivisionFilter.includes(p.division) && p.includeInForecast && p.status !== "Complete")
+      .sort((a, b) => compareValues(a[forecastSort.key], b[forecastSort.key], forecastSort.direction));
+    const fmt = (v) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v || 0);
+
+    const rows = forecastProjects.map((p, idx) => {
+      const row = getForecastRow(p.id);
+      const allMonths = getProjectMonths(p.id);
+      const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
+      const monthValues = months.map((m) => getMonthValue(p.id, m.key, spread));
+      const yearTotal = monthValues.reduce((s, mv) => s + mv.value, 0);
+      const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + (spread[m] || 0), 0);
+      const bg = idx % 2 === 0 ? "#f8fafc" : "#ffffff";
+      const cells = monthValues.map((mv) => `<td style="padding:4px 6px;text-align:right;color:${mv.isActual ? "#065f46" : "#334155"};font-weight:${mv.isActual ? "600" : "400"}">${mv.value > 0 ? fmt(mv.value) : ""}</td>`).join("");
+      return `<tr style="background:${bg}"><td style="padding:4px 6px;font-weight:600">${p.projectNumber ? p.projectNumber + " - " : ""}${p.name}</td><td style="padding:4px 6px">${p.division}</td><td style="padding:4px 6px;text-align:right">${fmt(row.contractValue)}</td>${cells}<td style="padding:4px 6px;text-align:right;color:#64748b">${fmt(thereafter)}</td><td style="padding:4px 6px;text-align:right;font-weight:700">${fmt(yearTotal)}</td></tr>`;
+    });
+
+    const monthTotals = months.map((m, i) => {
+      return forecastProjects.reduce((s, p) => {
+        const row = getForecastRow(p.id);
+        const allMonths = getProjectMonths(p.id);
+        const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
+        return s + getMonthValue(p.id, m.key, spread).value;
+      }, 0);
+    });
+    const yearGrandTotal = monthTotals.reduce((s, v) => s + v, 0);
+    const thereafterTotal = forecastProjects.reduce((s, p) => {
+      const row = getForecastRow(p.id);
+      const allMonths = getProjectMonths(p.id);
+      const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
+      return s + allMonths.filter((m) => m > `${forecastYear}-12`).reduce((ms, m) => ms + (spread[m] || 0), 0);
+    }, 0);
+    const cumulative = monthTotals.map((_, i) => monthTotals.slice(0, i + 1).reduce((s, v) => s + v, 0));
+
+    const headerCells = months.map((m) => `<th style="padding:4px 6px;text-align:right;background:#f1f5f9">${m.label}</th>`).join("");
+    const totalCells = monthTotals.map((v) => `<td style="padding:4px 6px;text-align:right;font-weight:700">${fmt(v)}</td>`).join("");
+    const cumCells = cumulative.map((v) => `<td style="padding:4px 6px;text-align:right;color:#065f46">${fmt(v)}</td>`).join("");
+
+    const html = `<!doctype html><html><head><title>GGC Forecast ${forecastYear}</title><style>@page{size:landscape;margin:.3in}body{font-family:Arial,sans-serif;font-size:10px;color:#0f172a}table{border-collapse:collapse;width:100%}th{background:#f1f5f9;padding:4px 6px;text-align:left;border-bottom:2px solid #cbd5e1}td{border-bottom:1px solid #e2e8f0}h1{font-size:14px;margin-bottom:8px}</style></head><body><h1>GGC Revenue Forecast — ${forecastYear}</h1><table><thead><tr><th>Project</th><th>Division</th><th style="text-align:right">Contract Value</th>${headerCells}<th style="text-align:right;background:#e2e8f0">Thereafter</th><th style="text-align:right;background:#e2e8f0">Year Total</th></tr></thead><tbody>${rows.join("")}<tr style="background:#f1f5f9;font-weight:700"><td colspan="3" style="padding:4px 6px">Monthly Total</td>${totalCells}<td style="padding:4px 6px;text-align:right">${fmt(thereafterTotal)}</td><td style="padding:4px 6px;text-align:right">${fmt(yearGrandTotal)}</td></tr><tr style="background:#ecfdf5;color:#065f46"><td colspan="3" style="padding:4px 6px;font-weight:700">Cumulative YTD</td>${cumCells}<td></td><td style="padding:4px 6px;text-align:right;font-weight:700">${fmt(yearGrandTotal)}</td></tr></tbody></table><script>window.onload=function(){setTimeout(function(){window.print()},350)}<\/script></body></html>`;
+    const w = window.open("", "_blank", "width=1400,height=900");
+    if (!w) { alert("Please allow pop-ups to export PDF."); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+  }
     readCsvFile(event, async (rows) => {
       for (const row of rows) {
         const projectNum = row.projectnumber || row.project || "";
@@ -1696,7 +1824,11 @@ export default function App() {
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div><h2 className="text-2xl font-bold">Crews</h2><p className="text-sm text-slate-500">Master crew list used by assignment crew dropdowns.</p></div>
-              <div className="flex flex-wrap gap-3">
+              <div className="flex flex-wrap gap-3 items-center">
+                <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
+                  <Search size={15} className="text-slate-400" />
+                  <input className="outline-none text-sm w-44" placeholder="Search crews…" value={crewSearch} onChange={(e) => setCrewSearch(e.target.value)} />
+                </div>
                 <button onClick={exportCrewsExcel} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button>
                 <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importCrewsCsv} className="hidden" /></label>
                 <button onClick={openAddCrewForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><Plus size={17} /> Add Crew</button>
@@ -1762,7 +1894,13 @@ export default function App() {
                 </div>
               </div>
             )}
-            <div className="mb-4"><MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={resourceTypeFilter} setSelected={setResourceTypeFilter} /></div>
+            <div className="mb-4 flex flex-wrap gap-3 items-center">
+              <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 flex-1 min-w-[200px] max-w-sm">
+                <Search size={15} className="text-slate-400 shrink-0" />
+                <input className="outline-none text-sm w-full" placeholder="Search resources…" value={resourceSearch} onChange={(e) => setResourceSearch(e.target.value)} />
+              </div>
+              <MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={resourceTypeFilter} setSelected={setResourceTypeFilter} />
+            </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200">
               <table className="w-full min-w-[1150px] text-left text-sm">
                 <thead className="bg-slate-100 text-slate-600">
@@ -1811,7 +1949,13 @@ export default function App() {
                 <button onClick={openAddProjectForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><Plus size={17} /> Add Project</button>
               </div>
             </div>
-            <div className="mb-4"><MultiSelectFilter label="Division Filter" options={divisions} selected={projectTabDivisionFilter} setSelected={setProjectTabDivisionFilter} /></div>
+            <div className="mb-4 flex flex-wrap gap-3 items-center">
+              <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 flex-1 min-w-[200px] max-w-sm">
+                <Search size={15} className="text-slate-400 shrink-0" />
+                <input className="outline-none text-sm w-full" placeholder="Search projects…" value={projectSearch} onChange={(e) => setProjectSearch(e.target.value)} />
+              </div>
+              <MultiSelectFilter label="Division Filter" options={divisions} selected={projectTabDivisionFilter} setSelected={setProjectTabDivisionFilter} />
+            </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200">
               <table className="w-full min-w-[1050px] text-left text-sm">
                 <thead className="bg-slate-100 text-slate-600">
@@ -1870,6 +2014,10 @@ export default function App() {
                 <p className="text-sm text-slate-500">Each project assignment is one row. Multiple mobilizations appear on that same project row.</p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
+                  <Search size={15} className="text-slate-400" />
+                  <input className="outline-none text-sm w-40" placeholder="Search projects…" value={dashboardProjectSearch} onChange={(e) => setDashboardProjectSearch(e.target.value)} />
+                </div>
                 <button onClick={exportDashboardExcel} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button>
                 <button onClick={() => exportSectionPdf("project-assignment-gantt", "Project Assignment Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
                 <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
@@ -1908,7 +2056,13 @@ export default function App() {
                 </div>
                 <p className="text-sm text-slate-500">Rows are resources. Bars show the assigned project name for each mobilization.</p>
               </div>
-              <button onClick={() => exportSectionPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
+                  <Search size={15} className="text-slate-400" />
+                  <input className="outline-none text-sm w-40" placeholder="Search resources…" value={dashboardResourceSearch} onChange={(e) => setDashboardResourceSearch(e.target.value)} />
+                </div>
+                <button onClick={() => exportSectionPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
+              </div>
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
@@ -1957,8 +2111,14 @@ export default function App() {
               </div>
               <button onClick={() => exportSectionPdf("crew-gantt", "Crew Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
             </div>
-            <div className="mb-4">
-              <SearchableMultiSelect label="Crew Name Filter" options={crews.map((c) => ({ value: c.id, label: getCrewDisplayName(c), subLabel: (c.specialty || []).join(", ") }))} selected={crewGanttFilter} setSelected={setCrewGanttFilter} getLabel={(o) => o.label} />
+            <div className="mb-4 flex flex-wrap gap-3 items-start">
+              <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
+                <Search size={15} className="text-slate-400" />
+                <input className="outline-none text-sm w-40" placeholder="Search crews…" value={dashboardCrewSearch} onChange={(e) => setDashboardCrewSearch(e.target.value)} />
+              </div>
+              <div className="flex-1">
+                <SearchableMultiSelect label="Crew Name Filter" options={crews.map((c) => ({ value: c.id, label: getCrewDisplayName(c), subLabel: (c.specialty || []).join(", ") }))} selected={crewGanttFilter} setSelected={setCrewGanttFilter} getLabel={(o) => o.label} />
+              </div>
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
@@ -2199,11 +2359,37 @@ export default function App() {
           key: `${forecastYear}-${String(i + 1).padStart(2, "0")}`,
           label: new Date(forecastYear, i, 1).toLocaleString("default", { month: "short" }),
         }));
-        const forecastProjects = projects
-          .filter((p) => forecastDivisionFilter.includes(p.division) && p.status !== "Complete")
-          .sort((a, b) => (a.projectNumber || "").localeCompare(b.projectNumber || "", undefined, { numeric: true }));
 
-        // Build per-project spread and values
+        const forecastProjects = projects
+          .filter((p) => {
+            if (!forecastDivisionFilter.includes(p.division)) return false;
+            if (p.status === "Complete") return false;
+            // Pending Award only shows if explicitly opted in
+            if (p.status === "Pending Award" && !p.includeInForecast) return false;
+            if (!p.includeInForecast) return false;
+            if (forecastSearch) {
+              const q = forecastSearch.toLowerCase();
+              return (p.projectNumber || "").toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || (p.client || "").toLowerCase().includes(q);
+            }
+            return true;
+          })
+          .sort((a, b) => {
+            if (forecastSort.key === "yearTotal") {
+              const aRow = getForecastRow(a.id); const bRow = getForecastRow(b.id);
+              const aMonths = getProjectMonths(a.id); const bMonths = getProjectMonths(b.id);
+              const aSpread = spreadRevenue(aRow.contractValue, aMonths, aRow.spreadRule);
+              const bSpread = spreadRevenue(bRow.contractValue, bMonths, bRow.spreadRule);
+              const aTotal = months.reduce((s, m) => s + getMonthValue(a.id, m.key, aSpread).value, 0);
+              const bTotal = months.reduce((s, m) => s + getMonthValue(b.id, m.key, bSpread).value, 0);
+              return forecastSort.direction === "asc" ? aTotal - bTotal : bTotal - aTotal;
+            }
+            if (forecastSort.key === "contractValue") {
+              const aV = getForecastRow(a.id).contractValue; const bV = getForecastRow(b.id).contractValue;
+              return forecastSort.direction === "asc" ? aV - bV : bV - aV;
+            }
+            return compareValues(a[forecastSort.key], b[forecastSort.key], forecastSort.direction);
+          });
+
         const projectRows = forecastProjects.map((p) => {
           const row = getForecastRow(p.id);
           const allMonths = getProjectMonths(p.id);
@@ -2211,22 +2397,28 @@ export default function App() {
           const monthValues = months.map((m) => ({ ...getMonthValue(p.id, m.key, spread), key: m.key, locked: isMonthLocked(m.key, p.id) }));
           const yearTotal = monthValues.reduce((s, mv) => s + mv.value, 0);
           const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + (spread[m] || 0), 0);
-          const totalRevenue = row.contractValue;
-          const earnedToDate = Object.values(row.actuals).reduce((s, v) => s + v, 0);
-          return { project: p, row, spread, monthValues, yearTotal, thereafter, totalRevenue, earnedToDate };
+          return { project: p, row, spread, monthValues, yearTotal, thereafter };
         });
 
-        // Column totals
-        const monthTotals = months.map((m, i) => projectRows.reduce((s, r) => s + r.monthValues[i].value, 0));
+        const monthTotals = months.map((_, i) => projectRows.reduce((s, r) => s + r.monthValues[i].value, 0));
         const yearGrandTotal = monthTotals.reduce((s, v) => s + v, 0);
         const thereafterTotal = projectRows.reduce((s, r) => s + r.thereafter, 0);
-        // Cumulative running totals
         const cumulativeTotals = monthTotals.map((_, i) => monthTotals.slice(0, i + 1).reduce((s, v) => s + v, 0));
 
         const fmt = (v) => v == null ? "" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
 
+        function SortTh({ label, sortKey, className = "" }) {
+          const active = forecastSort.key === sortKey;
+          return (
+            <th onClick={() => setForecastSort((s) => ({ key: sortKey, direction: s.key === sortKey && s.direction === "asc" ? "desc" : "asc" }))}
+              className={`cursor-pointer p-3 hover:bg-slate-200 select-none ${className}`}>
+              {label} {active ? (forecastSort.direction === "asc" ? "↑" : "↓") : ""}
+            </th>
+          );
+        }
+
         return (
-          <section className="mx-auto max-w-[1600px] space-y-4 px-4 py-6">
+          <section className="mx-auto max-w-[1700px] space-y-4 px-4 py-6">
             {/* Header controls */}
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
@@ -2234,6 +2426,12 @@ export default function App() {
                 <span className="text-lg font-bold text-slate-900 w-16 text-center">{forecastYear}</span>
                 <button onClick={() => setForecastYear((y) => y + 1)} className="rounded-lg px-2 py-1 text-slate-600 hover:bg-slate-100 font-bold">→</button>
               </div>
+              {/* Search */}
+              <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 shadow-sm">
+                <Search size={15} className="text-slate-400" />
+                <input className="outline-none text-sm w-44" placeholder="Search projects…" value={forecastSearch} onChange={(e) => setForecastSearch(e.target.value)} />
+              </div>
+              {/* Division filter */}
               <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                 {divisions.map((d) => {
                   const active = forecastDivisionFilter.includes(d);
@@ -2241,6 +2439,7 @@ export default function App() {
                 })}
               </div>
               <button onClick={exportForecastCsv} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">Export CSV</button>
+              <button onClick={exportForecastPdf} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">Export PDF</button>
               <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm cursor-pointer">
                 Import CSV<input type="file" accept=".csv" onChange={importForecastCsv} className="hidden" />
               </label>
@@ -2249,114 +2448,77 @@ export default function App() {
               </button>
             </div>
 
+            <p className="text-xs text-slate-500">Only projects with <strong>Include in Forecast</strong> checked appear here. Edit a project to opt it in. Pending Award projects must also be opted in explicitly.</p>
+
             {/* Main forecast table */}
             <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <table className="w-full text-left text-sm" style={{ minWidth: "1400px" }}>
+              <table className="w-full text-left text-sm border-collapse" style={{ minWidth: "1500px" }}>
                 <thead>
-                  <tr className="bg-slate-100 text-slate-600 border-b border-slate-200">
-                    <th className="sticky left-0 z-10 bg-slate-100 p-3 min-w-[200px]">Project</th>
-                    <th className="p-3 min-w-[90px]">Division</th>
-                    <th className="p-3 min-w-[120px]">Contract Value</th>
+                  <tr className="bg-slate-100 text-slate-600 border-b-2 border-slate-300">
+                    <SortTh label="Project" sortKey="projectNumber" className="sticky left-0 z-10 bg-slate-100 min-w-[200px]" />
+                    <SortTh label="Division" sortKey="division" className="min-w-[90px]" />
+                    <SortTh label="Contract Value" sortKey="contractValue" className="min-w-[130px]" />
                     <th className="p-3 min-w-[110px]">Spread Rule</th>
-                    <th className="p-3 min-w-[100px]">Per-Project Lock</th>
+                    <th className="p-3 min-w-[105px]">Project Lock</th>
                     {months.map((m) => (
-                      <th key={m.key} className={`p-3 text-right min-w-[90px] ${globalLockThrough && m.key <= globalLockThrough ? "bg-amber-50" : ""}`}>
-                        {m.label} {globalLockThrough && m.key <= globalLockThrough ? "🔒" : ""}
+                      <th key={m.key} className={`p-3 text-right min-w-[88px] ${globalLockThrough && m.key <= globalLockThrough ? "bg-amber-50" : ""}`}>
+                        {m.label}{globalLockThrough && m.key <= globalLockThrough ? " 🔒" : ""}
                       </th>
                     ))}
                     <th className="p-3 text-right min-w-[100px] bg-slate-200">Thereafter</th>
-                    <th className="p-3 text-right min-w-[100px] bg-slate-200">Year Total</th>
+                    <SortTh label="Year Total" sortKey="yearTotal" className="text-right min-w-[100px] bg-slate-200" />
                   </tr>
                 </thead>
                 <tbody>
-                  {projectRows.map(({ project: p, row, monthValues, yearTotal, thereafter }) => (
-                    <tr key={p.id} className="border-t border-slate-100 hover:bg-slate-50 group">
-                      <td className="sticky left-0 z-10 bg-white group-hover:bg-slate-50 p-3">
-                        <p className="font-semibold text-slate-900">{p.projectNumber ? `${p.projectNumber} - ` : ""}{p.name}</p>
-                        <p className="text-xs text-slate-400">{p.status}</p>
-                      </td>
-                      <td className="p-3">
-                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold text-white ${divisionStyles[p.division] || "bg-slate-500"}`}>{p.division}</span>
-                      </td>
-                      {/* Contract value — inline editable */}
-                      <td className="p-3">
-                        <input
-                          type="number"
-                          className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-right text-sm outline-none focus:border-emerald-500 focus:bg-white"
-                          defaultValue={row.contractValue || ""}
-                          placeholder="0"
-                          onBlur={(e) => saveForecastRow(p.id, { contractValue: parseFloat(e.target.value) || 0 })}
-                        />
-                      </td>
-                      {/* Spread rule */}
-                      <td className="p-3">
-                        <select
-                          className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-sm outline-none focus:border-emerald-500 focus:bg-white"
-                          value={row.spreadRule}
-                          onChange={(e) => saveForecastRow(p.id, { spreadRule: e.target.value })}
-                        >
-                          <option value="even">Even</option>
-                          <option value="front">Front-Loaded</option>
-                          <option value="back">Back-Loaded</option>
-                          <option value="scurve">S-Curve</option>
-                        </select>
-                      </td>
-                      {/* Per-project lock */}
-                      <td className="p-3">
-                        <input
-                          type="month"
-                          className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-xs outline-none focus:border-emerald-500 focus:bg-white"
-                          value={row.perProjectLockThrough || ""}
-                          onChange={(e) => saveForecastRow(p.id, { perProjectLockThrough: e.target.value || null })}
-                        />
-                      </td>
-                      {/* Month cells */}
-                      {monthValues.map((mv) => (
-                        <td key={mv.key} className={`p-1 text-right ${mv.locked ? "bg-amber-50" : ""}`}>
-                          {mv.locked ? (
-                            // Locked month — show actual input if locked, allow editing actuals
-                            <div className="relative">
-                              <input
-                                type="number"
-                                className={`w-full rounded-lg border px-2 py-1 text-right text-xs outline-none focus:border-emerald-500 focus:bg-white ${mv.isActual ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-800" : "border-amber-200 bg-amber-50 text-slate-600"}`}
-                                defaultValue={mv.isActual ? mv.value : ""}
-                                placeholder={mv.value > 0 ? mv.value.toFixed(0) : "Actual"}
-                                onBlur={(e) => saveActual(p.id, mv.key, e.target.value)}
-                              />
-                            </div>
-                          ) : (
-                            // Unlocked — show forecast spread value, allow actual override
-                            <div className="relative group/cell">
-                              {mv.isActual ? (
-                                <input
-                                  type="number"
-                                  className="w-full rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-right text-xs font-semibold text-emerald-800 outline-none focus:border-emerald-500"
-                                  defaultValue={mv.value}
-                                  onBlur={(e) => saveActual(p.id, mv.key, e.target.value)}
-                                />
-                              ) : (
-                                <input
-                                  type="number"
-                                  className="w-full rounded-lg border border-transparent bg-transparent px-2 py-1 text-right text-xs text-slate-700 outline-none hover:border-slate-200 focus:border-emerald-500 focus:bg-white"
-                                  defaultValue={mv.value > 0 ? mv.value.toFixed(0) : ""}
-                                  placeholder={mv.value > 0 ? mv.value.toFixed(0) : "—"}
-                                  onBlur={(e) => saveActual(p.id, mv.key, e.target.value)}
-                                />
-                              )}
-                            </div>
-                          )}
+                  {projectRows.map(({ project: p, row, monthValues, yearTotal, thereafter }, rowIdx) => {
+                    const isEven = rowIdx % 2 === 0;
+                    const rowBg = isEven ? "bg-white" : "bg-slate-50";
+                    const rowBgHover = isEven ? "hover:bg-emerald-50" : "hover:bg-emerald-50";
+                    return (
+                      <tr key={p.id} className={`border-t border-slate-100 ${rowBg} ${rowBgHover} group`}>
+                        <td className={`sticky left-0 z-10 p-3 group-hover:bg-emerald-50 ${rowBg}`}>
+                          <p className="font-semibold text-slate-900">{p.projectNumber ? `${p.projectNumber} - ` : ""}{p.name}</p>
+                          <p className="text-xs text-slate-400">{p.status}</p>
                         </td>
-                      ))}
-                      <td className="p-3 text-right text-xs text-slate-500 bg-slate-50">{fmt(thereafter)}</td>
-                      <td className="p-3 text-right text-sm font-semibold text-slate-800 bg-slate-50">{fmt(yearTotal)}</td>
-                    </tr>
-                  ))}
+                        <td className="p-3">
+                          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold text-white ${divisionStyles[p.division] || "bg-slate-500"}`}>{p.division}</span>
+                        </td>
+                        <td className="p-3">
+                          <input type="number" className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-right text-sm outline-none focus:border-emerald-500 focus:bg-white" defaultValue={row.contractValue || ""} placeholder="0"
+                            onBlur={(e) => saveForecastRow(p.id, { contractValue: parseFloat(e.target.value) || 0 })} />
+                        </td>
+                        <td className="p-3">
+                          <select className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-sm outline-none focus:border-emerald-500 focus:bg-white" value={row.spreadRule} onChange={(e) => saveForecastRow(p.id, { spreadRule: e.target.value })}>
+                            <option value="even">Even</option>
+                            <option value="front">Front-Loaded</option>
+                            <option value="back">Back-Loaded</option>
+                            <option value="scurve">S-Curve</option>
+                          </select>
+                        </td>
+                        <td className="p-3">
+                          <input type="month" className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-xs outline-none focus:border-emerald-500 focus:bg-white" value={row.perProjectLockThrough || ""}
+                            onChange={(e) => saveForecastRow(p.id, { perProjectLockThrough: e.target.value || null })} />
+                        </td>
+                        {monthValues.map((mv) => (
+                          <td key={mv.key} className={`p-1 text-right ${mv.locked ? "bg-amber-50" : ""}`}>
+                            <input type="number"
+                              className={`w-full rounded-lg border px-2 py-1 text-right text-xs outline-none focus:bg-white ${mv.isActual ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-800 focus:border-emerald-500" : mv.locked ? "border-amber-200 bg-amber-50 text-slate-600 focus:border-amber-400" : "border-transparent bg-transparent text-slate-700 hover:border-slate-200 focus:border-emerald-500"}`}
+                              defaultValue={mv.isActual ? mv.value : (mv.value > 0 ? mv.value.toFixed(0) : "")}
+                              placeholder={mv.value > 0 && !mv.isActual ? mv.value.toFixed(0) : ""}
+                              onBlur={(e) => saveActual(p.id, mv.key, e.target.value)} />
+                          </td>
+                        ))}
+                        <td className="p-3 text-right text-xs text-slate-500 bg-slate-50">{thereafter > 0 ? fmt(thereafter) : ""}</td>
+                        <td className="p-3 text-right text-sm font-semibold text-slate-800 bg-slate-50">{fmt(yearTotal)}</td>
+                      </tr>
+                    );
+                  })}
 
                   {projectRows.length === 0 && (
-                    <tr><td colSpan={18} className="p-8 text-center text-slate-400">No active projects match the current division filter.</td></tr>
+                    <tr><td colSpan={20} className="p-8 text-center text-slate-400">No projects match. Make sure projects have <strong>Include in Forecast</strong> checked in their edit form.</td></tr>
                   )}
 
-                  {/* Monthly totals row */}
+                  {/* Monthly totals */}
                   <tr className="border-t-2 border-slate-300 bg-slate-100 font-semibold text-slate-800">
                     <td className="sticky left-0 z-10 bg-slate-100 p-3">Monthly Total</td>
                     <td className="p-3" /><td className="p-3" /><td className="p-3" /><td className="p-3" />
@@ -2367,7 +2529,7 @@ export default function App() {
                     <td className="p-3 text-right bg-slate-200">{fmt(yearGrandTotal)}</td>
                   </tr>
 
-                  {/* Cumulative YTD row */}
+                  {/* Cumulative YTD */}
                   <tr className="border-t border-slate-200 bg-emerald-50 text-emerald-900">
                     <td className="sticky left-0 z-10 bg-emerald-50 p-3 font-semibold">Cumulative YTD</td>
                     <td className="p-3" /><td className="p-3" /><td className="p-3" /><td className="p-3" />
@@ -2381,12 +2543,11 @@ export default function App() {
               </table>
             </div>
 
-            {/* Legend */}
             <div className="flex flex-wrap gap-4 text-xs text-slate-500">
               <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-emerald-100 border border-emerald-300" /> Actual entered</span>
               <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-amber-50 border border-amber-200" /> Locked month</span>
               <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-white border border-slate-200" /> Forecast (spread)</span>
-              <span className="text-slate-400">· Click any cell to enter or override a value. Actuals show in green. Locked months still accept actuals.</span>
+              <span className="text-slate-400">· Click any month cell to enter an actual. Actuals show green. Column headers are sortable.</span>
             </div>
           </section>
         );
@@ -2427,4 +2588,3 @@ export default function App() {
     </main>
   );
 }
-
