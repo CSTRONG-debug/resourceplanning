@@ -473,8 +473,8 @@ export default function App() {
         getAssignmentCrewDisplayNames(item.assignment, crews).join("; "),
       ])
     ];
-    downloadTextFile("ggc-resource-planning-dashboard.csv", rows.map((row) => row.map(csvEscape).join(",")).join("
-"));
+    const csvContent = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+    downloadTextFile("ggc-resource-planning-dashboard.csv", csvContent);
   }
 
   function exportDashboardPdf() {
@@ -576,3 +576,4 @@ export default function App() {
     </main>
   );
 }
+
