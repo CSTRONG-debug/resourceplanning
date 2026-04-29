@@ -720,8 +720,82 @@ export default function App() {
 
   function openAddProjectForm() { setEditingProjectId(null); setProjectForm(blankProject); setShowProjectForm(true); }
   function openEditProjectForm(project) { setEditingProjectId(project.id); setProjectForm({ ...blankProject, ...project }); setShowProjectForm(true); }
-  function saveProject() { if (!projectForm.name.trim()) { alert("Project name is required."); return; } if (editingProjectId) setProjects((current) => current.map((project) => (project.id === editingProjectId ? { ...projectForm, id: editingProjectId } : project))); else setProjects((current) => [{ ...projectForm, id: crypto.randomUUID() }, ...current]); setShowProjectForm(false); setEditingProjectId(null); setProjectForm(blankProject); }
-  function deleteProject(id) { const project = projects.find((item) => item.id === id); if (!confirm(`Delete ${project?.name || "this project"}? This will also remove related assignments.`)) return; setProjects((current) => current.filter((project) => project.id !== id)); setAssignments((current) => current.filter((assignment) => assignment.projectId !== id)); }
+  async function saveProject() {
+    if (!projectForm.name.trim()) {
+      alert("Project name is required.");
+      return;
+    }
+
+    if (!supabase) {
+      alert("Supabase is not connected. Check Vercel environment variables.");
+      return;
+    }
+
+    const payload = {
+      project_number: projectForm.projectNumber,
+      name: projectForm.name,
+      client: projectForm.client,
+      address: projectForm.address,
+      division: projectForm.division,
+      specific_requirements: projectForm.specificRequirements || [],
+      status: projectForm.status,
+    };
+
+    if (editingProjectId) {
+      const { data, error } = await supabase
+        .from("projects")
+        .update(payload)
+        .eq("id", editingProjectId)
+        .select()
+        .single();
+
+      if (error) {
+        console.error(error);
+        alert("Could not update project.");
+        return;
+      }
+
+      setProjects((current) => current.map((project) => (project.id === editingProjectId ? mapProjectFromDb(data) : project)));
+    } else {
+      const { data, error } = await supabase
+        .from("projects")
+        .insert(payload)
+        .select()
+        .single();
+
+      if (error) {
+        console.error(error);
+        alert("Could not save project.");
+        return;
+      }
+
+      setProjects((current) => [mapProjectFromDb(data), ...current]);
+    }
+
+    setShowProjectForm(false);
+    setEditingProjectId(null);
+    setProjectForm(blankProject);
+  }
+  async function deleteProject(id) {
+    const project = projects.find((item) => item.id === id);
+    if (!confirm(`Delete ${project?.name || "this project"}? This will also remove related assignments.`)) return;
+
+    if (!supabase) {
+      alert("Supabase is not connected. Check Vercel environment variables.");
+      return;
+    }
+
+    const { error } = await supabase.from("projects").delete().eq("id", id);
+
+    if (error) {
+      console.error(error);
+      alert("Could not delete project.");
+      return;
+    }
+
+    setProjects((current) => current.filter((project) => project.id !== id));
+    setAssignments((current) => current.filter((assignment) => assignment.projectId !== id));
+  }
 
   function openAddAssignmentForm() { setEditingAssignmentId(null); setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "" }] }); setShowAssignmentForm(true); }
   function openEditAssignmentForm(assignment) { setEditingAssignmentId(assignment.id); setAssignmentForm({ ...blankAssignment, ...assignment, mobilizations: assignment.mobilizations?.length ? assignment.mobilizations : [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "" }] }); setShowAssignmentForm(true); }
