@@ -383,7 +383,7 @@ function countRequiredResources(assignment) {
   return [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety, assignment.crew1Id, assignment.crew2Id, assignment.crew3Id, assignment.crew4Id].filter(Boolean).length;
 }
 
-function ResourceDemandChart({ items, timeline, zoom, totalResources }) {
+function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPdf, enlarged = false }) {
   const periods = timeline.ticks.map((tick) => {
     const periodStart = tick;
     const periodEnd = getPeriodEnd(tick, zoom);
@@ -412,8 +412,8 @@ function ResourceDemandChart({ items, timeline, zoom, totalResources }) {
 
   const rawMaxValue = Math.max(totalResources, ...periods.map((period) => period.count), 1);
   const yAxisMax = Math.max(5, Math.ceil(rawMaxValue / 5) * 5);
-  const width = Math.max(1160, periods.length * 110);
-  const height = 340;
+  const width = Math.max(enlarged ? 1600 : 1160, periods.length * (enlarged ? 150 : 110));
+  const height = enlarged ? 480 : 340;
   const margin = { top: 28, right: 24, bottom: 70, left: 58 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
@@ -421,7 +421,7 @@ function ResourceDemandChart({ items, timeline, zoom, totalResources }) {
   const barWidth = Math.max(36, Math.min(90, plotWidth / Math.max(periods.length, 1) - 16));
   const yTicks = Array.from({ length: 6 }, (_, index) => Math.round((yAxisMax / 5) * index));
 
-  return <section id="resource-demand-graph" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><h2 className="text-xl font-bold">Resource Demand Graph</h2><p className="text-sm text-slate-500">Y-axis is project count. One active project/mobilization equals 1. The red dashed line represents total filtered resources.</p></div><button onClick={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button></div><div className="overflow-x-auto"><svg width={width} height={height} className="rounded-xl border border-slate-200 bg-slate-50"><line x1={margin.left} y1={margin.top} x2={margin.left} y2={margin.top + plotHeight} stroke="#94a3b8" /><line x1={margin.left} y1={margin.top + plotHeight} x2={margin.left + plotWidth} y2={margin.top + plotHeight} stroke="#94a3b8" />{yTicks.map((tick) => <g key={tick}><line x1={margin.left} y1={y(tick)} x2={margin.left + plotWidth} y2={y(tick)} stroke="#e2e8f0" /><text x={margin.left - 12} y={y(tick) + 4} textAnchor="end" fontSize="12" fontWeight="600" fill="#64748b">{tick}</text></g>)}<line x1={margin.left} y1={y(totalResources)} x2={margin.left + plotWidth} y2={y(totalResources)} stroke="#dc2626" strokeWidth="4" strokeDasharray="8 6" /><rect x={margin.left + plotWidth - 124} y={y(totalResources) - 26} width="124" height="22" rx="5" fill="#dc2626" /><text x={margin.left + plotWidth - 62} y={y(totalResources) - 11} textAnchor="middle" fontSize="12" fontWeight="700" fill="white">Total Resources: {totalResources}</text>{periods.map((period, index) => {
+  return <section id="resource-demand-graph" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><div className="flex items-center gap-2"><button onClick={() => window.dispatchEvent(new CustomEvent("ggc-expand-demand"))} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button><h2 className="text-xl font-bold">Resource Demand Graph</h2></div><p className="text-sm text-slate-500">Y-axis is project count. One active project/mobilization equals 1. The red dashed line represents total filtered resources.</p></div><button onClick={onExportPdf} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button></div><div className="overflow-x-auto"><svg width={width} height={height} className="rounded-xl border border-slate-200 bg-slate-50"><line x1={margin.left} y1={margin.top} x2={margin.left} y2={margin.top + plotHeight} stroke="#94a3b8" /><line x1={margin.left} y1={margin.top + plotHeight} x2={margin.left + plotWidth} y2={margin.top + plotHeight} stroke="#94a3b8" />{yTicks.map((tick) => <g key={tick}><line x1={margin.left} y1={y(tick)} x2={margin.left + plotWidth} y2={y(tick)} stroke="#e2e8f0" /><text x={margin.left - 12} y={y(tick) + 4} textAnchor="end" fontSize="12" fontWeight="600" fill="#64748b">{tick}</text></g>)}<line x1={margin.left} y1={y(totalResources)} x2={margin.left + plotWidth} y2={y(totalResources)} stroke="#dc2626" strokeWidth="4" strokeDasharray="8 6" /><rect x={margin.left + plotWidth - 124} y={y(totalResources) - 26} width="124" height="22" rx="5" fill="#dc2626" /><text x={margin.left + plotWidth - 62} y={y(totalResources) - 11} textAnchor="middle" fontSize="12" fontWeight="700" fill="white">Total Resources: {totalResources}</text>{periods.map((period, index) => {
       const x = margin.left + index * (plotWidth / Math.max(periods.length, 1)) + (plotWidth / Math.max(periods.length, 1) - barWidth) / 2;
       let stackedValue = 0;
       return <g key={`${period.label}-${index}`}>{period.segments.map((segment) => {
@@ -666,9 +666,25 @@ export default function App() {
   const [dashboardResourceTypeFilter, setDashboardResourceTypeFilter] = useState([...defaultDashboardResourceTypes]);
   const [projectTabDivisionFilter, setProjectTabDivisionFilter] = useState([...divisions]);
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
+  const [expandedView, setExpandedView] = useState(null);
+  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
+  const [currentUser, setCurrentUser] = useState(() => sessionStorage.getItem("ggc_current_user") || "");
+  const [showUserSettings, setShowUserSettings] = useState(false);
+  const [newUserForm, setNewUserForm] = useState({ username: "", password: "" });
+  const [appUsers, setAppUsers] = useState([]);
   const [projectSort, setProjectSort] = useState({ key: "projectNumber", direction: "asc" });
   const [resourceSort, setResourceSort] = useState({ key: "name", direction: "asc" });
   const [crewSort, setCrewSort] = useState({ key: "crewName", direction: "asc" });
+
+  useEffect(() => {
+    if (currentUser) loadAppUsers();
+  }, [currentUser]);
+
+  useEffect(() => {
+    function handleExpandDemand() { setExpandedView("demand"); }
+    window.addEventListener("ggc-expand-demand", handleExpandDemand);
+    return () => window.removeEventListener("ggc-expand-demand", handleExpandDemand);
+  }, []);
 
   useEffect(() => {
     async function loadSupabaseData() {
@@ -978,38 +994,22 @@ export default function App() {
     const section = document.getElementById(sectionId);
     if (!section) return;
 
-    const style = document.createElement("style");
-    style.id = "ggc-print-style";
-    style.innerHTML = `
-      @media print {
-        body * { visibility: hidden !important; }
-        #${sectionId}, #${sectionId} * { visibility: visible !important; }
-        #${sectionId} {
-          position: absolute !important;
-          left: 0 !important;
-          top: 0 !important;
-          width: 100% !important;
-          max-width: none !important;
-          margin: 0 !important;
-          box-shadow: none !important;
-          border: none !important;
-        }
-        #${sectionId} button { display: none !important; }
-        #${sectionId} .overflow-x-auto { overflow: visible !important; }
-        @page { size: landscape; margin: 0.35in; }
-      }
-    `;
+    const clonedSection = section.cloneNode(true);
+    clonedSection.querySelectorAll("button, input, select, label input").forEach((element) => element.remove());
+    clonedSection.querySelectorAll(".overflow-x-auto").forEach((element) => {
+      element.style.overflow = "visible";
+    });
 
-    document.head.appendChild(style);
-    const previousTitle = document.title;
-    document.title = title || "GGC Export";
-    window.print();
+    const printWindow = window.open("", "_blank", "width=1400,height=900");
+    if (!printWindow) {
+      alert("Please allow pop-ups to export PDF.");
+      return;
+    }
 
-    setTimeout(() => {
-      document.title = previousTitle;
-      const printStyle = document.getElementById("ggc-print-style");
-      if (printStyle) printStyle.remove();
-    }, 500);
+    const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]')).map((node) => node.outerHTML).join("
+");
+    printWindow.document.write(`<!doctype html><html><head><title>${title || "GGC Export"}</title>${styles}<style>@page{size:landscape;margin:.35in}body{font-family:Arial,sans-serif;background:white!important;color:#0f172a}.export-wrap{padding:16px}.overflow-x-auto{overflow:visible!important}svg{max-width:none;height:auto}button{display:none!important}</style></head><body><div class="export-wrap">${clonedSection.outerHTML}</div><script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script></body></html>`);
+    printWindow.document.close();
   }
 
   function exportProjectsExcel() {
@@ -1153,6 +1153,69 @@ export default function App() {
     });
   }
 
+  async function loadAppUsers() {
+    if (!supabase) return;
+    const { data, error } = await supabase.rpc("list_app_users");
+    if (error) {
+      console.error("Could not load app users:", error);
+      return;
+    }
+    setAppUsers(data || []);
+  }
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    const { data, error } = await supabase.rpc("authenticate_app_user", {
+      input_username: loginForm.username,
+      input_password: loginForm.password,
+    });
+
+    if (error) {
+      console.error(error);
+      alert("Login setup is missing. Run the user SQL block in Supabase.");
+      return;
+    }
+
+    if (!data) {
+      alert("Invalid username or password.");
+      return;
+    }
+
+    sessionStorage.setItem("ggc_current_user", loginForm.username);
+    setCurrentUser(loginForm.username);
+    setLoginForm({ username: "", password: "" });
+    await loadAppUsers();
+  }
+
+  async function addAppUser() {
+    if (!newUserForm.username.trim() || !newUserForm.password.trim()) {
+      alert("Username and password are required.");
+      return;
+    }
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    const { error } = await supabase.rpc("create_app_user", {
+      input_username: newUserForm.username,
+      input_password: newUserForm.password,
+    });
+    if (error) {
+      console.error(error);
+      alert("Could not create user.");
+      return;
+    }
+    setNewUserForm({ username: "", password: "" });
+    await loadAppUsers();
+  }
+
+  function logout() {
+    sessionStorage.removeItem("ggc_current_user");
+    setCurrentUser("");
+  }
+
+  if (!currentUser) {
+    return <main className="flex min-h-screen items-center justify-center bg-slate-100 p-6"><form onSubmit={handleLogin} className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl"><div className="h-1 w-24 rounded-full bg-emerald-700" /><h1 className="mt-4 text-2xl font-bold text-slate-900">GGC Resource Planning</h1><p className="mt-1 text-sm text-slate-500">Sign in to access the scheduling system.</p><label className="mt-6 block space-y-1"><span className="text-sm font-semibold text-slate-700">Username</span><input value={loginForm.username} onChange={(e) => setLoginForm((current) => ({ ...current, username: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /></label><label className="mt-4 block space-y-1"><span className="text-sm font-semibold text-slate-700">Password</span><input type="password" value={loginForm.password} onChange={(e) => setLoginForm((current) => ({ ...current, password: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /></label><button type="submit" className="mt-6 w-full rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800">Log In</button></form></main>;
+  }
+
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
@@ -1162,7 +1225,7 @@ export default function App() {
             <h1 className="mt-3 text-3xl font-bold tracking-tight">GGC Resource Planning</h1>
             <p className="mt-1 text-slate-500">Project master list, resource assignments, and mobilization scheduling.</p>
           </div>
-          <div className="flex flex-wrap justify-end gap-3">
+          <div className="flex flex-wrap justify-end gap-3"><div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700"><span>{currentUser}</span><button onClick={() => setShowUserSettings(true)} className="rounded-lg p-1 hover:bg-slate-200" title="User settings"><Settings size={16} /></button><button onClick={logout} className="rounded-lg px-2 py-1 text-xs text-red-700 hover:bg-red-50">Logout</button></div>
             <button onClick={() => setPage("dashboard")} className={`rounded-xl px-4 py-3 font-semibold shadow-sm ${page === "dashboard" ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>Dashboard</button>
             <button onClick={() => setPage("projects")} className={`rounded-xl px-4 py-3 font-semibold shadow-sm ${page === "projects" ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>Projects</button>
             <button onClick={() => setPage("resources")} className={`rounded-xl px-4 py-3 font-semibold shadow-sm ${page === "resources" ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>Resources</button>
@@ -1234,12 +1297,16 @@ export default function App() {
       {page === "dashboard" && (
         <section className="mx-auto max-w-7xl space-y-6 px-6 py-6">
           <div className="grid gap-4 md:grid-cols-4"><StatCard icon={BriefcaseBusiness} label="Total Projects" value={projects.length} /><StatCard icon={ClipboardCheck} label="Assignments" value={assignments.length} /><StatCard icon={Users} label="Resources" value={resources.length} /><StatCard icon={FolderKanban} label="Crews" value={crews.length} /></div>
-          <section id="project-assignment-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><h2 className="text-xl font-bold">Project Assignment Gantt View</h2><p className="text-sm text-slate-500">Each project assignment is one row. Multiple mobilizations appear on that same project row.</p></div><div className="flex flex-wrap items-center gap-3"><button onClick={exportDashboardExcel} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button><button onClick={() => exportSectionPdf("project-assignment-gantt", "Project Assignment Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><ZoomIn size={16} className="text-slate-500" /><span className="text-sm font-medium text-slate-700">Zoom</span><select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">{zoomModes.map((mode) => <option key={mode}>{mode}</option>)}</select></div></div></div><div className="mb-4 grid gap-3 lg:grid-cols-3"><MultiSelectFilter label="Project Division Filter" options={divisions} selected={divisionFilter} setSelected={setDivisionFilter} /><MultiSelectFilter label="Status Filter" options={statuses} selected={statusFilter} setSelected={setStatusFilter} /><MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={dashboardResourceTypeFilter} setSelected={setDashboardResourceTypeFilter} /></div><div className="mb-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-8 rounded-full ${divisionStyles[division]}`} /><span className="text-slate-600">{division}</span></div>)}<div className="text-slate-400">Pending Award uses lighter shade</div></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{projectGanttRows.map((row) => <button key={row.assignment.id} onClick={() => openEditAssignmentForm(row.assignment)} className="block w-full text-left"><ProjectGanttRow assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} /></button>)}</div></div></section>
-          <section id="resource-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><h2 className="text-xl font-bold">Resource Gantt View</h2><p className="text-sm text-slate-500">Rows are resources. Bars show the assigned project name for each mobilization.</p></div><button onClick={() => exportSectionPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />)}</div></div></section>
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><MultiSelectFilter label="Resource Demand Home Division Filter" options={divisions} selected={demandHomeDivisionFilter} setSelected={setDemandHomeDivisionFilter} /></div><ResourceDemandChart items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} />
+          <section id="project-assignment-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><div className="flex items-center gap-2"><button onClick={() => setExpandedView("project")} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button><h2 className="text-xl font-bold">Project Assignment Gantt View</h2></div><p className="text-sm text-slate-500">Each project assignment is one row. Multiple mobilizations appear on that same project row.</p></div><div className="flex flex-wrap items-center gap-3"><button onClick={exportDashboardExcel} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button><button onClick={() => exportSectionPdf("project-assignment-gantt", "Project Assignment Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><ZoomIn size={16} className="text-slate-500" /><span className="text-sm font-medium text-slate-700">Zoom</span><select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">{zoomModes.map((mode) => <option key={mode}>{mode}</option>)}</select></div></div></div><div className="mb-4 grid gap-3 lg:grid-cols-3"><MultiSelectFilter label="Project Division Filter" options={divisions} selected={divisionFilter} setSelected={setDivisionFilter} /><MultiSelectFilter label="Status Filter" options={statuses} selected={statusFilter} setSelected={setStatusFilter} /><MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={dashboardResourceTypeFilter} setSelected={setDashboardResourceTypeFilter} /></div><div className="mb-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-8 rounded-full ${divisionStyles[division]}`} /><span className="text-slate-600">{division}</span></div>)}<div className="text-slate-400">Pending Award uses lighter shade</div></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{projectGanttRows.map((row) => <button key={row.assignment.id} onClick={() => openEditAssignmentForm(row.assignment)} className="block w-full text-left"><ProjectGanttRow assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} /></button>)}</div></div></section>
+          <section id="resource-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><div className="flex items-center gap-2"><button onClick={() => setExpandedView("resource")} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button><h2 className="text-xl font-bold">Resource Gantt View</h2></div><p className="text-sm text-slate-500">Rows are resources. Bars show the assigned project name for each mobilization.</p></div><button onClick={() => exportSectionPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />)}</div></div></section>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><MultiSelectFilter label="Resource Demand Home Division Filter" options={divisions} selected={demandHomeDivisionFilter} setSelected={setDemandHomeDivisionFilter} /></div><ResourceDemandChart items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} />
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-bold">Assignments</h2><p className="text-sm text-slate-500">Assign existing projects to resources and crews.</p></div><div className="flex flex-wrap gap-3"><label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importAssignmentsCsv} className="hidden" /></label><button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><ClipboardCheck size={17} /> Assign</button></div></div><div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1250px] text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Project</th><th className="p-3">PM</th><th className="p-3">Superintendent</th><th className="p-3">Field Coordinator</th><th className="p-3">Field Engineer</th><th className="p-3">Safety</th><th className="p-3">Crews</th><th className="p-3">Mobilizations</th><th className="p-3 text-right">Actions</th></tr></thead><tbody>{visibleAssignments.map((assignment) => { const project = findProject(projects, assignment.projectId); return <tr key={assignment.id} className="border-t border-slate-200 align-top"><td className="p-3 font-medium">{project ? `${project.projectNumber} - ${project.name}` : "Missing project"}</td><td className="p-3">{assignment.projectManager}</td><td className="p-3">{assignment.superintendent}</td><td className="p-3">{assignment.fieldCoordinator}</td><td className="p-3">{assignment.fieldEngineer}</td><td className="p-3">{assignment.safety}</td><td className="p-3">{getAssignmentCrewDisplayNames(assignment, crews).join(", ")}</td><td className="p-3">{(assignment.mobilizations || []).map((mob, index) => `#${index + 1}: ${formatDate(mob.start)} - ${formatDate(mob.end)}`).join("; ")}</td><td className="p-3 text-right"><button onClick={() => openEditAssignmentForm(assignment)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button><button onClick={() => deleteAssignment(assignment.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button></td></tr>; })}</tbody></table></div></section>
         </section>
       )}
+
+      {showUserSettings && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4"><div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-bold">User Settings</h2><p className="text-sm text-slate-500">Add users who can log in to this system.</p></div><button onClick={() => setShowUserSettings(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button></div><div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]"><input placeholder="Username" value={newUserForm.username} onChange={(e) => setNewUserForm((current) => ({ ...current, username: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /><input placeholder="Password" type="password" value={newUserForm.password} onChange={(e) => setNewUserForm((current) => ({ ...current, password: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /><button onClick={addAppUser} className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800">Add User</button></div><div className="mt-5 rounded-xl border border-slate-200"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Username</th><th className="p-3">Created</th></tr></thead><tbody>{appUsers.map((user) => <tr key={user.username} className="border-t border-slate-200"><td className="p-3 font-semibold">{user.username}</td><td className="p-3">{user.created_at ? formatDate(user.created_at) : ""}</td></tr>)}</tbody></table></div></div></div>}
+
+      {expandedView && <div className="fixed inset-0 z-[60] bg-slate-950/70 p-4"><div className="h-full overflow-auto rounded-2xl bg-white p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><h2 className="text-2xl font-bold">{expandedView === "project" ? "Project Assignment Gantt View" : expandedView === "resource" ? "Resource Gantt View" : "Resource Demand Graph"}</h2><button onClick={() => setExpandedView(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div>{expandedView === "project" && <div id="expanded-project-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{projectGanttRows.map((row) => <ProjectGanttRow key={row.assignment.id} assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} />)}</div></div>}{expandedView === "resource" && <div id="expanded-resource-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />)}</div></div>}{expandedView === "demand" && <ResourceDemandChart enlarged items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} />}</div></div>}
 
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} editing={Boolean(editingProjectId)} certifications={certifications} />}
       {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={crews} />}
@@ -1248,4 +1315,5 @@ export default function App() {
     </main>
   );
 }
+
 
