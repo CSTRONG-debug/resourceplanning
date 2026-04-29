@@ -873,7 +873,7 @@ function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPd
         const rectY = y(stackedValue + segment.value);
         stackedValue += segment.value;
         return <rect key={`${segment.division}-${segment.type}`} x={x} y={rectY} width={barWidth} height={segmentHeight} rx="5" fill={segment.color} onClick={() => onBarClick?.({ period, segment })} style={{ cursor: "pointer" }}><title>{segment.division} {segment.type}: {segment.value}</title></rect>;
-      })}<text x={x + barWidth / 2} y={height - 36} textAnchor="middle" fontSize="10" fill="#475569">{period.label}</text></g>;
+      })}<text x={x + barWidth / 2} y={height - 36} textAnchor="middle" fontSize="10" fill="#475569" style={{cursor:"pointer"}} onClick={() => onBarClick?.({ period, segment: null })}>{period.label}</text></g>;
     })}</svg></div><div className="mt-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-6 rounded-full ${divisionStyles[division]}`} /><span>{division} Current</span><span className={`ml-2 h-3 w-6 rounded-full ${pendingDivisionStyles[division]}`} /><span>{division} Pending</span></div>)}</div></section>;
 }
 
