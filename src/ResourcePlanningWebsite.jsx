@@ -1620,6 +1620,9 @@ export default function App() {
     if (!w) { alert("Please allow pop-ups to export PDF."); return; }
     w.document.open(); w.document.write(html); w.document.close();
   }
+
+  // CSV import for forecast
+  function importForecastCsv(event) {
     readCsvFile(event, async (rows) => {
       for (const row of rows) {
         const projectNum = row.projectnumber || row.project || "";
