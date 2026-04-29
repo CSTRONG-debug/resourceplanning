@@ -343,30 +343,219 @@ function SearchableMultiSelect({ label, options, selected, setSelected, getLabel
   );
 }
 
+function useCloseDropdown(setOpen, containerRef) {
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (containerRef.current && !containerRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    }
+
+    function handleEsc(event) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEsc);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEsc);
+    };
+  }, [setOpen, containerRef]);
+}
+
 function SearchableResourceSelect({ value, onChange, resources, resourceType, placeholder }) {
+  const containerRef = React.useRef(null);
   const [query, setQuery] = useState(value || "");
   const [open, setOpen] = useState(false);
+
+  useCloseDropdown(setOpen, containerRef);
+
   useEffect(() => setQuery(value || ""), [value]);
-  const filtered = resources.filter((resource) => (resourceType ? resource.resourceType === resourceType : true) && resource.name.toLowerCase().includes(query.toLowerCase()));
-  return <div className="relative"><div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600"><Search size={16} className="mr-2 text-slate-400" /><input className="w-full outline-none" value={query} placeholder={placeholder || "Search resource..."} onFocus={() => setOpen(true)} onChange={(e) => { setQuery(e.target.value); onChange(e.target.value); setOpen(true); }} /></div>{open && <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">{filtered.length ? filtered.map((resource) => <button key={resource.id} type="button" onClick={() => { onChange(resource.name); setQuery(resource.name); setOpen(false); }} className="block w-full px-3 py-2 text-left hover:bg-emerald-50"><p className="font-semibold text-slate-800">{resource.name}</p><p className="text-xs text-slate-500">{resource.resourceType} • {resource.homeDivision}</p></button>) : <p className="px-3 py-2 text-sm text-slate-500">No matching resource</p>}</div>}</div>;
+
+  const filtered = resources.filter(
+    (resource) =>
+      (resourceType ? resource.resourceType === resourceType : true) &&
+      resource.name.toLowerCase().includes(query.toLowerCase())
+  );
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600">
+        <Search size={16} className="mr-2 text-slate-400" />
+        <input
+          className="w-full outline-none"
+          value={query}
+          placeholder={placeholder || "Search resource..."}
+          onFocus={() => setOpen(true)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            onChange(e.target.value);
+            setOpen(true);
+          }}
+        />
+      </div>
+
+      {open && (
+        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+          {filtered.length ? (
+            filtered.map((resource) => (
+              <button
+                key={resource.id}
+                type="button"
+                onClick={() => {
+                  onChange(resource.name);
+                  setQuery(resource.name);
+                  setOpen(false);
+                }}
+                className="block w-full px-3 py-2 text-left hover:bg-emerald-50"
+              >
+                <p className="font-semibold text-slate-800">{resource.name}</p>
+                <p className="text-xs text-slate-500">
+                  {resource.resourceType} • {resource.homeDivision}
+                </p>
+              </button>
+            ))
+          ) : (
+            <p className="px-3 py-2 text-sm text-slate-500">No matching resource</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function SearchableProjectSelect({ value, onChange, projects }) {
+  const containerRef = React.useRef(null);
   const current = findProject(projects, value);
   const [query, setQuery] = useState(current ? `${current.projectNumber} - ${current.name}` : "");
   const [open, setOpen] = useState(false);
-  useEffect(() => { const selected = findProject(projects, value); setQuery(selected ? `${selected.projectNumber} - ${selected.name}` : ""); }, [value, projects]);
-  const filtered = projects.filter((project) => `${project.projectNumber} ${project.name} ${project.client}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="relative"><div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600"><Search size={16} className="mr-2 text-slate-400" /><input className="w-full outline-none" value={query} placeholder="Search project..." onFocus={() => setOpen(true)} onChange={(e) => { setQuery(e.target.value); onChange(""); setOpen(true); }} /></div>{open && <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">{filtered.length ? filtered.map((project) => <button key={project.id} type="button" onClick={() => { onChange(project.id); setQuery(`${project.projectNumber} - ${project.name}`); setOpen(false); }} className="block w-full px-3 py-2 text-left hover:bg-emerald-50"><p className="font-semibold text-slate-800">{project.projectNumber} - {project.name}</p><p className="text-xs text-slate-500">{project.client} • {project.division} • {project.status}</p></button>) : <p className="px-3 py-2 text-sm text-slate-500">No matching project</p>}</div>}</div>;
+
+  useCloseDropdown(setOpen, containerRef);
+
+  useEffect(() => {
+    const selected = findProject(projects, value);
+    setQuery(selected ? `${selected.projectNumber} - ${selected.name}` : "");
+  }, [value, projects]);
+
+  const filtered = projects.filter((project) =>
+    `${project.projectNumber} ${project.name} ${project.client}`
+      .toLowerCase()
+      .includes(query.toLowerCase())
+  );
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600">
+        <Search size={16} className="mr-2 text-slate-400" />
+        <input
+          className="w-full outline-none"
+          value={query}
+          placeholder="Search project..."
+          onFocus={() => setOpen(true)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            onChange("");
+            setOpen(true);
+          }}
+        />
+      </div>
+
+      {open && (
+        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+          {filtered.length ? (
+            filtered.map((project) => (
+              <button
+                key={project.id}
+                type="button"
+                onClick={() => {
+                  onChange(project.id);
+                  setQuery(`${project.projectNumber} - ${project.name}`);
+                  setOpen(false);
+                }}
+                className="block w-full px-3 py-2 text-left hover:bg-emerald-50"
+              >
+                <p className="font-semibold text-slate-800">
+                  {project.projectNumber} - {project.name}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {project.client} • {project.division} • {project.status}
+                </p>
+              </button>
+            ))
+          ) : (
+            <p className="px-3 py-2 text-sm text-slate-500">No matching project</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function SearchableCrewSelect({ value, onChange, crews }) {
+  const containerRef = React.useRef(null);
   const current = crews.find((crew) => crew.id === value);
   const [query, setQuery] = useState(current ? getCrewDisplayName(current) : "");
   const [open, setOpen] = useState(false);
-  useEffect(() => { const selected = crews.find((crew) => crew.id === value); setQuery(selected ? getCrewDisplayName(selected) : ""); }, [value, crews]);
-  const filtered = crews.filter((crew) => `${crew.crewName} ${crew.foremanName} ${(crew.specialty || []).join(" ")}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="relative"><div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600"><Search size={16} className="mr-2 text-slate-400" /><input className="w-full outline-none" value={query} placeholder="Search crew..." onFocus={() => setOpen(true)} onChange={(e) => { setQuery(e.target.value); onChange(""); setOpen(true); }} /></div>{open && <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">{filtered.length ? filtered.map((crew) => <button key={crew.id} type="button" onClick={() => { onChange(crew.id); setQuery(getCrewDisplayName(crew)); setOpen(false); }} className="block w-full px-3 py-2 text-left hover:bg-emerald-50"><p className="font-semibold text-slate-800">{getCrewDisplayName(crew)}</p><p className="text-xs text-slate-500">{(crew.specialty || []).join(", ")}</p></button>) : <p className="px-3 py-2 text-sm text-slate-500">No matching crew</p>}</div>}</div>;
+
+  useCloseDropdown(setOpen, containerRef);
+
+  useEffect(() => {
+    const selected = crews.find((crew) => crew.id === value);
+    setQuery(selected ? getCrewDisplayName(selected) : "");
+  }, [value, crews]);
+
+  const filtered = crews.filter((crew) =>
+    `${crew.crewName} ${crew.foremanName} ${(crew.specialty || []).join(" ")}`
+      .toLowerCase()
+      .includes(query.toLowerCase())
+  );
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div className="flex items-center rounded-xl border border-slate-300 px-3 py-2 focus-within:border-emerald-600">
+        <Search size={16} className="mr-2 text-slate-400" />
+        <input
+          className="w-full outline-none"
+          value={query}
+          placeholder="Search crew..."
+          onFocus={() => setOpen(true)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            onChange("");
+            setOpen(true);
+          }}
+        />
+      </div>
+
+      {open && (
+        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+          {filtered.length ? (
+            filtered.map((crew) => (
+              <button
+                key={crew.id}
+                type="button"
+                onClick={() => {
+                  onChange(crew.id);
+                  setQuery(getCrewDisplayName(crew));
+                  setOpen(false);
+                }}
+                className="block w-full px-3 py-2 text-left hover:bg-emerald-50"
+              >
+                <p className="font-semibold text-slate-800">{getCrewDisplayName(crew)}</p>
+                <p className="text-xs text-slate-500">{(crew.specialty || []).join(", ")}</p>
+              </button>
+            ))
+          ) : (
+            <p className="px-3 py-2 text-sm text-slate-500">No matching crew</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function CertificationPicker({ selected, onChange, certifications }) {
