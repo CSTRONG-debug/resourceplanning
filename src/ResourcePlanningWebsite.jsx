@@ -492,8 +492,8 @@ export default function App() {
         getAssignmentCrewDisplayNames(item.assignment, crews).join("; "),
       ])
     ];
-    const csvContent = rows.map((row) => row.map(csvEscape).join(",")).join("
-");
+    const lineBreak = String.fromCharCode(10);
+    const csvContent = rows.map((row) => row.map(csvEscape).join(",")).join(lineBreak);
     downloadTextFile("ggc-resource-planning-dashboard.csv", csvContent);
   }
 
