@@ -118,6 +118,26 @@ function toDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 function addDays(date, days) { const result = new Date(date); result.setDate(result.getDate() + days); return result; }
+function addBusinessDaysInclusive(startDate, businessDays) {
+  const start = startDate instanceof Date ? new Date(startDate) : new Date(startDate);
+  const daysToAdd = Math.max(1, Math.ceil(Number(businessDays) || 0));
+
+  if (Number.isNaN(start.getTime())) return null;
+
+  const result = new Date(start);
+  let counted = 0;
+  let safety = 0;
+
+  while (counted < daysToAdd && safety < 1000) {
+    const day = result.getDay();
+    if (day !== 0 && day !== 6) counted += 1;
+    if (counted >= daysToAdd) break;
+    result.setDate(result.getDate() + 1);
+    safety += 1;
+  }
+
+  return safety >= 1000 ? null : result;
+}
 function addMonths(date, months) { const result = new Date(date); result.setMonth(result.getMonth() + months); return result; }
 function startOfWeek(date) { const result = new Date(date); const day = result.getDay(); result.setDate(result.getDate() - day); return result; }
 function startOfMonth(date) { return new Date(date.getFullYear(), date.getMonth(), 1); }
@@ -151,16 +171,6 @@ function getAssignmentCrewDisplayNames(assignment, crews) {
 }
 function getAssignmentPeopleLabel(assignment, crews = []) {
   return [assignment.superintendent, ...getAssignmentCrewDisplayNames(assignment, crews)].filter(Boolean).join(" • ");
-}
-
-function getAssignmentResourceNames(assignment) {
-  return [
-    assignment.projectManager,
-    assignment.superintendent,
-    assignment.fieldCoordinator,
-    assignment.fieldEngineer,
-    assignment.safety,
-  ].filter(Boolean);
 }
 
 function buildGanttItems(projects, assignments) {
@@ -580,16 +590,19 @@ function ProjectForm({ form, setForm, onSave, onCancel, editing, certifications 
 function AssignmentForm({ form, setForm, onSave, onCancel, editing, resources, projects, crews }) {
   function updateField(field, value) { setForm((current) => ({ ...current, [field]: value })); }
   function calculateEndDateFromWeeks(startDate, durationWeeks) {
-    if (!startDate || !durationWeeks) return "";
+    if (!startDate || durationWeeks === "" || durationWeeks === null || durationWeeks === undefined) return "";
+
     const start = toDate(startDate);
     const weeks = Number(durationWeeks);
+
     if (!start || Number.isNaN(weeks) || weeks <= 0) return "";
 
-    // Duration is based on work weeks only: 1 week = 5 business days.
-    // Example: Monday + 1 week = Friday; Monday + 2 weeks = next Friday.
-    const businessDays = Math.ceil(weeks * 5);
+    // Work-week duration: 1 week = 5 business days, excluding Saturday/Sunday.
+    // Examples: Monday + 1 week = Friday; Monday + 2 weeks = next Friday.
+    const businessDays = weeks * 5;
     const end = addBusinessDaysInclusive(start, businessDays);
-    return end.toISOString().slice(0, 10);
+
+    return end ? end.toISOString().slice(0, 10) : "";
   }
   function updateMobilization(id, field, value) {
     setForm((current) => ({
@@ -646,9 +659,8 @@ function PtoOverlayBar({ pto, timeline }) {
 }
 
 function ProjectGanttRow({ assignment, project, items, timeline, crews }) {
-  const sortedItems = [...items].sort((a, b) => new Date(a.start) - new Date(b.start));
-  const dotClass = "h-3 w-3 rounded-full " + (project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600");
-  return <div className="grid grid-cols-[240px_1fr] items-center gap-5"><button className="text-left"><div className="flex items-center gap-2"><span className={dotClass} /><p className="font-semibold text-slate-900 hover:text-emerald-700">{project.projectNumber ? project.projectNumber + " - " : ""}{project.name}</p></div><p className="mt-1 text-xs text-slate-500">{project.division} • {project.status} • {items.length} mobilization{items.length === 1 ? "" : "s"}</p></button><div className="relative h-11 rounded-xl bg-slate-100">{sortedItems.map((item) => <GanttSegmentBar key={item.id} item={item} timeline={timeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />)}</div></div>;
+  const label = getAssignmentPeopleLabel(assignment, crews);
+  return <div className="grid grid-cols-[240px_1fr] items-center gap-5"><button className="text-left"><div className="flex items-center gap-2"><span className={`h-3 w-3 rounded-full ${project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600"}`} /><p className="font-semibold text-slate-900 hover:text-emerald-700">{project.projectNumber ? `${project.projectNumber} - ` : ""}{project.name}</p></div><p className="mt-1 text-xs text-slate-500">{project.division} • {project.status} • {items.length} mobilization{items.length === 1 ? "" : "s"}</p></button><div className="relative h-11 rounded-xl bg-slate-100">{items.map((item) => <GanttSegmentBar key={item.id} item={item} timeline={timeline} label={label} />)}</div></div>;
 }
 
 function ResourceGanttRow({ resource, items, timeline, onResourceClick }) {
@@ -706,7 +718,7 @@ function countRequiredResources(assignment) {
   return [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety, assignment.crew1Id, assignment.crew2Id, assignment.crew3Id, assignment.crew4Id].filter(Boolean).length;
 }
 
-function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPdf, onBarClick, enlarged = false }) {
+function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPdf, enlarged = false }) {
   const periods = timeline.ticks.map((tick) => {
     const periodStart = tick;
     const periodEnd = getPeriodEnd(tick, zoom);
@@ -730,7 +742,7 @@ function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPd
     });
 
     const count = divisions.reduce((sum, division) => sum + buckets[division].current + buckets[division].pending, 0);
-    return { label: formatTick(tick, zoom), tick, segments, count };
+    return { label: formatTick(tick, zoom), segments, count };
   });
 
   const rawMaxValue = Math.max(totalResources, ...periods.map((period) => period.count), 1);
@@ -751,7 +763,7 @@ function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPd
         const segmentHeight = (segment.value / yAxisMax) * plotHeight;
         const rectY = y(stackedValue + segment.value);
         stackedValue += segment.value;
-        return <rect key={`${segment.division}-${segment.type}`} x={x} y={rectY} width={barWidth} height={segmentHeight} rx="5" fill={segment.color} onClick={() => onBarClick?.({ period, segment })} style={{ cursor: "pointer" }}><title>{segment.division} {segment.type}: {segment.value}</title></rect>;
+        return <rect key={`${segment.division}-${segment.type}`} x={x} y={rectY} width={barWidth} height={segmentHeight} rx="5" fill={segment.color}><title>{segment.division} {segment.type}: {segment.value}</title></rect>;
       })}<text x={x + barWidth / 2} y={height - 36} textAnchor="middle" fontSize="10" fill="#475569">{period.label}</text></g>;
     })}</svg></div><div className="mt-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-6 rounded-full ${divisionStyles[division]}`} /><span>{division} Current</span><span className={`ml-2 h-3 w-6 rounded-full ${pendingDivisionStyles[division]}`} /><span>{division} Pending</span></div>)}</div></section>;
 }
@@ -997,7 +1009,6 @@ export default function App() {
   const [appUsers, setAppUsers] = useState([]);
   const [crewGanttFilter, setCrewGanttFilter] = useState([]);
   const [focusedResource, setFocusedResource] = useState(null);
-  const [demandDrilldown, setDemandDrilldown] = useState(null);
   const [projectSort, setProjectSort] = useState({ key: "projectNumber", direction: "asc" });
   const [resourceSort, setResourceSort] = useState({ key: "name", direction: "asc" });
   const [crewSort, setCrewSort] = useState({ key: "crewName", direction: "asc" });
@@ -1054,10 +1065,15 @@ export default function App() {
 
   const ganttItems = buildGanttItems(projects, assignments);
   const assignmentMatchesDashboardResourceType = (assignment) => {
-    const assignedResourceNames = [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety].filter(Boolean);
+    const assignedResourceNames = [
+      assignment.projectManager,
+      assignment.superintendent,
+      assignment.fieldCoordinator,
+      assignment.fieldEngineer,
+      assignment.safety,
+    ].filter(Boolean);
 
-    // Allow pending-award / unstaffed assignments to remain visible and saveable.
-    // These still need to appear on the Project Assignment Gantt and Resource Demand Graph.
+    // Keep unassigned assignments visible so Pending Award / forecast projects show on the dashboard.
     if (!assignedResourceNames.length) return true;
 
     const selectedResourceNames = resources
@@ -1095,15 +1111,14 @@ export default function App() {
   const timeline = useMemo(() => buildTimeline(visibleItems, zoom), [visibleItems, zoom]);
   const timelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, timeline));
   const visibleAssignments = assignments.filter((assignment) => assignmentMatchesDashboardResourceType(assignment));
-  const projectGanttRows = projects
-    .filter((project) => divisionFilter.includes(project.division) && statusFilter.includes(project.status))
-    .map((project) => {
-      const projectAssignments = visibleAssignments.filter((assignment) => assignment.projectId === project.id);
-      const items = timelineVisibleItems.filter((item) => item.project.id === project.id);
-      if (!items.length) return null;
-      return { project, assignments: projectAssignments, assignment: projectAssignments[0] || {}, items };
-    })
-    .filter(Boolean);
+  const projectGanttRows = visibleAssignments.map((assignment) => {
+    const project = findProject(projects, assignment.projectId);
+    if (!project) return null;
+    if (!divisionFilter.includes(project.division) || !statusFilter.includes(project.status)) return null;
+    const items = timelineVisibleItems.filter((item) => item.assignmentId === assignment.id);
+    if (!items.length) return null;
+    return { assignment, project, items };
+  }).filter(Boolean);
   const resourceGanttRows = resources.map((resource) => {
     if (!dashboardResourceTypeFilter.includes(resource.resourceType)) return null;
     const items = timelineVisibleItems.filter((item) => [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].includes(resource.name));
@@ -1703,19 +1718,17 @@ window.onload = function () { setTimeout(function () { window.print(); }, 350); 
           <div className="grid gap-4 md:grid-cols-4"><StatCard icon={BriefcaseBusiness} label="Total Projects" value={projects.length} /><StatCard icon={ClipboardCheck} label="Assignments" value={assignments.length} /><StatCard icon={Users} label="Resources" value={resources.length} /><StatCard icon={FolderKanban} label="Crews" value={crews.length} /></div>
           <section id="project-assignment-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><div className="flex items-center gap-2"><button onClick={() => setExpandedView("project")} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button><h2 className="text-xl font-bold">Project Assignment Gantt View</h2></div><p className="text-sm text-slate-500">Each project assignment is one row. Multiple mobilizations appear on that same project row.</p></div><div className="flex flex-wrap items-center gap-3"><button onClick={exportDashboardExcel} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button><button onClick={() => exportSectionPdf("project-assignment-gantt", "Project Assignment Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><ZoomIn size={16} className="text-slate-500" /><span className="text-sm font-medium text-slate-700">Zoom</span><select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">{zoomModes.map((mode) => <option key={mode}>{mode}</option>)}</select></div></div></div><div className="mb-4 grid gap-3 lg:grid-cols-3"><MultiSelectFilter label="Project Division Filter" options={divisions} selected={divisionFilter} setSelected={setDivisionFilter} /><MultiSelectFilter label="Status Filter" options={statuses} selected={statusFilter} setSelected={setStatusFilter} /><MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={dashboardResourceTypeFilter} setSelected={setDashboardResourceTypeFilter} /></div><div className="mb-4 flex flex-wrap gap-3 text-xs font-semibold">{divisions.map((division) => <div key={division} className="flex items-center gap-2"><span className={`h-3 w-8 rounded-full ${divisionStyles[division]}`} /><span className="text-slate-600">{division}</span></div>)}<div className="text-slate-400">Pending Award uses lighter shade</div></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{projectGanttRows.map((row) => <button key={row.assignment.id} onClick={() => openEditAssignmentForm(row.assignment)} className="block w-full text-left"><ProjectGanttRow assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} /></button>)}</div></div></section>
           <section id="resource-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><div className="flex items-center gap-2"><button onClick={() => setExpandedView("resource")} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button><h2 className="text-xl font-bold">Resource Gantt View</h2></div><p className="text-sm text-slate-500">Rows are resources. Bars show the assigned project name for each mobilization.</p></div><button onClick={() => exportSectionPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}</div></div></section>
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><MultiSelectFilter label="Resource Demand Home Division Filter" options={divisions} selected={demandHomeDivisionFilter} setSelected={setDemandHomeDivisionFilter} /></div><ResourceDemandChart items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} onBarClick={setDemandDrilldown} />
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><MultiSelectFilter label="Resource Demand Home Division Filter" options={divisions} selected={demandHomeDivisionFilter} setSelected={setDemandHomeDivisionFilter} /></div><ResourceDemandChart items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} />
           <section id="crew-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><div className="flex items-center gap-2"><button onClick={() => setExpandedView("crew")} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button><h2 className="text-xl font-bold">Crew Gantt View</h2></div><p className="text-sm text-slate-500">Rows are crews. Overlapping projects stack below each other within the same crew row.</p></div><button onClick={() => exportSectionPdf("crew-gantt", "Crew Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button></div><div className="mb-4"><SearchableMultiSelect label="Crew Name Filter" options={crews.map((crew) => ({ value: crew.id, label: getCrewDisplayName(crew), subLabel: (crew.specialty || []).join(", ") }))} selected={crewGanttFilter} setSelected={setCrewGanttFilter} getLabel={(option) => option.label} /></div><div className="overflow-x-auto rounded-xl border border-slate-200 p-4"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1160px] space-y-3">{crewGanttRows.map((row) => <CrewGanttRow key={row.crew.id} crew={row.crew} items={row.items} timeline={timeline} />)}</div></div></section>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-bold">Assignments</h2><p className="text-sm text-slate-500">Assign existing projects to resources and crews.</p></div><div className="flex flex-wrap gap-3"><label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importAssignmentsCsv} className="hidden" /></label><button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><ClipboardCheck size={17} /> Assign</button></div></div><div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1250px] text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Project</th><th className="p-3">PM</th><th className="p-3">Superintendent</th><th className="p-3">Field Coordinator</th><th className="p-3">Field Engineer</th><th className="p-3">Safety</th><th className="p-3">Crews</th><th className="p-3">Mobilizations</th><th className="p-3 text-right">Actions</th></tr></thead><tbody>{visibleAssignments.map((assignment) => { const project = findProject(projects, assignment.projectId); return <tr key={assignment.id} className="border-t border-slate-200 align-top"><td className="p-3 font-medium">{project ? `${project.projectNumber} - ${project.name}` : "Missing project"}</td><td className="p-3">{assignment.projectManager}</td><td className="p-3">{assignment.superintendent}</td><td className="p-3">{assignment.fieldCoordinator}</td><td className="p-3">{assignment.fieldEngineer}</td><td className="p-3">{assignment.safety}</td><td className="p-3">{getAssignmentCrewDisplayNames(assignment, crews).join(", ")}</td><td className="p-3">{(assignment.mobilizations || []).map((mob, index) => `#${index + 1}: ${formatDate(mob.start)} - ${formatDate(mob.end)}`).join("; ")}</td><td className="p-3 text-right"><button onClick={() => openEditAssignmentForm(assignment)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button><button onClick={() => deleteAssignment(assignment.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button></td></tr>; })}</tbody></table></div></section>
         </section>
       )}
 
-      {demandDrilldown && <div className="fixed inset-0 z-[80] bg-slate-950/70 p-4"><div className="h-full overflow-auto rounded-2xl bg-white p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-2xl font-bold">{demandDrilldown.segment.division} {demandDrilldown.segment.type} Assignments</h2><p className="text-sm text-slate-500">{demandDrilldown.period.label} • Click a resource name below to review conflicts for that resource.</p></div><button onClick={() => setDemandDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{timelineVisibleItems.filter((item) => { const periodStart = demandDrilldown.period.tick; const periodEnd = getPeriodEnd(periodStart, zoom); const itemStart = toDate(item.start); const itemEnd = toDate(item.end); const matchesDivision = item.project.division === demandDrilldown.segment.division; const matchesStatus = demandDrilldown.segment.type === "Pending" ? item.project.status === "Pending Award" : item.project.status !== "Pending Award" && item.project.status !== "Complete"; return itemStart && itemEnd && matchesDivision && matchesStatus && rangesOverlap(itemStart, addDays(itemEnd, 1), periodStart, periodEnd); }).map((item) => { const assignmentResources = getAssignmentResourceNames(item.assignment); return <div key={"demand-" + item.id} className="grid grid-cols-[300px_1fr] items-center gap-5"><div className="text-left"><p className="font-semibold text-slate-900">{item.project.projectNumber ? item.project.projectNumber + " - " : ""}{item.project.name}</p><p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} - {formatDate(item.end)}</p><div className="mt-2 flex flex-wrap gap-1">{assignmentResources.length ? assignmentResources.map((resourceName) => { const resource = resources.find((itemResource) => itemResource.name === resourceName); return <button key={resourceName} onClick={() => resource && setFocusedResource(resource)} className="rounded-full border border-slate-300 px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:border-red-400 hover:bg-red-50 hover:text-red-700">{resourceName}</button>; }) : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">No resources assigned</span>}</div></div><div className="relative h-11 rounded-xl bg-slate-100"><GanttSegmentBar item={item} timeline={timeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} /></div></div>; })}</div></div></div>}
-
       {focusedResource && <div className="fixed inset-0 z-[75] bg-slate-950/70 p-4"><div className="h-full overflow-auto rounded-2xl bg-white p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-2xl font-bold">{focusedResource.name} Conflict Breakout</h2><p className="text-sm text-slate-500">Each assignment is shown on a separate line so overlapping work is easy to review.</p></div><button onClick={() => setFocusedResource(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{focusedResourceItems.map((item) => <div key={`focused-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p><p className="mt-1 text-xs text-slate-500">{item.project.division} • {formatDate(item.start)} - {formatDate(item.end)}</p></div><div className="relative h-11 rounded-xl bg-slate-100"><GanttSegmentBar item={item} timeline={timeline} label={item.project.name} /></div></div>)}</div></div></div>}
 
       {showUserSettings && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4"><div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-bold">User Settings</h2><p className="text-sm text-slate-500">Add users who can log in to this system.</p></div><button onClick={() => setShowUserSettings(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button></div><div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]"><input placeholder="Username" value={newUserForm.username} onChange={(e) => setNewUserForm((current) => ({ ...current, username: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /><input placeholder="Password" type="password" value={newUserForm.password} onChange={(e) => setNewUserForm((current) => ({ ...current, password: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /><button onClick={addAppUser} className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800">Add User</button></div><div className="mt-5 rounded-xl border border-slate-200"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Username</th><th className="p-3">Created</th><th className="p-3 text-right">Action</th></tr></thead><tbody>{appUsers.map((user) => <tr key={user.username} className="border-t border-slate-200"><td className="p-3 font-semibold">{user.username}</td><td className="p-3">{user.created_at ? formatDate(user.created_at) : ""}</td><td className="p-3 text-right"><button onClick={() => deleteAppUser(user.username)} className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50">Delete</button></td></tr>)}</tbody></table></div></div></div>}
 
-      {expandedView && <div className="fixed inset-0 z-[60] bg-slate-950/70 p-4"><div className="h-full overflow-auto rounded-2xl bg-white p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><h2 className="text-2xl font-bold">{expandedView === "project" ? "Project Assignment Gantt View" : expandedView === "resource" ? "Resource Gantt View" : expandedView === "crew" ? "Crew Gantt View" : "Resource Demand Graph"}</h2><button onClick={() => setExpandedView(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div>{expandedView === "project" && <div id="expanded-project-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{projectGanttRows.map((row) => <ProjectGanttRow key={row.project.id} assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} />)}</div></div>}{expandedView === "resource" && <div id="expanded-resource-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}</div></div>}{expandedView === "demand" && <ResourceDemandChart enlarged items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} onBarClick={setDemandDrilldown} />}</div></div>}
+      {expandedView && <div className="fixed inset-0 z-[60] bg-slate-950/70 p-4"><div className="h-full overflow-auto rounded-2xl bg-white p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><h2 className="text-2xl font-bold">{expandedView === "project" ? "Project Assignment Gantt View" : expandedView === "resource" ? "Resource Gantt View" : "Resource Demand Graph"}</h2><button onClick={() => setExpandedView(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div>{expandedView === "project" && <div id="expanded-project-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{projectGanttRows.map((row) => <ProjectGanttRow key={row.assignment.id} assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} />)}</div></div>}{expandedView === "resource" && <div id="expanded-resource-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 min-w-[1500px] space-y-3">{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}</div></div>}{expandedView === "demand" && <ResourceDemandChart enlarged items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} />}</div></div>}
 
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} editing={Boolean(editingProjectId)} certifications={certifications} />}
       {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={crews} />}
