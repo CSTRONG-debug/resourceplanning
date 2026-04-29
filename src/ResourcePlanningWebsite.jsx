@@ -894,18 +894,39 @@ export default function App() {
   }
 
   function importProjectsCsv(event) {
-    readCsvFile(event, (rows) => {
+    readCsvFile(event, async (rows) => {
+      if (!supabase) {
+        alert("Supabase is not connected. Check Vercel environment variables.");
+        return;
+      }
+
       const imported = rows.map((row) => ({
-        id: crypto.randomUUID(),
-        projectNumber: row.projectnumber || row.project || "",
+        project_number: row.projectnumber || row.project || "",
         name: row.projectname || row.name || "",
         client: row.client || "",
         address: row.address || "",
         division: divisions.includes(row.division) ? row.division : "Hardscape",
-        specificRequirements: splitList(row.specificrequirements || row.requirements || row.certifications),
+        specific_requirements: splitList(row.specificrequirements || row.requirements || row.certifications),
         status: statuses.includes(row.status) ? row.status : "Scheduled",
-      })).filter((project) => project.projectNumber || project.name);
-      if (imported.length) setProjects((current) => [...imported, ...current]);
+      })).filter((project) => project.project_number || project.name);
+
+      if (!imported.length) {
+        alert("No valid projects found in CSV.");
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("projects")
+        .insert(imported)
+        .select();
+
+      if (error) {
+        console.error(error);
+        alert("Could not import projects.");
+        return;
+      }
+
+      setProjects((current) => [...(data || []).map(mapProjectFromDb), ...current]);
     });
   }
 
