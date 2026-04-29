@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, CalendarDays, Users, BriefcaseBusiness, X, ZoomIn, Settings, Search, FolderKanban, ClipboardCheck } from "lucide-react";
-import { supabase } from "./lib/supabase";
 
 const PROJECTS_KEY = "ggc_resource_planning_projects";
 const ASSIGNMENTS_KEY = "ggc_resource_planning_assignments";
@@ -549,15 +548,6 @@ export default function App() {
   const [dashboardResourceTypeFilter, setDashboardResourceTypeFilter] = useState([...defaultDashboardResourceTypes]);
   const [projectTabDivisionFilter, setProjectTabDivisionFilter] = useState([...divisions]);
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
-
-  useEffect(() => {
-    async function testConnection() {
-      const { data, error } = await supabase.from("projects").select("*");
-      console.log("SUPABASE TEST:", data, error);
-    }
-
-    testConnection();
-  }, []);
 
   useEffect(() => localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects)), [projects]);
   useEffect(() => localStorage.setItem(ASSIGNMENTS_KEY, JSON.stringify(assignments)), [assignments]);
