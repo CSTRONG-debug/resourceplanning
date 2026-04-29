@@ -863,7 +863,7 @@ export function CrewGanttRow({ crew, items, timeline }) {
 
 // ─── ResourceDemandChart ──────────────────────────────────────────────────────
 
-export function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPdf, onBarClick, enlarged = false }) {
+export function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPdf, onBarClick, onPeriodClick, enlarged = false }) {
   const periods = timeline.ticks.map((tick) => {
     const periodStart = tick;
     const periodEnd = getPeriodEnd(tick, zoom);
@@ -874,8 +874,11 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
       const itemStart = toDate(item.start);
       const itemEnd = toDate(item.end);
       if (!itemStart || !itemEnd || !rangesOverlap(itemStart, addDays(itemEnd, 1), periodStart, periodEnd)) return;
-      if (item.project.status === "Pending Award") buckets[item.project.division].pending += 1;
-      else if (item.project.status !== "Complete") buckets[item.project.division].current += 1;
+      // Count by resource home division (the division the assigned superintendent/PM belongs to),
+      // falling back to project division if no resource match found.
+      const resourceDivision = item.assignment?._resourceHomeDivision || item.project.division;
+      if (item.project.status === "Pending Award") buckets[resourceDivision] ? buckets[resourceDivision].pending += 1 : null;
+      else if (item.project.status !== "Complete") buckets[resourceDivision] ? buckets[resourceDivision].current += 1 : null;
     });
 
     const segments = [];
@@ -884,8 +887,14 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
       if (buckets[d].pending > 0) segments.push({ division: d, type: "Pending", value: buckets[d].pending, color: pendingDivisionSvgColors[d] });
     });
 
+    const periodItems = items.filter((item) => {
+      const itemStart = toDate(item.start);
+      const itemEnd = toDate(item.end);
+      return itemStart && itemEnd && rangesOverlap(itemStart, addDays(itemEnd, 1), periodStart, periodEnd);
+    });
+
     const count = divisions.reduce((sum, d) => sum + buckets[d].current + buckets[d].pending, 0);
-    return { label: formatTick(tick, zoom), tick, segments, count };
+    return { label: formatTick(tick, zoom), tick, periodStart, periodEnd, segments, count, periodItems };
   });
 
   const rawMaxValue = Math.max(totalResources, ...periods.map((p) => p.count), 1);
@@ -940,7 +949,13 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
                     </rect>
                   );
                 })}
-                <text x={x + barWidth / 2} y={height - 36} textAnchor="middle" fontSize="10" fill="#475569">{period.label}</text>
+                <text
+                  x={x + barWidth / 2} y={height - 36}
+                  textAnchor="middle" fontSize="10"
+                  fill="#1d4ed8"
+                  style={{ cursor: "pointer", textDecoration: "underline" }}
+                  onClick={() => onPeriodClick?.(period)}
+                >{period.label}</text>
               </g>
             );
           })}
@@ -1002,6 +1017,7 @@ export default function App() {
   const [resourceSort, setResourceSort] = useState({ key: "name", direction: "asc" });
   const [crewSort, setCrewSort] = useState({ key: "crewName", direction: "asc" });
   const [demandDrilldown, setDemandDrilldown] = useState(null);
+  const [demandPeriodDrilldown, setDemandPeriodDrilldown] = useState(null);
   const [showAssignments, setShowAssignments] = useState(true);
 
   // ── Initial Supabase load ──────────────────────────────────────────────────
@@ -1691,12 +1707,18 @@ export default function App() {
             <MultiSelectFilter label="Resource Demand Home Division Filter" options={divisions} selected={demandHomeDivisionFilter} setSelected={setDemandHomeDivisionFilter} />
           </div>
           <ResourceDemandChart
-            items={timelineVisibleItems}
+            items={timelineVisibleItems.map((item) => {
+              // Find the assigned superintendent/PM resource to get their home division
+              const assignedNames = [item.assignment.superintendent, item.assignment.projectManager, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].filter(Boolean);
+              const assignedResource = resources.find((r) => assignedNames.includes(r.name) && demandHomeDivisionFilter.includes(r.homeDivision));
+              return { ...item, assignment: { ...item.assignment, _resourceHomeDivision: assignedResource?.homeDivision || item.project.division } };
+            }).filter((item) => demandHomeDivisionFilter.includes(item.assignment._resourceHomeDivision))}
             timeline={timeline}
             zoom={zoom}
             totalResources={resources.filter((r) => dashboardResourceTypeFilter.includes(r.resourceType) && demandHomeDivisionFilter.includes(r.homeDivision)).length}
             onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")}
             onBarClick={setDemandDrilldown}
+            onPeriodClick={setDemandPeriodDrilldown}
           />
 
           {/* Crew Gantt */}
@@ -1799,6 +1821,55 @@ export default function App() {
         </div>
       )}
 
+      {/* Period-wide Gantt Drilldown — all assignments active in that period */}
+      {demandPeriodDrilldown && (() => {
+        const { label, periodStart, periodEnd, periodItems } = demandPeriodDrilldown;
+        // Build a tight single-period timeline
+        const periodTimeline = {
+          minDate: periodStart,
+          maxDate: periodEnd,
+          currentDate: new Date(),
+          totalDays: Math.max(1, Math.ceil((periodEnd - periodStart) / (1000 * 60 * 60 * 24))),
+          ticks: [periodStart],
+          width: 1160,
+        };
+        return (
+          <div className="fixed inset-0 z-[85] bg-slate-950/70 p-4">
+            <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5">
+                <div>
+                  <h2 className="text-2xl font-bold">All Assignments — {label}</h2>
+                  <p className="text-sm text-slate-500">{periodItems.length} assignment{periodItems.length === 1 ? "" : "s"} active during this period across all divisions</p>
+                </div>
+                <button onClick={() => setDemandPeriodDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
+              </div>
+              <div className="flex-1 overflow-auto p-5">
+                <GanttHeader timeline={timeline} zoom={zoom} />
+                <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
+                  {periodItems.length === 0 && (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments active in this period.</div>
+                  )}
+                  {periodItems.map((item) => (
+                    <div key={`period-drilldown-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5">
+                      <div className="text-left">
+                        <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}
+                        </p>
+                        <p className="mt-0.5 text-xs text-slate-400">{getAssignmentPeopleLabel(item.assignment, crews) || "Unassigned"}</p>
+                      </div>
+                      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
+                        <GanttSegmentBar item={item} timeline={timeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Expanded View */}
       {expandedView && (
         <div className="fixed inset-0 z-[60] bg-slate-950/70 p-4">
@@ -1881,4 +1952,5 @@ export default function App() {
     </main>
   );
 }
+
 
