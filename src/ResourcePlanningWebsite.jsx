@@ -870,31 +870,50 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
     const buckets = {};
     divisions.forEach((d) => { buckets[d] = { current: 0, pending: 0 }; });
 
-    items.forEach((item) => {
-      const itemStart = toDate(item.start);
-      const itemEnd = toDate(item.end);
-      if (!itemStart || !itemEnd || !rangesOverlap(itemStart, addDays(itemEnd, 1), periodStart, periodEnd)) return;
-      // Count by resource home division (the division the assigned superintendent/PM belongs to),
-      // falling back to project division if no resource match found.
-      const resourceDivision = item.assignment?._resourceHomeDivision || item.project.division;
-      if (item.project.status === "Pending Award") buckets[resourceDivision] ? buckets[resourceDivision].pending += 1 : null;
-      else if (item.project.status !== "Complete") buckets[resourceDivision] ? buckets[resourceDivision].current += 1 : null;
-    });
-
-    const segments = [];
-    divisions.forEach((d) => {
-      if (buckets[d].current > 0) segments.push({ division: d, type: "Current", value: buckets[d].current, color: divisionSvgColors[d] });
-      if (buckets[d].pending > 0) segments.push({ division: d, type: "Pending", value: buckets[d].pending, color: pendingDivisionSvgColors[d] });
-    });
-
+    // All items active in this period (used for drilldowns)
     const periodItems = items.filter((item) => {
       const itemStart = toDate(item.start);
       const itemEnd = toDate(item.end);
       return itemStart && itemEnd && rangesOverlap(itemStart, addDays(itemEnd, 1), periodStart, periodEnd);
     });
 
+    // Count each item into its resource home division bucket
+    periodItems.forEach((item) => {
+      const resourceDivision = item.assignment?._resourceHomeDivision || item.project.division;
+      if (!buckets[resourceDivision]) return;
+      if (item.project.status === "Pending Award") buckets[resourceDivision].pending += 1;
+      else if (item.project.status !== "Complete") buckets[resourceDivision].current += 1;
+    });
+
+    const segments = [];
+    divisions.forEach((d) => {
+      if (buckets[d].current > 0) segments.push({ division: d, type: "Current", value: buckets[d].current, color: divisionSvgColors[d],
+        // Items for this specific segment (division + type) — used for segment drilldown
+        segmentItems: periodItems.filter((item) => {
+          const rd = item.assignment?._resourceHomeDivision || item.project.division;
+          return rd === d && item.project.status !== "Pending Award" && item.project.status !== "Complete";
+        }),
+      });
+      if (buckets[d].pending > 0) segments.push({ division: d, type: "Pending", value: buckets[d].pending, color: pendingDivisionSvgColors[d],
+        segmentItems: periodItems.filter((item) => {
+          const rd = item.assignment?._resourceHomeDivision || item.project.division;
+          return rd === d && item.project.status === "Pending Award";
+        }),
+      });
+    });
+
+    // Build a tight timeline scoped exactly to this period for drilldown Gantts
+    const periodTimeline = {
+      minDate: periodStart,
+      maxDate: periodEnd,
+      currentDate: new Date(),
+      totalDays: Math.max(1, Math.ceil((periodEnd - periodStart) / (1000 * 60 * 60 * 24))),
+      ticks: [periodStart],
+      width: 1160,
+    };
+
     const count = divisions.reduce((sum, d) => sum + buckets[d].current + buckets[d].pending, 0);
-    return { label: formatTick(tick, zoom), tick, periodStart, periodEnd, segments, count, periodItems };
+    return { label: formatTick(tick, zoom), tick, periodStart, periodEnd, segments, count, periodItems, periodTimeline };
   });
 
   const rawMaxValue = Math.max(totalResources, ...periods.map((p) => p.count), 1);
@@ -944,8 +963,10 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
                   const rectY = y(stackedValue + segment.value);
                   stackedValue += segment.value;
                   return (
-                    <rect key={`${segment.division}-${segment.type}`} x={x} y={rectY} width={barWidth} height={segmentHeight} rx="5" fill={segment.color} onClick={() => onBarClick?.({ period, segment })} style={{ cursor: "pointer" }}>
-                      <title>{segment.division} {segment.type}: {segment.value}</title>
+                    <rect key={`${segment.division}-${segment.type}`} x={x} y={rectY} width={barWidth} height={segmentHeight} rx="5" fill={segment.color}
+                      onClick={() => onBarClick?.({ period, segment })}
+                      style={{ cursor: "pointer" }}>
+                      <title>{segment.division} {segment.type}: {segment.value} — click for details</title>
                     </rect>
                   );
                 })}
@@ -1708,11 +1729,17 @@ export default function App() {
           </div>
           <ResourceDemandChart
             items={timelineVisibleItems.map((item) => {
-              // Find the assigned superintendent/PM resource to get their home division
+              // Find the primary assigned resource to get their home division
               const assignedNames = [item.assignment.superintendent, item.assignment.projectManager, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].filter(Boolean);
               const assignedResource = resources.find((r) => assignedNames.includes(r.name) && demandHomeDivisionFilter.includes(r.homeDivision));
-              return { ...item, assignment: { ...item.assignment, _resourceHomeDivision: assignedResource?.homeDivision || item.project.division } };
-            }).filter((item) => demandHomeDivisionFilter.includes(item.assignment._resourceHomeDivision))}
+              // Fall back: check any assigned resource regardless of filter to get home division
+              const anyAssignedResource = assignedResource || resources.find((r) => assignedNames.includes(r.name));
+              const resourceHomeDivision = anyAssignedResource?.homeDivision || item.project.division;
+              // Only include this item if its resolved home division is in the current filter
+              return demandHomeDivisionFilter.includes(resourceHomeDivision)
+                ? { ...item, assignment: { ...item.assignment, _resourceHomeDivision: resourceHomeDivision } }
+                : null;
+            }).filter(Boolean)}
             timeline={timeline}
             zoom={zoom}
             totalResources={resources.filter((r) => dashboardResourceTypeFilter.includes(r.resourceType) && demandHomeDivisionFilter.includes(r.homeDivision)).length}
@@ -1821,18 +1848,47 @@ export default function App() {
         </div>
       )}
 
+      {/* Segment Drilldown — specific division+type for one period */}
+      {demandDrilldown && (() => {
+        const { period, segment } = demandDrilldown;
+        const { label, periodTimeline } = period;
+        const items = segment.segmentItems || [];
+        return (
+          <div className="fixed inset-0 z-[87] bg-slate-950/70 p-4">
+            <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5">
+                <div>
+                  <h2 className="text-2xl font-bold">{segment.division} {segment.type} — {label}</h2>
+                  <p className="text-sm text-slate-500">{items.length} assignment{items.length === 1 ? "" : "s"} active for {segment.division} resources during this period</p>
+                </div>
+                <button onClick={() => setDemandDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
+              </div>
+              <div className="flex-1 overflow-auto p-5">
+                <GanttHeader timeline={periodTimeline} zoom={zoom} />
+                <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 280}px` }}>
+                  {items.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments found for this segment.</div>}
+                  {items.map((item) => (
+                    <div key={`seg-drilldown-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5">
+                      <div className="text-left">
+                        <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
+                        <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
+                        <p className="mt-0.5 text-xs text-slate-400">{getAssignmentPeopleLabel(item.assignment, crews) || "Unassigned"}</p>
+                      </div>
+                      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
+                        <GanttSegmentBar item={item} timeline={periodTimeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Period-wide Gantt Drilldown — all assignments active in that period */}
       {demandPeriodDrilldown && (() => {
-        const { label, periodStart, periodEnd, periodItems } = demandPeriodDrilldown;
-        // Build a tight single-period timeline
-        const periodTimeline = {
-          minDate: periodStart,
-          maxDate: periodEnd,
-          currentDate: new Date(),
-          totalDays: Math.max(1, Math.ceil((periodEnd - periodStart) / (1000 * 60 * 60 * 24))),
-          ticks: [periodStart],
-          width: 1160,
-        };
+        const { label, periodItems, periodTimeline } = demandPeriodDrilldown;
         return (
           <div className="fixed inset-0 z-[85] bg-slate-950/70 p-4">
             <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
@@ -1844,22 +1900,18 @@ export default function App() {
                 <button onClick={() => setDemandPeriodDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
               </div>
               <div className="flex-1 overflow-auto p-5">
-                <GanttHeader timeline={timeline} zoom={zoom} />
-                <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                  {periodItems.length === 0 && (
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments active in this period.</div>
-                  )}
+                <GanttHeader timeline={periodTimeline} zoom={zoom} />
+                <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 280}px` }}>
+                  {periodItems.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments active in this period.</div>}
                   {periodItems.map((item) => (
                     <div key={`period-drilldown-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5">
                       <div className="text-left">
                         <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}
-                        </p>
+                        <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
                         <p className="mt-0.5 text-xs text-slate-400">{getAssignmentPeopleLabel(item.assignment, crews) || "Unassigned"}</p>
                       </div>
-                      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
-                        <GanttSegmentBar item={item} timeline={timeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
+                      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
+                        <GanttSegmentBar item={item} timeline={periodTimeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
                       </div>
                     </div>
                   ))}
@@ -1952,5 +2004,3 @@ export default function App() {
     </main>
   );
 }
-
-
