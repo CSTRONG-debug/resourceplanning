@@ -320,11 +320,16 @@ function GanttHeader({ timeline, zoom }) {
   return <div className="ml-[260px] min-w-[900px] border-b border-slate-200 pb-2"><div className="relative h-10">{currentLeft >= 0 && currentLeft <= 100 && <div className="absolute top-0 z-20 h-10 border-l-4 border-dashed border-red-600" style={{ left: `${currentLeft}%` }}><span className="ml-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">Today</span></div>}{timeline.ticks.map((tick, index) => { const left = timelinePercent(tick, timeline); return <div key={`${tick.toISOString()}-${index}`} className="absolute top-0 h-10 border-l border-slate-200 pl-2 text-xs font-medium text-slate-500" style={{ left: `${left}%` }}>{formatTick(tick, zoom)}</div>; })}</div></div>;
 }
 
-function GanttSegmentBar({ item, timeline, label }) {
+function GanttSegmentBar({ item, timeline, label, conflict = false }) {
   const project = item.project;
   const colorClass = project.status === "Pending Award" ? pendingDivisionStyles[project.division] || "bg-slate-300" : divisionStyles[project.division] || "bg-slate-700";
   const { left, width } = timelineSpanPercent(item.start, item.end, timeline);
-  return <div className={`absolute top-1 h-9 overflow-hidden rounded-xl ${colorClass} px-3 text-xs font-semibold leading-9 text-white shadow-sm`} style={{ left: `${left}%`, width: `${Math.max(2, width)}%` }} title={label || project.name}>{label}</div>;
+  const conflictStyle = conflict ? {
+    border: "2px solid #dc2626",
+    backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(220,38,38,.95) 8px 10px)",
+    backgroundSize: "14px 14px",
+  } : {};
+  return <div className={`absolute top-1 h-9 overflow-hidden rounded-xl ${colorClass} px-3 text-xs font-semibold leading-9 text-white shadow-sm`} style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, ...conflictStyle }} title={conflict ? `${label || project.name} - conflict` : label || project.name}>{label}{conflict && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white">conflict</span>}</div>;
 }
 
 function PtoOverlayBar({ pto, timeline }) {
@@ -339,7 +344,25 @@ function ProjectGanttRow({ assignment, project, items, timeline, crews }) {
 
 function ResourceGanttRow({ resource, items, timeline }) {
   const ptoItems = (resource.pto || []).filter((pto) => pto.start && pto.end);
-  return <div className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><p className="font-semibold text-slate-900">{resource.name}</p><p className="mt-1 text-xs text-slate-500">{resource.resourceType} • {resource.homeDivision} • {items.length} assignment{items.length === 1 ? "" : "s"}{ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}</p></div><div className="relative h-11 rounded-xl bg-slate-100">{items.map((item) => <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} />)}{ptoItems.map((pto) => <PtoOverlayBar key={`${resource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />)}</div></div>;
+  const sortedItems = [...items].sort((a, b) => new Date(a.start) - new Date(b.start));
+  const conflictIds = new Set();
+
+  sortedItems.forEach((item, index) => {
+    const itemStart = toDate(item.start);
+    const itemEnd = toDate(item.end);
+    if (!itemStart || !itemEnd) return;
+
+    const hasEarlierOverlap = sortedItems.slice(0, index).some((previous) => {
+      const previousStart = toDate(previous.start);
+      const previousEnd = toDate(previous.end);
+      if (!previousStart || !previousEnd) return false;
+      return rangesOverlap(itemStart, addDays(itemEnd, 1), previousStart, addDays(previousEnd, 1));
+    });
+
+    if (hasEarlierOverlap) conflictIds.add(item.id);
+  });
+
+  return <div className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><p className="font-semibold text-slate-900">{resource.name}</p><p className="mt-1 text-xs text-slate-500">{resource.resourceType} • {resource.homeDivision} • {items.length} assignment{items.length === 1 ? "" : "s"}{ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}</p></div><div className="relative h-11 rounded-xl bg-slate-100">{sortedItems.map((item) => <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} conflict={conflictIds.has(item.id)} />)}{ptoItems.map((pto) => <PtoOverlayBar key={`${resource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />)}</div></div>;
 }
 
 function getPeriodEnd(start, zoom) {
@@ -561,6 +584,7 @@ export default function App() {
     return { assignment, project, items };
   }).filter(Boolean);
   const resourceGanttRows = resources.map((resource) => {
+    if (!dashboardResourceTypeFilter.includes(resource.resourceType)) return null;
     const items = timelineVisibleItems.filter((item) => [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].includes(resource.name));
     if (!items.length) return null;
     return { resource, items };
@@ -840,3 +864,4 @@ export default function App() {
     </main>
   );
 }
+
