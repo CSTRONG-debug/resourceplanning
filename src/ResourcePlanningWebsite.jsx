@@ -28,17 +28,17 @@ import {
 import { useSupabaseRealtime } from "./hooks/useSupabaseRealtime";
 
 // UI Components
-import { StatCard, MultiSelectFilter, SearchableMultiSelect } from "./components/ui";
+import { StatCard, MultiSelectFilter, SearchableMultiSelect } from "./components/ui/UI";
 
 // Forms
-import { ProjectForm, AssignmentForm, ResourceForm, CrewForm } from "./components/forms";
+import { ProjectForm, AssignmentForm, ResourceForm, CrewForm } from "./components/forms/Forms";
 
 // Gantt
 import {
   GanttHeader, GanttSegmentBar, PtoOverlayBar,
   ProjectGanttRow, ResourceGanttRow, CrewGanttRow,
   ResourceDemandChart,
-} from "./components/gantt";
+} from "./components/gantt/Gantt";
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
