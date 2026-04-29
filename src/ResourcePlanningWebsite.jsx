@@ -292,13 +292,24 @@ function GanttSegmentBar({ item, timeline, label }) {
   return <div className={`absolute top-1 h-9 overflow-hidden rounded-xl ${colorClass} px-3 text-xs font-semibold leading-9 text-white shadow-sm`} style={{ left: `${Math.max(0, left)}%`, width: `${Math.max(7, width)}%` }} title={label || project.name}>{label}</div>;
 }
 
+function PtoOverlayBar({ pto, timeline }) {
+  const start = toDate(pto.start);
+  const end = toDate(pto.end);
+  const offset = start ? daysBetween(timeline.minDate, start) - 1 : 0;
+  const length = start && end ? daysBetween(start, end) : 1;
+  const left = timeline.totalDays > 0 ? (offset / timeline.totalDays) * 100 : 0;
+  const width = timeline.totalDays > 0 ? (length / timeline.totalDays) * 100 : 10;
+  return <div className="absolute top-0 z-20 h-11 overflow-hidden rounded-xl border-2 border-black bg-white/70 px-3 text-xs font-bold leading-10 text-black shadow" style={{ left: `${Math.max(0, left)}%`, width: `${Math.max(7, width)}%`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(0,0,0,.95) 8px 10px)", backgroundSize: "14px 14px" }} title={`PTO ${pto.ptoId || ""}: ${formatDate(pto.start)} - ${formatDate(pto.end)}`}>PTO {pto.ptoId || ""}</div>;
+}
+
 function ProjectGanttRow({ assignment, project, items, timeline, crews }) {
   const label = getAssignmentPeopleLabel(assignment, crews);
   return <div className="grid grid-cols-[240px_1fr] items-center gap-5"><button className="text-left"><div className="flex items-center gap-2"><span className={`h-3 w-3 rounded-full ${project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600"}`} /><p className="font-semibold text-slate-900 hover:text-emerald-700">{project.projectNumber ? `${project.projectNumber} - ` : ""}{project.name}</p></div><p className="mt-1 text-xs text-slate-500">{project.division} • {project.status} • {items.length} mobilization{items.length === 1 ? "" : "s"}</p></button><div className="relative h-11 rounded-xl bg-slate-100">{items.map((item) => <GanttSegmentBar key={item.id} item={item} timeline={timeline} label={label} />)}</div></div>;
 }
 
 function ResourceGanttRow({ resource, items, timeline }) {
-  return <div className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><p className="font-semibold text-slate-900">{resource.name}</p><p className="mt-1 text-xs text-slate-500">{resource.resourceType} • {resource.homeDivision} • {items.length} assignment{items.length === 1 ? "" : "s"}</p></div><div className="relative h-11 rounded-xl bg-slate-100">{items.map((item) => <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} />)}</div></div>;
+  const ptoItems = (resource.pto || []).filter((pto) => pto.start && pto.end);
+  return <div className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><p className="font-semibold text-slate-900">{resource.name}</p><p className="mt-1 text-xs text-slate-500">{resource.resourceType} • {resource.homeDivision} • {items.length} assignment{items.length === 1 ? "" : "s"}{ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}</p></div><div className="relative h-11 rounded-xl bg-slate-100">{items.map((item) => <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} />)}{ptoItems.map((pto) => <PtoOverlayBar key={`${resource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />)}</div></div>;
 }
 
 function getPeriodEnd(start, zoom) {
