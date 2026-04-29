@@ -173,8 +173,8 @@ function getTimelineWindow(zoom) {
   const start = startOfWeek(today);
   let end;
 
-  if (zoom === "Days") end = addDays(start, 30);
-  else if (zoom === "Weeks") end = addDays(start, 8 * 7);
+  if (zoom === "Days") end = addDays(start, 15);
+  else if (zoom === "Weeks") end = addDays(start, 6 * 7);
   else if (zoom === "Months") end = addMonths(start, 6);
   else if (zoom === "Quarters") end = addMonths(start, 8 * 3);
   else end = addMonths(start, 4 * 12);
@@ -206,6 +206,28 @@ function itemOverlapsTimeline(startValue, endValue, timeline) {
   const end = toDate(endValue);
   if (!start || !end) return false;
   return rangesOverlap(start, addDays(end, 1), timeline.minDate, addDays(timeline.maxDate, 1));
+}
+
+function timelinePercent(dateValue, timeline) {
+  const date = dateValue instanceof Date ? dateValue : toDate(dateValue);
+  if (!date) return 0;
+  const startMs = timeline.minDate.getTime();
+  const endMs = timeline.maxDate.getTime();
+  const dateMs = date.getTime();
+  if (endMs === startMs) return 0;
+  return ((dateMs - startMs) / (endMs - startMs)) * 100;
+}
+
+function timelineSpanPercent(startValue, endValue, timeline) {
+  const start = toDate(startValue);
+  const end = toDate(endValue);
+  if (!start || !end) return { left: 0, width: 0 };
+  const endExclusive = addDays(end, 1);
+  const rawLeft = timelinePercent(start, timeline);
+  const rawRight = timelinePercent(endExclusive, timeline);
+  const left = Math.max(0, Math.min(100, rawLeft));
+  const right = Math.max(0, Math.min(100, rawRight));
+  return { left, width: Math.max(1, right - left) };
 }
 
 function StatCard({ icon: Icon, label, value }) {
@@ -294,30 +316,20 @@ function CrewForm({ form, setForm, certifications, onSave, onCancel, editing }) 
 }
 
 function GanttHeader({ timeline, zoom }) {
-  const currentLeft = ((daysBetween(timeline.minDate, timeline.currentDate) - 1) / timeline.totalDays) * 100;
-  return <div className="ml-[260px] min-w-[900px] border-b border-slate-200 pb-2"><div className="relative h-10">{currentLeft >= 0 && currentLeft <= 100 && <div className="absolute top-0 z-20 h-10 border-l-4 border-dashed border-red-600" style={{ left: `${currentLeft}%` }}><span className="ml-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">Today</span></div>}{timeline.ticks.map((tick, index) => { const left = ((daysBetween(timeline.minDate, tick) - 1) / timeline.totalDays) * 100; return <div key={`${tick.toISOString()}-${index}`} className="absolute top-0 h-10 border-l border-slate-200 pl-2 text-xs font-medium text-slate-500" style={{ left: `${left}%` }}>{formatTick(tick, zoom)}</div>; })}</div></div>;
+  const currentLeft = timelinePercent(timeline.currentDate, timeline);
+  return <div className="ml-[260px] min-w-[900px] border-b border-slate-200 pb-2"><div className="relative h-10">{currentLeft >= 0 && currentLeft <= 100 && <div className="absolute top-0 z-20 h-10 border-l-4 border-dashed border-red-600" style={{ left: `${currentLeft}%` }}><span className="ml-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">Today</span></div>}{timeline.ticks.map((tick, index) => { const left = timelinePercent(tick, timeline); return <div key={`${tick.toISOString()}-${index}`} className="absolute top-0 h-10 border-l border-slate-200 pl-2 text-xs font-medium text-slate-500" style={{ left: `${left}%` }}>{formatTick(tick, zoom)}</div>; })}</div></div>;
 }
 
 function GanttSegmentBar({ item, timeline, label }) {
   const project = item.project;
-  const start = toDate(item.start);
-  const end = toDate(item.end);
-  const offset = start ? daysBetween(timeline.minDate, start) - 1 : 0;
-  const length = start && end ? daysBetween(start, end) : 1;
-  const left = timeline.totalDays > 0 ? (offset / timeline.totalDays) * 100 : 0;
-  const width = timeline.totalDays > 0 ? (length / timeline.totalDays) * 100 : 10;
   const colorClass = project.status === "Pending Award" ? pendingDivisionStyles[project.division] || "bg-slate-300" : divisionStyles[project.division] || "bg-slate-700";
-  return <div className={`absolute top-1 h-9 overflow-hidden rounded-xl ${colorClass} px-3 text-xs font-semibold leading-9 text-white shadow-sm`} style={{ left: `${Math.max(0, left)}%`, width: `${Math.max(7, width)}%` }} title={label || project.name}>{label}</div>;
+  const { left, width } = timelineSpanPercent(item.start, item.end, timeline);
+  return <div className={`absolute top-1 h-9 overflow-hidden rounded-xl ${colorClass} px-3 text-xs font-semibold leading-9 text-white shadow-sm`} style={{ left: `${left}%`, width: `${Math.max(2, width)}%` }} title={label || project.name}>{label}</div>;
 }
 
 function PtoOverlayBar({ pto, timeline }) {
-  const start = toDate(pto.start);
-  const end = toDate(pto.end);
-  const offset = start ? daysBetween(timeline.minDate, start) - 1 : 0;
-  const length = start && end ? daysBetween(start, end) : 1;
-  const left = timeline.totalDays > 0 ? (offset / timeline.totalDays) * 100 : 0;
-  const width = timeline.totalDays > 0 ? (length / timeline.totalDays) * 100 : 10;
-  return <div className="absolute top-0 z-20 h-11 overflow-hidden rounded-xl border-2 border-black bg-white/70 px-3 text-xs font-bold leading-10 text-black shadow" style={{ left: `${Math.max(0, left)}%`, width: `${Math.max(7, width)}%`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(0,0,0,.95) 8px 10px)", backgroundSize: "14px 14px" }} title={`PTO ${pto.ptoId || ""}: ${formatDate(pto.start)} - ${formatDate(pto.end)}`}>PTO {pto.ptoId || ""}</div>;
+  const { left, width } = timelineSpanPercent(pto.start, pto.end, timeline);
+  return <div className="absolute top-0 z-20 h-11 overflow-hidden rounded-xl border-2 border-black bg-white/70 px-3 text-xs font-bold leading-10 text-black shadow" style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(0,0,0,.95) 8px 10px)", backgroundSize: "14px 14px" }} title={`PTO ${pto.ptoId || ""}: ${formatDate(pto.start)} - ${formatDate(pto.end)}`}>PTO {pto.ptoId || ""}</div>;
 }
 
 function ProjectGanttRow({ assignment, project, items, timeline, crews }) {
