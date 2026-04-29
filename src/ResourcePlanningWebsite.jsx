@@ -639,10 +639,10 @@ function mobilizationToDb(mob, assignmentId) {
 }
 
 export default function App() {
-  const [projects, setProjects] = useState(() => loadStoredAny(PROJECTS_LEGACY_KEYS, startingProjects));
-  const [assignments, setAssignments] = useState(() => loadStoredAny(ASSIGNMENTS_LEGACY_KEYS, startingAssignments));
-  const [resources, setResources] = useState(() => loadStoredAny(RESOURCES_LEGACY_KEYS, startingResources));
-  const [crews, setCrews] = useState(() => loadStoredAny(CREWS_LEGACY_KEYS, startingCrews));
+  const [projects, setProjects] = useState([]);
+  const [assignments, setAssignments] = useState([]);
+  const [resources, setResources] = useState([]);
+  const [crews, setCrews] = useState([]);
   const [certifications, setCertifications] = useState(() => loadStoredAny(CERTIFICATIONS_LEGACY_KEYS, startingCertifications));
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [showAssignmentForm, setShowAssignmentForm] = useState(false);
@@ -676,10 +676,10 @@ export default function App() {
     testConnection();
   }, []);
 
-  useEffect(() => localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects)), [projects]);
-  useEffect(() => localStorage.setItem(ASSIGNMENTS_KEY, JSON.stringify(assignments)), [assignments]);
-  useEffect(() => localStorage.setItem(RESOURCES_KEY, JSON.stringify(resources)), [resources]);
-  useEffect(() => localStorage.setItem(CREWS_KEY, JSON.stringify(crews)), [crews]);
+  
+  
+  
+  
   useEffect(() => localStorage.setItem(CERTIFICATIONS_KEY, JSON.stringify(certifications)), [certifications]);
 
   const ganttItems = buildGanttItems(projects, assignments);
