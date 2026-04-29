@@ -213,7 +213,9 @@ function getTimelineWindow(zoom, items = []) {
   else if (zoom === "Quarters") defaultEnd = addMonths(currentWeekStart, 8 * 3);
   else defaultEnd = addMonths(currentWeekStart, 4 * 12);
 
-  const rawStart = earliestItemStart < currentWeekStart ? earliestItemStart : currentWeekStart;
+  // Always open the schedule at the current system week and scroll forward.
+  // Older assignments stay stored in Supabase, but the default planning view starts at this week.
+  const rawStart = currentWeekStart;
   const start = zoom === "Days"
     ? startOfWeek(rawStart)
     : zoom === "Weeks"
@@ -678,7 +680,7 @@ function CrewForm({ form, setForm, certifications, onSave, onCancel, editing }) 
 
 function GanttHeader({ timeline, zoom }) {
   const currentLeft = timelinePercent(timeline.currentDate, timeline);
-  return <div className="ml-[260px] border-b border-slate-200 pb-2" style={{ width: `${timeline.width}px` }}><div className="relative h-10">{currentLeft >= 0 && currentLeft <= 100 && <div className="absolute top-0 z-20 h-10 border-l-4 border-dashed border-red-600" style={{ left: `${currentLeft}%` }}><span className="ml-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">Today</span></div>}{timeline.ticks.map((tick, index) => { const left = timelinePercent(tick, timeline); return <div key={`${tick.toISOString()}-${index}`} className="absolute top-0 h-10 border-l border-slate-200 pl-2 text-xs font-medium text-slate-500" style={{ left: `${left}%` }}>{formatTick(tick, zoom)}</div>; })}</div></div>;
+  return <div className="grid grid-cols-[260px_1fr] border-b border-slate-200 pb-2" style={{ width: `${timeline.width + 260}px` }}><div className="sticky left-0 z-30 h-10 bg-white" /><div className="relative h-10" style={{ width: `${timeline.width}px` }}>{currentLeft >= 0 && currentLeft <= 100 && <div className="absolute top-0 z-20 h-10 border-l-4 border-dashed border-red-600" style={{ left: `${currentLeft}%` }}><span className="ml-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">Today</span></div>}{timeline.ticks.map((tick, index) => { const left = timelinePercent(tick, timeline); return <div key={`${tick.toISOString()}-${index}`} className="absolute top-0 h-10 border-l border-slate-200 pl-2 text-xs font-medium text-slate-500" style={{ left: `${left}%` }}>{formatTick(tick, zoom)}</div>; })}</div></div>;
 }
 
 function GanttSegmentBar({ item, timeline, label, conflict = false }) {
@@ -714,7 +716,7 @@ function PtoOverlayBar({ pto, timeline }) {
 }
 
 function ProjectGanttRow({ assignment, project, items, timeline, crews }) {
-  return <div className="grid grid-cols-[240px_1fr] items-center gap-5"><button className="text-left"><div className="flex items-center gap-2"><span className={`h-3 w-3 rounded-full ${project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600"}`} /><p className="font-semibold text-slate-900 hover:text-emerald-700">{project.projectNumber ? `${project.projectNumber} - ` : ""}{project.name}</p></div><p className="mt-1 text-xs text-slate-500">{project.division} • {project.status} • {items.length} mobilization{items.length === 1 ? "" : "s"}</p></button><div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>{items.map((item) => <GanttSegmentBar key={item.id} item={item} timeline={timeline} label={getAssignmentPeopleLabel(item.assignment, crews)} />)}</div></div>;
+  return <div className="grid grid-cols-[260px_1fr] items-center gap-5"><button className="sticky left-0 z-20 bg-white pr-3 text-left"><div className="flex items-center gap-2"><span className={`h-3 w-3 rounded-full ${project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600"}`} /><p className="font-semibold text-slate-900 hover:text-emerald-700">{project.projectNumber ? `${project.projectNumber} - ` : ""}{project.name}</p></div><p className="mt-1 text-xs text-slate-500">{project.division} • {project.status} • {items.length} mobilization{items.length === 1 ? "" : "s"}</p></button><div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>{items.map((item) => <GanttSegmentBar key={item.id} item={item} timeline={timeline} label={getAssignmentPeopleLabel(item.assignment, crews)} />)}</div></div>;
 }
 
 function ResourceGanttRow({ resource, items, timeline, onResourceClick }) {
@@ -735,7 +737,7 @@ function ResourceGanttRow({ resource, items, timeline, onResourceClick }) {
     if (hasEarlierOverlap) conflictIds.add(item.id);
   });
 
-  return <div className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><button onClick={() => onResourceClick?.(resource)} className="font-semibold text-slate-900 hover:text-emerald-700">{resource.name}</button><p className="mt-1 text-xs text-slate-500">{resource.resourceType} • {resource.homeDivision} • {items.length} assignment{items.length === 1 ? "" : "s"}{ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}</p></div><div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>{sortedItems.map((item) => <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} conflict={conflictIds.has(item.id)} />)}{ptoItems.map((pto) => <PtoOverlayBar key={`${resource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />)}</div></div>;
+  return <div className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="sticky left-0 z-20 bg-white pr-3 text-left"><button onClick={() => onResourceClick?.(resource)} className="font-semibold text-slate-900 hover:text-emerald-700">{resource.name}</button><p className="mt-1 text-xs text-slate-500">{resource.resourceType} • {resource.homeDivision} • {items.length} assignment{items.length === 1 ? "" : "s"}{ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}</p></div><div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>{sortedItems.map((item) => <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} conflict={conflictIds.has(item.id)} />)}{ptoItems.map((pto) => <PtoOverlayBar key={`${resource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />)}</div></div>;
 }
 
 function CrewGanttRow({ crew, items, timeline }) {
@@ -753,7 +755,7 @@ function CrewGanttRow({ crew, items, timeline }) {
     lanes[laneIndex].push(item);
   });
 
-  return <div className="grid grid-cols-[260px_1fr] items-start gap-5"><div className="text-left"><p className="font-semibold text-slate-900">{getCrewDisplayName(crew)}</p><p className="mt-1 text-xs text-slate-500">{(crew.specialty || []).join(", ") || "No specialty"} • {items.length} assignment{items.length === 1 ? "" : "s"}</p></div><div className="relative rounded-xl bg-slate-100" style={{ width: `${timeline.width}px`, height: `${Math.max(48, lanes.length * 48)}px` }}>{lanes.map((lane, laneIndex) => lane.map((item) => { const span = timelineSpanPercent(item.start, item.end, timeline); const colorClass = item.project.status === "Pending Award" ? pendingDivisionStyles[item.project.division] : divisionStyles[item.project.division]; return <div key={`${crew.id}-${item.id}`} className={`absolute h-9 overflow-hidden rounded-xl px-3 text-xs font-semibold leading-9 text-white shadow-sm ${colorClass || "bg-slate-700"}`} style={{ left: `${span.left}%`, width: `${Math.max(2, span.width)}%`, top: `${laneIndex * 48 + 5}px` }}>{item.project.name}</div>; }))}</div></div>;
+  return <div className="grid grid-cols-[260px_1fr] items-start gap-5"><div className="sticky left-0 z-20 bg-white pr-3 text-left"><p className="font-semibold text-slate-900">{getCrewDisplayName(crew)}</p><p className="mt-1 text-xs text-slate-500">{(crew.specialty || []).join(", ") || "No specialty"} • {items.length} assignment{items.length === 1 ? "" : "s"}</p></div><div className="relative rounded-xl bg-slate-100" style={{ width: `${timeline.width}px`, height: `${Math.max(48, lanes.length * 48)}px` }}>{lanes.map((lane, laneIndex) => lane.map((item) => { const span = timelineSpanPercent(item.start, item.end, timeline); const colorClass = item.project.status === "Pending Award" ? pendingDivisionStyles[item.project.division] : divisionStyles[item.project.division]; return <div key={`${crew.id}-${item.id}`} className={`absolute h-9 overflow-hidden rounded-xl px-3 text-xs font-semibold leading-9 text-white shadow-sm ${colorClass || "bg-slate-700"}`} style={{ left: `${span.left}%`, width: `${Math.max(2, span.width)}%`, top: `${laneIndex * 48 + 5}px` }}>{item.project.name}</div>; }))}</div></div>;
 }
 
 function getPeriodEnd(start, zoom) {
