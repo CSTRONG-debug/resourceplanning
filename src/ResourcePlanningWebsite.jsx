@@ -522,10 +522,10 @@ function readCsvFile(event, onRows) {
 }
 
 export default function App() {
-  const [projects, setProjects] = useState(() => loadStoredAny(PROJECTS_LEGACY_KEYS, startingProjects));
-  const [assignments, setAssignments] = useState(() => loadStoredAny(ASSIGNMENTS_LEGACY_KEYS, startingAssignments));
-  const [resources, setResources] = useState(() => loadStoredAny(RESOURCES_LEGACY_KEYS, startingResources));
-  const [crews, setCrews] = useState(() => loadStoredAny(CREWS_LEGACY_KEYS, startingCrews));
+  const [projects, setProjects] = useState([]);
+  const [assignments, setAssignments] = useState([]);
+  const [resources, setResources] = useState([]);
+  const [crews, setCrews] = useState([]);
   const [certifications, setCertifications] = useState(() => loadStoredAny(CERTIFICATIONS_LEGACY_KEYS, startingCertifications));
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [showAssignmentForm, setShowAssignmentForm] = useState(false);
@@ -549,11 +549,7 @@ export default function App() {
   const [dashboardResourceTypeFilter, setDashboardResourceTypeFilter] = useState([...defaultDashboardResourceTypes]);
   const [projectTabDivisionFilter, setProjectTabDivisionFilter] = useState([...divisions]);
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
-
-  useEffect(() => localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects)), [projects]);
-  useEffect(() => localStorage.setItem(ASSIGNMENTS_KEY, JSON.stringify(assignments)), [assignments]);
-  useEffect(() => localStorage.setItem(RESOURCES_KEY, JSON.stringify(resources)), [resources]);
-  useEffect(() => localStorage.setItem(CREWS_KEY, JSON.stringify(crews)), [crews]);
+  
   useEffect(() => localStorage.setItem(CERTIFICATIONS_KEY, JSON.stringify(certifications)), [certifications]);
 
   const ganttItems = buildGanttItems(projects, assignments);
@@ -604,6 +600,81 @@ export default function App() {
   }
 
   testConnection();
+}, []);
+
+  useEffect(() => {
+  async function loadData() {
+    if (!supabase) return;
+
+    const [projectsRes, resourcesRes, crewsRes, assignmentsRes, mobilizationsRes] =
+      await Promise.all([
+        supabase.from("projects").select("*").order("created_at", { ascending: false }),
+        supabase.from("resources").select("*").order("created_at", { ascending: false }),
+        supabase.from("crews").select("*").order("created_at", { ascending: false }),
+        supabase.from("assignments").select("*").order("created_at", { ascending: false }),
+        supabase.from("mobilizations").select("*"),
+      ]);
+
+    if (projectsRes.error) console.error(projectsRes.error);
+    if (resourcesRes.error) console.error(resourcesRes.error);
+    if (crewsRes.error) console.error(crewsRes.error);
+    if (assignmentsRes.error) console.error(assignmentsRes.error);
+    if (mobilizationsRes.error) console.error(mobilizationsRes.error);
+
+    setProjects((projectsRes.data || []).map((p) => ({
+      id: p.id,
+      projectNumber: p.project_number || "",
+      name: p.name || "",
+      client: p.client || "",
+      address: p.address || "",
+      division: p.division || "Hardscape",
+      specificRequirements: p.specific_requirements || [],
+      status: p.status || "Scheduled",
+    })));
+
+    setResources((resourcesRes.data || []).map((r) => ({
+      id: r.id,
+      name: r.name || "",
+      resourceType: r.resource_type || "Superintendent",
+      homeDivision: r.home_division || "Hardscape",
+      phone: r.phone || "",
+      email: r.email || "",
+      certifications: r.certifications || [],
+      pto: r.pto || [],
+      status: r.status || "Active",
+    })));
+
+    setCrews((crewsRes.data || []).map((c) => ({
+      id: c.id,
+      crewName: c.crew_name || "",
+      foremanName: c.foreman_name || "",
+      specialty: c.specialty || [],
+    })));
+
+    setAssignments((assignmentsRes.data || []).map((a) => ({
+      id: a.id,
+      projectId: a.project_id,
+      projectManager: a.project_manager || "",
+      superintendent: a.superintendent || "",
+      fieldCoordinator: a.field_coordinator || "",
+      fieldEngineer: a.field_engineer || "",
+      safety: a.safety || "",
+      crew1Id: a.crew1_id || "",
+      crew2Id: a.crew2_id || "",
+      crew3Id: a.crew3_id || "",
+      crew4Id: a.crew4_id || "",
+      mobilizations: (mobilizationsRes.data || [])
+        .filter((m) => m.assignment_id === a.id)
+        .map((m) => ({
+          id: m.id,
+          start: m.start_date || "",
+          durationWeeks: m.duration_weeks || "",
+          end: m.end_date || "",
+        })),
+    })));
+  }
+
+  loadData();
 }, []);
   
   function openAddProjectForm() { setEditingProjectId(null); setProjectForm(blankProject); setShowProjectForm(true); }
