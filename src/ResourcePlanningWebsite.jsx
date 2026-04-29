@@ -434,25 +434,25 @@ function parseCsv(text) {
   let row = [];
   let cell = "";
   let inQuotes = false;
+  const quote = String.fromCharCode(34);
+  const comma = String.fromCharCode(44);
+  const lineFeed = String.fromCharCode(10);
+  const carriageReturn = String.fromCharCode(13);
 
   for (let i = 0; i < text.length; i += 1) {
     const char = text[i];
     const next = text[i + 1];
 
-    if (char === '"' && inQuotes && next === '"') {
-      cell += '"';
+    if (char === quote && inQuotes && next === quote) {
+      cell += quote;
       i += 1;
-    } else if (char === '"') {
+    } else if (char === quote) {
       inQuotes = !inQuotes;
-    } else if (char === "," && !inQuotes) {
+    } else if (char === comma && !inQuotes) {
       row.push(cell);
       cell = "";
-    } else if ((char === "
-" || char === "
-") && !inQuotes) {
-      if (char === "
-" && next === "
-") i += 1;
+    } else if ((char === lineFeed || char === carriageReturn) && !inQuotes) {
+      if (char === carriageReturn && next === lineFeed) i += 1;
       row.push(cell);
       if (row.some((value) => String(value).trim() !== "")) rows.push(row);
       row = [];
