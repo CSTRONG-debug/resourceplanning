@@ -746,12 +746,17 @@ export default function App() {
 
   const ganttItems = buildGanttItems(projects, assignments);
   const assignmentMatchesDashboardResourceType = (assignment) => {
+    const assignedResourceNames = [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety].filter(Boolean);
+
+    // Allow pending-award / unstaffed assignments to remain visible and saveable.
+    // These still need to appear on the Project Assignment Gantt and Resource Demand Graph.
+    if (!assignedResourceNames.length) return true;
+
     const selectedResourceNames = resources
       .filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType))
       .map((resource) => resource.name);
-    return [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety]
-      .filter(Boolean)
-      .some((name) => selectedResourceNames.includes(name));
+
+    return assignedResourceNames.some((name) => selectedResourceNames.includes(name));
   };
   const visibleItems = ganttItems.filter((item) =>
     divisionFilter.includes(item.project.division) &&
@@ -1403,4 +1408,5 @@ window.onload = function () { setTimeout(function () { window.print(); }, 350); 
     </main>
   );
 }
+
 
