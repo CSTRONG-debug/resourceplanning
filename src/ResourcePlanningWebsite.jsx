@@ -666,6 +666,9 @@ export default function App() {
   const [dashboardResourceTypeFilter, setDashboardResourceTypeFilter] = useState([...defaultDashboardResourceTypes]);
   const [projectTabDivisionFilter, setProjectTabDivisionFilter] = useState([...divisions]);
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
+  const [projectSort, setProjectSort] = useState({ key: "projectNumber", direction: "asc" });
+  const [resourceSort, setResourceSort] = useState({ key: "name", direction: "asc" });
+  const [crewSort, setCrewSort] = useState({ key: "crewName", direction: "asc" });
 
   useEffect(() => {
     async function loadSupabaseData() {
@@ -721,8 +724,25 @@ export default function App() {
   );
   const activeProjects = projects.filter((project) => project.status !== "Complete");
   const assignedCrewIds = [...new Set(assignments.flatMap((assignment) => getAssignmentCrewIds(assignment)).filter(Boolean))];
+  function toggleSort(setter, key) {
+    setter((current) => ({ key, direction: current.key === key && current.direction === "asc" ? "desc" : "asc" }));
+  }
+
+  function compareValues(a, b, direction) {
+    const left = String(a ?? "").toLowerCase();
+    const right = String(b ?? "").toLowerCase();
+    const numberLeft = Number(left);
+    const numberRight = Number(right);
+    const bothNumbers = !Number.isNaN(numberLeft) && !Number.isNaN(numberRight) && left !== "" && right !== "";
+    const result = bothNumbers ? numberLeft - numberRight : left.localeCompare(right, undefined, { numeric: true });
+    return direction === "asc" ? result : -result;
+  }
+
   const filteredResources = resources.filter((resource) => resourceTypeFilter.includes(resource.resourceType));
+  const sortedResources = [...filteredResources].sort((a, b) => compareValues(a[resourceSort.key], b[resourceSort.key], resourceSort.direction));
+  const sortedCrews = [...crews].sort((a, b) => compareValues(a[crewSort.key], b[crewSort.key], crewSort.direction));
   const filteredProjectsForProjectTab = projects.filter((project) => projectTabDivisionFilter.includes(project.division));
+  const sortedProjectsForProjectTab = [...filteredProjectsForProjectTab].sort((a, b) => compareValues(a[projectSort.key], b[projectSort.key], projectSort.direction));
   const timeline = useMemo(() => buildTimeline(visibleItems, zoom), [visibleItems, zoom]);
   const timelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, timeline));
   const visibleAssignments = assignments.filter((assignment) => assignmentMatchesDashboardResourceType(assignment));
@@ -827,12 +847,62 @@ export default function App() {
 
   function openAddResourceForm() { setEditingResourceId(null); setResourceForm(blankResource); setShowResourceForm(true); }
   function openEditResourceForm(resource) { setEditingResourceId(resource.id); setResourceForm({ ...blankResource, ...resource }); setShowResourceForm(true); }
-  function saveResource() { if (!resourceForm.name.trim()) { alert("Resource name is required."); return; } if (editingResourceId) setResources((current) => current.map((resource) => (resource.id === editingResourceId ? { ...resourceForm, id: editingResourceId } : resource))); else setResources((current) => [{ ...resourceForm, id: crypto.randomUUID() }, ...current]); setShowResourceForm(false); setEditingResourceId(null); setResourceForm(blankResource); }
-  function deleteResource(id) { const resource = resources.find((item) => item.id === id); if (!confirm(`Delete ${resource?.name || "this resource"}?`)) return; setResources((current) => current.filter((item) => item.id !== id)); }
+  async function saveResource() {
+    if (!resourceForm.name.trim()) { alert("Resource name is required."); return; }
+    if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
+    const payload = resourceToDb(resourceForm);
+
+    if (editingResourceId) {
+      const { data, error } = await supabase.from("resources").update(payload).eq("id", editingResourceId).select().single();
+      if (error) { console.error(error); alert("Could not update resource."); return; }
+      setResources((current) => current.map((resource) => (resource.id === editingResourceId ? mapResourceFromDb(data) : resource)));
+    } else {
+      const { data, error } = await supabase.from("resources").insert(payload).select().single();
+      if (error) { console.error(error); alert("Could not save resource."); return; }
+      setResources((current) => [mapResourceFromDb(data), ...current]);
+    }
+
+    setShowResourceForm(false);
+    setEditingResourceId(null);
+    setResourceForm(blankResource);
+  }
+  async function deleteResource(id) {
+    const resource = resources.find((item) => item.id === id);
+    if (!confirm(`Delete ${resource?.name || "this resource"}?`)) return;
+    if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
+    const { error } = await supabase.from("resources").delete().eq("id", id);
+    if (error) { console.error(error); alert("Could not delete resource."); return; }
+    setResources((current) => current.filter((item) => item.id !== id));
+  }
   function openAddCrewForm() { setEditingCrewId(null); setCrewForm(blankCrew); setShowCrewForm(true); }
   function openEditCrewForm(crew) { setEditingCrewId(crew.id); setCrewForm({ ...blankCrew, ...crew }); setShowCrewForm(true); }
-  function saveCrew() { if (!crewForm.crewName.trim()) { alert("Crew name is required."); return; } if (editingCrewId) setCrews((current) => current.map((crew) => (crew.id === editingCrewId ? { ...crewForm, id: editingCrewId } : crew))); else setCrews((current) => [{ ...crewForm, id: crypto.randomUUID() }, ...current]); setShowCrewForm(false); setEditingCrewId(null); setCrewForm(blankCrew); }
-  function deleteCrew(id) { const crew = crews.find((item) => item.id === id); if (!confirm(`Delete ${crew?.crewName || "this crew"}?`)) return; setCrews((current) => current.filter((item) => item.id !== id)); }
+  async function saveCrew() {
+    if (!crewForm.crewName.trim()) { alert("Crew name is required."); return; }
+    if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
+    const payload = crewToDb(crewForm);
+
+    if (editingCrewId) {
+      const { data, error } = await supabase.from("crews").update(payload).eq("id", editingCrewId).select().single();
+      if (error) { console.error(error); alert("Could not update crew."); return; }
+      setCrews((current) => current.map((crew) => (crew.id === editingCrewId ? mapCrewFromDb(data) : crew)));
+    } else {
+      const { data, error } = await supabase.from("crews").insert(payload).select().single();
+      if (error) { console.error(error); alert("Could not save crew."); return; }
+      setCrews((current) => [mapCrewFromDb(data), ...current]);
+    }
+
+    setShowCrewForm(false);
+    setEditingCrewId(null);
+    setCrewForm(blankCrew);
+  }
+  async function deleteCrew(id) {
+    const crew = crews.find((item) => item.id === id);
+    if (!confirm(`Delete ${crew?.crewName || "this crew"}?`)) return;
+    if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
+    const { error } = await supabase.from("crews").delete().eq("id", id);
+    if (error) { console.error(error); alert("Could not delete crew."); return; }
+    setCrews((current) => current.filter((item) => item.id !== id));
+  }
   function addCertification() { const cert = newCertification.trim(); if (!cert) return; if (!certifications.includes(cert)) setCertifications((current) => [...current, cert]); setNewCertification(""); }
   function deleteCertification(cert) { setCertifications((current) => current.filter((item) => item !== cert)); setResources((current) => current.map((resource) => ({ ...resource, certifications: (resource.certifications || []).filter((item) => item !== cert) }))); setProjects((current) => current.map((project) => ({ ...project, specificRequirements: (project.specificRequirements || []).filter((item) => item !== cert) }))); }
 
@@ -954,12 +1024,12 @@ export default function App() {
   }
 
   function importResourcesCsv(event) {
-    readCsvFile(event, (rows) => {
+    readCsvFile(event, async (rows) => {
+      if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
       const imported = rows.map((row) => ({
-        id: crypto.randomUUID(),
         name: row.name || "",
-        resourceType: resourceTypes.includes(row.resourcetype) ? row.resourcetype : "Superintendent",
-        homeDivision: divisions.includes(row.homedivision || row.division) ? (row.homedivision || row.division) : "Hardscape",
+        resource_type: resourceTypes.includes(row.resourcetype) ? row.resourcetype : "Superintendent",
+        home_division: divisions.includes(row.homedivision || row.division) ? (row.homedivision || row.division) : "Hardscape",
         phone: row.phone || "",
         email: row.email || "",
         certifications: splitList(row.certifications),
@@ -969,19 +1039,25 @@ export default function App() {
         }).filter((pto) => pto.ptoId || pto.start || pto.end),
         status: row.status || "Active",
       })).filter((resource) => resource.name);
-      if (imported.length) setResources((current) => [...imported, ...current]);
+      if (!imported.length) { alert("No valid resources found in CSV."); return; }
+      const { data, error } = await supabase.from("resources").insert(imported).select();
+      if (error) { console.error(error); alert("Could not import resources."); return; }
+      setResources((current) => [...(data || []).map(mapResourceFromDb), ...current]);
     });
   }
 
   function importCrewsCsv(event) {
-    readCsvFile(event, (rows) => {
+    readCsvFile(event, async (rows) => {
+      if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
       const imported = rows.map((row) => ({
-        id: crypto.randomUUID(),
-        crewName: row.crewname || row.crew || "",
-        foremanName: row.foremanname || row.foreman || "",
+        crew_name: row.crewname || row.crew || "",
+        foreman_name: row.foremanname || row.foreman || "",
         specialty: splitList(row.specialty || row.certifications),
-      })).filter((crew) => crew.crewName);
-      if (imported.length) setCrews((current) => [...imported, ...current]);
+      })).filter((crew) => crew.crew_name);
+      if (!imported.length) { alert("No valid crews found in CSV."); return; }
+      const { data, error } = await supabase.from("crews").insert(imported).select();
+      if (error) { console.error(error); alert("Could not import crews."); return; }
+      setCrews((current) => [...(data || []).map(mapCrewFromDb), ...current]);
     });
   }
 
