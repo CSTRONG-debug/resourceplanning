@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, CalendarDays, Users, BriefcaseBusiness, X, ZoomIn, Settings, Search, FolderKanban, ClipboardCheck } from "lucide-react";
+import { supabase } from "./lib/supabase";
 
 const PROJECTS_KEY = "ggc_resource_planning_projects";
 const ASSIGNMENTS_KEY = "ggc_resource_planning_assignments";
@@ -591,6 +592,20 @@ export default function App() {
     return { resource, items };
   }).filter(Boolean);
 
+  useEffect(() => {
+  async function testConnection() {
+    if (!supabase) {
+      console.warn("SUPABASE TEST: missing URL or anon key");
+      return;
+    }
+
+    const { data, error } = await supabase.from("projects").select("*");
+    console.log("SUPABASE TEST:", data, error);
+  }
+
+  testConnection();
+}, []);
+  
   function openAddProjectForm() { setEditingProjectId(null); setProjectForm(blankProject); setShowProjectForm(true); }
   function openEditProjectForm(project) { setEditingProjectId(project.id); setProjectForm({ ...blankProject, ...project }); setShowProjectForm(true); }
   function saveProject() { if (!projectForm.name.trim()) { alert("Project name is required."); return; } if (editingProjectId) setProjects((current) => current.map((project) => (project.id === editingProjectId ? { ...projectForm, id: editingProjectId } : project))); else setProjects((current) => [{ ...projectForm, id: crypto.randomUUID() }, ...current]); setShowProjectForm(false); setEditingProjectId(null); setProjectForm(blankProject); }
