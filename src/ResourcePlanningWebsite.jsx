@@ -338,12 +338,6 @@ export function SearchableCrewSelect({ value, onChange, crews }) {
 }
 
 
-  CertificationPicker,
-  SearchableProjectSelect,
-  SearchableResourceSelect,
-  SearchableCrewSelect,
-} from "../ui/index";
-
 // ─── ProjectForm ──────────────────────────────────────────────────────────────
 
 export function ProjectForm({ form, setForm, onSave, onCancel, editing, certifications }) {
@@ -673,15 +667,6 @@ export function CrewForm({ form, setForm, certifications, onSave, onCancel, edit
   );
 }
 
-
-  divisionStyles, pendingDivisionStyles,
-  divisionSvgColors, pendingDivisionSvgColors, divisions,
-} from "../../constants";
-  toDate, addDays, formatDate, formatTick,
-  timelinePercent, timelineSpanPercent,
-  rangesOverlap, getPeriodEnd,
-  getAssignmentPeopleLabel, getCrewDisplayName, getAssignmentCrewIds,
-} from "../../utils";
 
 // ─── GanttHeader ──────────────────────────────────────────────────────────────
 
@@ -1896,3 +1881,4 @@ export default function App() {
     </main>
   );
 }
+
