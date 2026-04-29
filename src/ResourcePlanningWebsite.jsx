@@ -114,10 +114,26 @@ const blankCrew = {
 const zoomModes = ["Days", "Weeks", "Months", "Quarters", "Years"];
 
 function toDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    const date = new Date(value);
+    date.setHours(12, 0, 0, 0);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  // Treat date inputs like 2026-05-17 as LOCAL dates, not UTC dates.
+  // This prevents one-day shifts and keeps PTO bars on their exact selected dates.
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(year, month - 1, day, 12, 0, 0, 0);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
   const date = new Date(value);
+  date.setHours(12, 0, 0, 0);
   return Number.isNaN(date.getTime()) ? null : date;
 }
-function addDays(date, days) { const result = new Date(date); result.setDate(result.getDate() + days); return result; }
+function addDays(date, days) { const result = toDate(date) || new Date(date); result.setDate(result.getDate() + days); result.setHours(12, 0, 0, 0); return result; }
 function addBusinessDaysInclusive(startDate, businessDays) {
   const start = startDate instanceof Date ? new Date(startDate) : new Date(startDate);
   const daysToAdd = Math.max(1, Math.ceil(Number(businessDays) || 0));
@@ -265,6 +281,37 @@ function buildTimeline(items, zoom) {
   return { minDate: min, maxDate: max, currentDate: window.today, totalDays: daysBetween(min, max), ticks, width };
 }
 
+function buildSinglePeriodTimeline(periodStart, zoom) {
+  const start = periodStart instanceof Date ? new Date(periodStart) : toDate(periodStart);
+  if (!start) return buildTimeline([], zoom);
+
+  const end = getPeriodEnd(start, zoom);
+  const ticks = [];
+  let cursor = new Date(start);
+
+  while (cursor <= end && ticks.length < 500) {
+    ticks.push(new Date(cursor));
+    if (zoom === "Days") cursor = addDays(cursor, 1);
+    else if (zoom === "Weeks") cursor = addDays(cursor, 7);
+    else if (zoom === "Months") cursor = addMonths(cursor, 1);
+    else if (zoom === "Quarters") cursor = addMonths(cursor, 3);
+    else cursor = addMonths(cursor, 12);
+  }
+
+  // One selected period should still have enough width to read bars clearly,
+  // but it should not show adjacent weeks/months/quarters/years.
+  const width = Math.max(1160, Math.max(1, ticks.length) * getTimelineUnitWidth(zoom));
+
+  return {
+    minDate: start,
+    maxDate: end,
+    currentDate: new Date(),
+    totalDays: daysBetween(start, end),
+    ticks,
+    width,
+  };
+}
+
 function itemOverlapsTimeline(startValue, endValue, timeline) {
   const start = toDate(startValue);
   const end = toDate(endValue);
@@ -291,7 +338,7 @@ function timelineSpanPercent(startValue, endValue, timeline) {
   const rawRight = timelinePercent(endExclusive, timeline);
   const left = Math.max(0, Math.min(100, rawLeft));
   const right = Math.max(0, Math.min(100, rawRight));
-  return { left, width: Math.max(1, right - left) };
+  return { left, width: Math.max(0.05, right - left) };
 }
 
 function StatCard({ icon: Icon, label, value }) {
@@ -711,8 +758,14 @@ function GanttSegmentBar({ item, timeline, label, conflict = false }) {
 }
 
 function PtoOverlayBar({ pto, timeline }) {
-  const { left, width } = timelineSpanPercent(pto.start, pto.end, timeline);
-  return <div className="absolute top-0 z-20 h-11 overflow-hidden rounded-xl border-2 border-black bg-white/70 px-3 text-xs font-bold leading-10 text-black shadow" style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(0,0,0,.95) 8px 10px)", backgroundSize: "14px 14px" }} title={`PTO ${pto.ptoId || ""}: ${formatDate(pto.start)} - ${formatDate(pto.end)}`}>PTO {pto.ptoId || ""}</div>;
+  const start = toDate(pto.start);
+  const end = toDate(pto.end);
+  if (!start || !end || !rangesOverlap(start, addDays(end, 1), timeline.minDate, addDays(timeline.maxDate, 1))) return null;
+
+  const { left, width } = timelineSpanPercent(start, end, timeline);
+  const exactWidth = Math.max(0.15, width);
+
+  return <div className="absolute top-0 z-20 h-11 overflow-hidden rounded-xl border-2 border-black bg-white/70 px-3 text-xs font-bold leading-10 text-black shadow" style={{ left: `${left}%`, width: `${exactWidth}%`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(0,0,0,.95) 8px 10px)", backgroundSize: "14px 14px" }} title={`PTO ${pto.ptoId || ""}: ${formatDate(pto.start)} - ${formatDate(pto.end)}`}>PTO {pto.ptoId || ""}</div>;
 }
 
 function ProjectGanttRow({ assignment, project, items, timeline, crews }) {
@@ -1198,16 +1251,24 @@ export default function App() {
     ? timelineVisibleItems.filter((item) => [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].includes(focusedResource.name))
     : [];
 
-  const demandDrilldownItems = demandDrilldown
+  const demandDrilldownTimeline = demandDrilldown
+    ? buildSinglePeriodTimeline(demandDrilldown.period.tick, zoom)
+    : null;
+
+  const demandDrilldownItems = demandDrilldown && demandDrilldownTimeline
     ? timelineVisibleItems.filter((item) => {
-        const periodStart = demandDrilldown.period.tick;
-        const periodEnd = getPeriodEnd(periodStart, zoom);
+        const periodStart = demandDrilldownTimeline.minDate;
+        const periodEnd = demandDrilldownTimeline.maxDate;
         const itemStart = toDate(item.start);
         const itemEnd = toDate(item.end);
         const matchesDivision = item.project.division === demandDrilldown.segment.division;
         const matchesStatus = demandDrilldown.segment.type === "Pending"
           ? item.project.status === "Pending Award"
           : item.project.status !== "Pending Award" && item.project.status !== "Complete";
+
+        // Show assignments active during the selected bar's exact time bucket only.
+        // The pop-out timeline is also limited to that bucket, so clicking one week
+        // only shows that one week instead of the full schedule.
         return itemStart && itemEnd && matchesDivision && matchesStatus && rangesOverlap(itemStart, addDays(itemEnd, 1), periodStart, periodEnd);
       })
     : [];
@@ -1803,12 +1864,12 @@ window.onload = function () { setTimeout(function () { window.print(); }, 350); 
         </section>
       )}
 
-      {demandDrilldown && <div className="fixed inset-0 z-[80] bg-slate-950/70 p-4"><div className="h-full overflow-auto rounded-2xl bg-white p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-2xl font-bold">{demandDrilldown.segment.division} {demandDrilldown.segment.type} Assignments</h2><p className="text-sm text-slate-500">{demandDrilldown.period.label} • Click a resource below to drill into conflicts</p></div><button onClick={() => setDemandDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div><div className="mb-4 flex flex-wrap gap-2">{demandDrilldownResources.length ? demandDrilldownResources.map((resource) => <button key={resource.id} onClick={() => setFocusedResource(resource)} className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-emerald-50">{resource.name} • View Conflicts</button>) : <span className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-600">No resources assigned</span>}</div><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>{demandDrilldownItems.map((item) => <div key={`demand-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><button onClick={() => { setPage("projects"); setDemandDrilldown(null); }} className="font-semibold text-slate-900 hover:text-emerald-700">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</button><p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} - {formatDate(item.end)}</p><p className="mt-1 text-xs text-slate-500">{getAssignmentPeopleLabel(item.assignment, crews) || "Unassigned"}</p></div><div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}><GanttSegmentBar item={item} timeline={timeline} label={getAssignmentPeopleLabel(item.assignment, crews)} /></div></div>)}</div></div></div>}
+      {demandDrilldown && <div className="fixed inset-0 z-[80] bg-slate-950/70 p-4"><div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5"><div><h2 className="text-2xl font-bold">{demandDrilldown.segment.division} {demandDrilldown.segment.type} Assignments</h2><p className="text-sm text-slate-500">{demandDrilldown.period.label} • Click a resource below to drill into conflicts</p></div><button onClick={() => setDemandDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div><div className="flex-1 overflow-auto p-5"><div className="mb-4 flex flex-wrap gap-2">{demandDrilldownResources.length ? demandDrilldownResources.map((resource) => <button key={resource.id} onClick={() => setFocusedResource(resource)} className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-emerald-50">{resource.name} • View Conflicts</button>) : <span className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-600">No resources assigned</span>}</div><GanttHeader timeline={demandDrilldownTimeline || timeline} zoom={zoom} /><div className="mt-3 space-y-3" style={{ minWidth: `${(demandDrilldownTimeline || timeline).width + 280}px` }}>{demandDrilldownItems.map((item) => <div key={`demand-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><button onClick={() => { setPage("projects"); setDemandDrilldown(null); }} className="font-semibold text-slate-900 hover:text-emerald-700">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</button><p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} - {formatDate(item.end)}</p><p className="mt-1 text-xs text-slate-500">{getAssignmentPeopleLabel(item.assignment, crews) || "Unassigned"}</p></div><div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${(demandDrilldownTimeline || timeline).width}px` }}><GanttSegmentBar item={item} timeline={demandDrilldownTimeline || timeline} label={getAssignmentPeopleLabel(item.assignment, crews)} /></div></div>)}</div></div></div></div>}
 
-      {focusedResource && <div className="fixed inset-0 z-[75] bg-slate-950/70 p-4"><div className="h-full overflow-auto rounded-2xl bg-white p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-2xl font-bold">{focusedResource.name} Conflict / PTO Breakout</h2><p className="text-sm text-slate-500">Each assignment is shown on a separate line. PTO is shown on its own row with the same black diagonal pattern used in the Resource Gantt view.</p></div><button onClick={() => setFocusedResource(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>{(focusedResource.pto || []).filter((pto) => pto.start && pto.end && itemOverlapsTimeline(pto.start, pto.end, timeline)).length > 0 && <div className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><p className="font-semibold text-slate-900">PTO</p><p className="mt-1 text-xs text-slate-500">{(focusedResource.pto || []).filter((pto) => pto.start && pto.end && itemOverlapsTimeline(pto.start, pto.end, timeline)).length} PTO item{(focusedResource.pto || []).filter((pto) => pto.start && pto.end && itemOverlapsTimeline(pto.start, pto.end, timeline)).length === 1 ? "" : "s"}</p></div><div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>{(focusedResource.pto || []).filter((pto) => pto.start && pto.end && itemOverlapsTimeline(pto.start, pto.end, timeline)).map((pto) => <PtoOverlayBar key={`focused-pto-${focusedResource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />)}</div></div>}{focusedResourceItems.map((item) => <div key={`focused-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p><p className="mt-1 text-xs text-slate-500">{item.project.division} • {formatDate(item.start)} - {formatDate(item.end)}</p></div><div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}><GanttSegmentBar item={item} timeline={timeline} label={item.project.name} /></div></div>)}{!focusedResourceItems.length && !(focusedResource.pto || []).some((pto) => pto.start && pto.end && itemOverlapsTimeline(pto.start, pto.end, timeline)) && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments or PTO are visible in the current timeline window.</div>}</div></div></div>}
+      {focusedResource && <div className="fixed inset-0 z-[90] bg-slate-950/70 p-4"><div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5"><div><h2 className="text-2xl font-bold">{focusedResource.name} Conflict / PTO Breakout</h2><p className="text-sm text-slate-500">Each assignment is shown on a separate line. PTO is shown on its own row with the same black diagonal pattern used in the Resource Gantt view.</p></div><button onClick={() => setFocusedResource(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div><div className="flex-1 overflow-auto p-5"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>{(focusedResource.pto || []).filter((pto) => pto.start && pto.end && itemOverlapsTimeline(pto.start, pto.end, timeline)).length > 0 && <div className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><p className="font-semibold text-slate-900">PTO</p><p className="mt-1 text-xs text-slate-500">{(focusedResource.pto || []).filter((pto) => pto.start && pto.end && itemOverlapsTimeline(pto.start, pto.end, timeline)).length} PTO item{(focusedResource.pto || []).filter((pto) => pto.start && pto.end && itemOverlapsTimeline(pto.start, pto.end, timeline)).length === 1 ? "" : "s"}</p></div><div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>{(focusedResource.pto || []).filter((pto) => pto.start && pto.end && itemOverlapsTimeline(pto.start, pto.end, timeline)).map((pto) => <PtoOverlayBar key={`focused-pto-${focusedResource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />)}</div></div>}{focusedResourceItems.map((item) => <div key={`focused-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5"><div className="text-left"><p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p><p className="mt-1 text-xs text-slate-500">{item.project.division} • {formatDate(item.start)} - {formatDate(item.end)}</p></div><div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}><GanttSegmentBar item={item} timeline={timeline} label={item.project.name} /></div></div>)}{!focusedResourceItems.length && !(focusedResource.pto || []).some((pto) => pto.start && pto.end && itemOverlapsTimeline(pto.start, pto.end, timeline)) && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments or PTO are visible in the current timeline window.</div>}</div></div></div></div>}
       {showUserSettings && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4"><div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-bold">User Settings</h2><p className="text-sm text-slate-500">Add users who can log in to this system.</p></div><button onClick={() => setShowUserSettings(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button></div><div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]"><input placeholder="Username" value={newUserForm.username} onChange={(e) => setNewUserForm((current) => ({ ...current, username: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /><input placeholder="Password" type="password" value={newUserForm.password} onChange={(e) => setNewUserForm((current) => ({ ...current, password: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" /><button onClick={addAppUser} className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800">Add User</button></div><div className="mt-5 rounded-xl border border-slate-200"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Username</th><th className="p-3">Created</th><th className="p-3 text-right">Action</th></tr></thead><tbody>{appUsers.map((user) => <tr key={user.username} className="border-t border-slate-200"><td className="p-3 font-semibold">{user.username}</td><td className="p-3">{user.created_at ? formatDate(user.created_at) : ""}</td><td className="p-3 text-right"><button onClick={() => deleteAppUser(user.username)} className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50">Delete</button></td></tr>)}</tbody></table></div></div></div>}
 
-      {expandedView && <div className="fixed inset-0 z-[60] bg-slate-950/70 p-4"><div className="h-full overflow-auto rounded-2xl bg-white p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><h2 className="text-2xl font-bold">{expandedView === "project" ? "Project Assignment Gantt View" : expandedView === "resource" ? "Resource Gantt View" : "Resource Demand Graph"}</h2><button onClick={() => setExpandedView(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div>{expandedView === "project" && <div id="expanded-project-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>{projectGanttRows.map((row) => <ProjectGanttRow key={row.project.id} assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} />)}</div></div>}{expandedView === "resource" && <div id="expanded-resource-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}</div></div>}{expandedView === "demand" && <ResourceDemandChart enlarged items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} onBarClick={setDemandDrilldown} />}</div></div>}
+      {expandedView && <div className="fixed inset-0 z-[60] bg-slate-950/70 p-4"><div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5"><h2 className="text-2xl font-bold">{expandedView === "project" ? "Project Assignment Gantt View" : expandedView === "resource" ? "Resource Gantt View" : "Resource Demand Graph"}</h2><button onClick={() => setExpandedView(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button></div><div className="flex-1 overflow-auto p-5">{expandedView === "project" && <div id="expanded-project-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>{projectGanttRows.map((row) => <ProjectGanttRow key={row.project.id} assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} />)}</div></div>}{expandedView === "resource" && <div id="expanded-resource-gantt"><GanttHeader timeline={timeline} zoom={zoom} /><div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>{resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}</div></div>}{expandedView === "demand" && <ResourceDemandChart enlarged items={timelineVisibleItems} timeline={timeline} zoom={zoom} totalResources={resources.filter((resource) => dashboardResourceTypeFilter.includes(resource.resourceType) && demandHomeDivisionFilter.includes(resource.homeDivision)).length} onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")} onBarClick={setDemandDrilldown} />}</div></div></div>}
 
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} editing={Boolean(editingProjectId)} certifications={certifications} />}
       {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={crews} />}
