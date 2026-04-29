@@ -1048,18 +1048,28 @@ export default function App() {
   const [demandPeriodDrilldown, setDemandPeriodDrilldown] = useState(null);
   const [showAssignments, setShowAssignments] = useState(true);
 
+  // ── Forecast state ─────────────────────────────────────────────────────────
+  const [forecastData, setForecastData] = useState({}); // { [projectId]: { contractValue, spreadRule, actuals, perProjectLockThrough } }
+  const [globalLockThrough, setGlobalLockThrough] = useState(null); // "YYYY-MM" or null
+  const [forecastYear, setForecastYear] = useState(new Date().getFullYear());
+  const [forecastDivisionFilter, setForecastDivisionFilter] = useState([...divisions]);
+  const [showForecastSettings, setShowForecastSettings] = useState(false);
+  const [forecastSettingsId, setForecastSettingsId] = useState(null);
+
   // ── Initial Supabase load ──────────────────────────────────────────────────
   useEffect(() => {
     async function loadSupabaseData() {
       if (!supabase) { console.warn("Supabase not connected. Check Vercel environment variables."); return; }
 
-      const [projectsRes, resourcesRes, crewsRes, assignmentsRes, mobilizationsRes, certsRes] = await Promise.all([
+      const [projectsRes, resourcesRes, crewsRes, assignmentsRes, mobilizationsRes, certsRes, forecastRes, settingsRes] = await Promise.all([
         supabase.from("projects").select("*").order("created_at", { ascending: false }),
         supabase.from("resources").select("*").order("created_at", { ascending: false }),
         supabase.from("crews").select("*").order("created_at", { ascending: false }),
         supabase.from("assignments").select("*").order("created_at", { ascending: false }),
         supabase.from("mobilizations").select("*"),
         supabase.from("certifications").select("*").order("name", { ascending: true }),
+        supabase.from("forecast").select("*"),
+        supabase.from("forecast_settings").select("*").limit(1),
       ]);
 
       if (projectsRes.error) console.error("Projects load error:", projectsRes.error);
@@ -1076,6 +1086,26 @@ export default function App() {
       setCrewGanttFilter((current) => current.length ? current : mappedCrews.map((c) => c.id));
       setAssignments((assignmentsRes.data || []).map((a) => mapAssignmentFromDb(a, mobilizationsRes.data || [])));
       if (certsRes.data?.length) setCertifications(certsRes.data.map(mapCertificationFromDb));
+
+      // Load forecast rows into a map keyed by project_id
+      if (forecastRes.data && !forecastRes.error) {
+        const fMap = {};
+        forecastRes.data.forEach((row) => {
+          fMap[row.project_id] = {
+            id: row.id,
+            contractValue: row.contract_value || 0,
+            spreadRule: row.spread_rule || "even",
+            actuals: row.actuals || {},
+            perProjectLockThrough: row.per_project_lock_through || null,
+          };
+        });
+        setForecastData(fMap);
+      }
+      if (settingsRes.data?.length && !settingsRes.error) {
+        const s = settingsRes.data[0];
+        setForecastSettingsId(s.id);
+        setGlobalLockThrough(s.global_lock_through || null);
+      }
     }
     loadSupabaseData();
   }, []);
@@ -1316,6 +1346,166 @@ export default function App() {
     setProjects((current) => current.map((p) => ({ ...p, specificRequirements: (p.specificRequirements || []).filter((c) => c !== cert) })));
   }
 
+  // ── Forecast helpers ───────────────────────────────────────────────────────
+
+  // Returns the months (YYYY-MM strings) a project's mobilizations overlap
+  function getProjectMonths(projectId) {
+    const projectAssignments = assignments.filter((a) => a.projectId === projectId);
+    const months = new Set();
+    projectAssignments.forEach((a) => {
+      (a.mobilizations || []).forEach((mob) => {
+        if (!mob.start || !mob.end) return;
+        const start = toDate(mob.start);
+        const end = toDate(mob.end);
+        if (!start || !end) return;
+        let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+        const endMonth = new Date(end.getFullYear(), end.getMonth(), 1);
+        while (cursor <= endMonth) {
+          months.add(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`);
+          cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+        }
+      });
+    });
+    return [...months].sort();
+  }
+
+  // Spread rules: distribute contractValue across active months
+  function spreadRevenue(contractValue, activeMonths, rule) {
+    const n = activeMonths.length;
+    if (n === 0 || !contractValue) return {};
+    const result = {};
+    if (rule === "even") {
+      const monthly = contractValue / n;
+      activeMonths.forEach((m) => { result[m] = monthly; });
+    } else if (rule === "front") {
+      // Front-loaded: weights 1/(i+1) normalized
+      const weights = activeMonths.map((_, i) => 1 / (i + 1));
+      const total = weights.reduce((s, w) => s + w, 0);
+      activeMonths.forEach((m, i) => { result[m] = (weights[i] / total) * contractValue; });
+    } else if (rule === "back") {
+      // Back-loaded: reverse front-loaded
+      const weights = activeMonths.map((_, i) => 1 / (activeMonths.length - i));
+      const total = weights.reduce((s, w) => s + w, 0);
+      activeMonths.forEach((m, i) => { result[m] = (weights[i] / total) * contractValue; });
+    } else if (rule === "scurve") {
+      // S-curve: bell-shaped weights peaked in the middle
+      const mid = (n - 1) / 2;
+      const sigma = n / 4;
+      const weights = activeMonths.map((_, i) => Math.exp(-Math.pow(i - mid, 2) / (2 * sigma * sigma)));
+      const total = weights.reduce((s, w) => s + w, 0);
+      activeMonths.forEach((m, i) => { result[m] = (weights[i] / total) * contractValue; });
+    }
+    return result;
+  }
+
+  // Get forecast row for a project (with defaults)
+  function getForecastRow(projectId) {
+    return forecastData[projectId] || { contractValue: 0, spreadRule: "even", actuals: {}, perProjectLockThrough: null };
+  }
+
+  // Check if a month is locked (global OR per-project)
+  function isMonthLocked(monthKey, projectId) {
+    const row = getForecastRow(projectId);
+    const perLock = row.perProjectLockThrough;
+    if (globalLockThrough && monthKey <= globalLockThrough) return true;
+    if (perLock && monthKey <= perLock) return true;
+    return false;
+  }
+
+  // Get the value to display for a month — actual if exists, else spread
+  function getMonthValue(projectId, monthKey, spread) {
+    const row = getForecastRow(projectId);
+    if (row.actuals[monthKey] !== undefined) return { value: row.actuals[monthKey], isActual: true };
+    return { value: spread[monthKey] || 0, isActual: false };
+  }
+
+  // Save/upsert a forecast row for a project
+  async function saveForecastRow(projectId, patch) {
+    if (!supabase) { alert("Supabase not connected."); return; }
+    const existing = forecastData[projectId];
+    const newRow = { ...getForecastRow(projectId), ...patch };
+    if (existing?.id) {
+      const { error } = await supabase.from("forecast").update({
+        contract_value: newRow.contractValue,
+        spread_rule: newRow.spreadRule,
+        actuals: newRow.actuals,
+        per_project_lock_through: newRow.perProjectLockThrough || null,
+        updated_at: new Date().toISOString(),
+      }).eq("id", existing.id);
+      if (error) { console.error(error); alert("Could not save forecast."); return; }
+    } else {
+      const { data, error } = await supabase.from("forecast").insert({
+        project_id: projectId,
+        contract_value: newRow.contractValue,
+        spread_rule: newRow.spreadRule,
+        actuals: newRow.actuals,
+        per_project_lock_through: newRow.perProjectLockThrough || null,
+      }).select().single();
+      if (error) { console.error(error); alert("Could not save forecast."); return; }
+      newRow.id = data.id;
+    }
+    setForecastData((prev) => ({ ...prev, [projectId]: newRow }));
+  }
+
+  // Save actual revenue for a specific month
+  async function saveActual(projectId, monthKey, value) {
+    const row = getForecastRow(projectId);
+    const newActuals = { ...row.actuals };
+    if (value === "" || value === null || isNaN(Number(value))) {
+      delete newActuals[monthKey];
+    } else {
+      newActuals[monthKey] = Number(value);
+    }
+    await saveForecastRow(projectId, { actuals: newActuals });
+  }
+
+  // Save global lock setting
+  async function saveGlobalLock(monthKey) {
+    if (!supabase) { alert("Supabase not connected."); return; }
+    const val = monthKey || null;
+    if (forecastSettingsId) {
+      await supabase.from("forecast_settings").update({ global_lock_through: val, updated_at: new Date().toISOString() }).eq("id", forecastSettingsId);
+    } else {
+      const { data } = await supabase.from("forecast_settings").insert({ global_lock_through: val }).select().single();
+      if (data) setForecastSettingsId(data.id);
+    }
+    setGlobalLockThrough(val);
+  }
+
+  // CSV export for forecast
+  function exportForecastCsv() {
+    const months = Array.from({ length: 12 }, (_, i) => `${forecastYear}-${String(i + 1).padStart(2, "0")}`);
+    const headers = ["Project #", "Project Name", "Division", "Status", "Contract Value", "Spread Rule", "Per-Project Lock", ...months.map((m) => m), "Year Total", "Thereafter"];
+    const forecastProjects = projects.filter((p) => forecastDivisionFilter.includes(p.division) && p.status !== "Complete");
+    const rows = forecastProjects.map((p) => {
+      const row = getForecastRow(p.id);
+      const allMonths = getProjectMonths(p.id);
+      const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
+      const yearValues = months.map((m) => getMonthValue(p.id, m, spread).value);
+      const yearTotal = yearValues.reduce((s, v) => s + v, 0);
+      const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + (spread[m] || 0), 0);
+      return [p.projectNumber, p.name, p.division, p.status, row.contractValue, row.spreadRule, row.perProjectLockThrough || "", ...yearValues.map((v) => v.toFixed(2)), yearTotal.toFixed(2), thereafter.toFixed(2)];
+    });
+    const csv = [headers, ...rows].map((r) => r.map(csvEscape).join(",")).join("\n");
+    downloadTextFile(`ggc-forecast-${forecastYear}.csv`, csv);
+  }
+
+  // CSV import for forecast
+  function importForecastCsv(event) {
+    readCsvFile(event, async (rows) => {
+      for (const row of rows) {
+        const projectNum = row.projectnumber || row.project || "";
+        const project = projects.find((p) => p.projectNumber === projectNum || p.name === (row.projectname || row.name || ""));
+        if (!project) continue;
+        const contractValue = parseFloat(row.contractvalue || row.contract || 0) || 0;
+        const spreadRule = ["even", "front", "back", "scurve"].includes(row.spreadrule) ? row.spreadrule : undefined;
+        const patch = { contractValue };
+        if (spreadRule) patch.spreadRule = spreadRule;
+        await saveForecastRow(project.id, patch);
+      }
+    });
+  }
+
   // ── Auth ───────────────────────────────────────────────────────────────────
   async function handleLogin(event) {
     event.preventDefault();
@@ -1489,7 +1679,7 @@ export default function App() {
               <button onClick={() => setShowUserSettings(true)} className="rounded-lg p-1 hover:bg-slate-200" title="User settings"><Settings size={16} /></button>
               <button onClick={logout} className="rounded-lg px-2 py-1 text-xs text-red-700 hover:bg-red-50">Logout</button>
             </div>
-            {["dashboard", "projects", "resources", "crews"].map((p) => (
+            {["dashboard", "projects", "resources", "crews", "forecast"].map((p) => (
               <button key={p} onClick={() => setPage(p)} className={`rounded-xl px-4 py-3 font-semibold shadow-sm capitalize ${page === p ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>{p}</button>
             ))}
             {page === "dashboard" && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white shadow-sm hover:bg-emerald-800"><ClipboardCheck size={18} /> Assign</button>}
@@ -2003,11 +2193,238 @@ export default function App() {
         </div>
       )}
 
+      {/* ── Forecast Page ── */}
+      {page === "forecast" && (() => {
+        const months = Array.from({ length: 12 }, (_, i) => ({
+          key: `${forecastYear}-${String(i + 1).padStart(2, "0")}`,
+          label: new Date(forecastYear, i, 1).toLocaleString("default", { month: "short" }),
+        }));
+        const forecastProjects = projects
+          .filter((p) => forecastDivisionFilter.includes(p.division) && p.status !== "Complete")
+          .sort((a, b) => (a.projectNumber || "").localeCompare(b.projectNumber || "", undefined, { numeric: true }));
+
+        // Build per-project spread and values
+        const projectRows = forecastProjects.map((p) => {
+          const row = getForecastRow(p.id);
+          const allMonths = getProjectMonths(p.id);
+          const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
+          const monthValues = months.map((m) => ({ ...getMonthValue(p.id, m.key, spread), key: m.key, locked: isMonthLocked(m.key, p.id) }));
+          const yearTotal = monthValues.reduce((s, mv) => s + mv.value, 0);
+          const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + (spread[m] || 0), 0);
+          const totalRevenue = row.contractValue;
+          const earnedToDate = Object.values(row.actuals).reduce((s, v) => s + v, 0);
+          return { project: p, row, spread, monthValues, yearTotal, thereafter, totalRevenue, earnedToDate };
+        });
+
+        // Column totals
+        const monthTotals = months.map((m, i) => projectRows.reduce((s, r) => s + r.monthValues[i].value, 0));
+        const yearGrandTotal = monthTotals.reduce((s, v) => s + v, 0);
+        const thereafterTotal = projectRows.reduce((s, r) => s + r.thereafter, 0);
+        // Cumulative running totals
+        const cumulativeTotals = monthTotals.map((_, i) => monthTotals.slice(0, i + 1).reduce((s, v) => s + v, 0));
+
+        const fmt = (v) => v == null ? "" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
+
+        return (
+          <section className="mx-auto max-w-[1600px] space-y-4 px-4 py-6">
+            {/* Header controls */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+                <button onClick={() => setForecastYear((y) => y - 1)} className="rounded-lg px-2 py-1 text-slate-600 hover:bg-slate-100 font-bold">←</button>
+                <span className="text-lg font-bold text-slate-900 w-16 text-center">{forecastYear}</span>
+                <button onClick={() => setForecastYear((y) => y + 1)} className="rounded-lg px-2 py-1 text-slate-600 hover:bg-slate-100 font-bold">→</button>
+              </div>
+              <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                {divisions.map((d) => {
+                  const active = forecastDivisionFilter.includes(d);
+                  return <button key={d} onClick={() => setForecastDivisionFilter((prev) => toggleListValue(prev, d))} className={`rounded-full px-3 py-1 text-xs font-semibold ${active ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"}`}>{d}</button>;
+                })}
+              </div>
+              <button onClick={exportForecastCsv} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">Export CSV</button>
+              <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm cursor-pointer">
+                Import CSV<input type="file" accept=".csv" onChange={importForecastCsv} className="hidden" />
+              </label>
+              <button onClick={() => setShowForecastSettings(true)} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">
+                <Settings size={16} /> Settings {globalLockThrough ? `· 🔒 ${globalLockThrough}` : ""}
+              </button>
+            </div>
+
+            {/* Main forecast table */}
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <table className="w-full text-left text-sm" style={{ minWidth: "1400px" }}>
+                <thead>
+                  <tr className="bg-slate-100 text-slate-600 border-b border-slate-200">
+                    <th className="sticky left-0 z-10 bg-slate-100 p-3 min-w-[200px]">Project</th>
+                    <th className="p-3 min-w-[90px]">Division</th>
+                    <th className="p-3 min-w-[120px]">Contract Value</th>
+                    <th className="p-3 min-w-[110px]">Spread Rule</th>
+                    <th className="p-3 min-w-[100px]">Per-Project Lock</th>
+                    {months.map((m) => (
+                      <th key={m.key} className={`p-3 text-right min-w-[90px] ${globalLockThrough && m.key <= globalLockThrough ? "bg-amber-50" : ""}`}>
+                        {m.label} {globalLockThrough && m.key <= globalLockThrough ? "🔒" : ""}
+                      </th>
+                    ))}
+                    <th className="p-3 text-right min-w-[100px] bg-slate-200">Thereafter</th>
+                    <th className="p-3 text-right min-w-[100px] bg-slate-200">Year Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {projectRows.map(({ project: p, row, monthValues, yearTotal, thereafter }) => (
+                    <tr key={p.id} className="border-t border-slate-100 hover:bg-slate-50 group">
+                      <td className="sticky left-0 z-10 bg-white group-hover:bg-slate-50 p-3">
+                        <p className="font-semibold text-slate-900">{p.projectNumber ? `${p.projectNumber} - ` : ""}{p.name}</p>
+                        <p className="text-xs text-slate-400">{p.status}</p>
+                      </td>
+                      <td className="p-3">
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold text-white ${divisionStyles[p.division] || "bg-slate-500"}`}>{p.division}</span>
+                      </td>
+                      {/* Contract value — inline editable */}
+                      <td className="p-3">
+                        <input
+                          type="number"
+                          className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-right text-sm outline-none focus:border-emerald-500 focus:bg-white"
+                          defaultValue={row.contractValue || ""}
+                          placeholder="0"
+                          onBlur={(e) => saveForecastRow(p.id, { contractValue: parseFloat(e.target.value) || 0 })}
+                        />
+                      </td>
+                      {/* Spread rule */}
+                      <td className="p-3">
+                        <select
+                          className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-sm outline-none focus:border-emerald-500 focus:bg-white"
+                          value={row.spreadRule}
+                          onChange={(e) => saveForecastRow(p.id, { spreadRule: e.target.value })}
+                        >
+                          <option value="even">Even</option>
+                          <option value="front">Front-Loaded</option>
+                          <option value="back">Back-Loaded</option>
+                          <option value="scurve">S-Curve</option>
+                        </select>
+                      </td>
+                      {/* Per-project lock */}
+                      <td className="p-3">
+                        <input
+                          type="month"
+                          className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-xs outline-none focus:border-emerald-500 focus:bg-white"
+                          value={row.perProjectLockThrough || ""}
+                          onChange={(e) => saveForecastRow(p.id, { perProjectLockThrough: e.target.value || null })}
+                        />
+                      </td>
+                      {/* Month cells */}
+                      {monthValues.map((mv) => (
+                        <td key={mv.key} className={`p-1 text-right ${mv.locked ? "bg-amber-50" : ""}`}>
+                          {mv.locked ? (
+                            // Locked month — show actual input if locked, allow editing actuals
+                            <div className="relative">
+                              <input
+                                type="number"
+                                className={`w-full rounded-lg border px-2 py-1 text-right text-xs outline-none focus:border-emerald-500 focus:bg-white ${mv.isActual ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-800" : "border-amber-200 bg-amber-50 text-slate-600"}`}
+                                defaultValue={mv.isActual ? mv.value : ""}
+                                placeholder={mv.value > 0 ? mv.value.toFixed(0) : "Actual"}
+                                onBlur={(e) => saveActual(p.id, mv.key, e.target.value)}
+                              />
+                            </div>
+                          ) : (
+                            // Unlocked — show forecast spread value, allow actual override
+                            <div className="relative group/cell">
+                              {mv.isActual ? (
+                                <input
+                                  type="number"
+                                  className="w-full rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-right text-xs font-semibold text-emerald-800 outline-none focus:border-emerald-500"
+                                  defaultValue={mv.value}
+                                  onBlur={(e) => saveActual(p.id, mv.key, e.target.value)}
+                                />
+                              ) : (
+                                <input
+                                  type="number"
+                                  className="w-full rounded-lg border border-transparent bg-transparent px-2 py-1 text-right text-xs text-slate-700 outline-none hover:border-slate-200 focus:border-emerald-500 focus:bg-white"
+                                  defaultValue={mv.value > 0 ? mv.value.toFixed(0) : ""}
+                                  placeholder={mv.value > 0 ? mv.value.toFixed(0) : "—"}
+                                  onBlur={(e) => saveActual(p.id, mv.key, e.target.value)}
+                                />
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      ))}
+                      <td className="p-3 text-right text-xs text-slate-500 bg-slate-50">{fmt(thereafter)}</td>
+                      <td className="p-3 text-right text-sm font-semibold text-slate-800 bg-slate-50">{fmt(yearTotal)}</td>
+                    </tr>
+                  ))}
+
+                  {projectRows.length === 0 && (
+                    <tr><td colSpan={18} className="p-8 text-center text-slate-400">No active projects match the current division filter.</td></tr>
+                  )}
+
+                  {/* Monthly totals row */}
+                  <tr className="border-t-2 border-slate-300 bg-slate-100 font-semibold text-slate-800">
+                    <td className="sticky left-0 z-10 bg-slate-100 p-3">Monthly Total</td>
+                    <td className="p-3" /><td className="p-3" /><td className="p-3" /><td className="p-3" />
+                    {monthTotals.map((total, i) => (
+                      <td key={months[i].key} className={`p-3 text-right ${globalLockThrough && months[i].key <= globalLockThrough ? "bg-amber-100" : ""}`}>{fmt(total)}</td>
+                    ))}
+                    <td className="p-3 text-right bg-slate-200">{fmt(thereafterTotal)}</td>
+                    <td className="p-3 text-right bg-slate-200">{fmt(yearGrandTotal)}</td>
+                  </tr>
+
+                  {/* Cumulative YTD row */}
+                  <tr className="border-t border-slate-200 bg-emerald-50 text-emerald-900">
+                    <td className="sticky left-0 z-10 bg-emerald-50 p-3 font-semibold">Cumulative YTD</td>
+                    <td className="p-3" /><td className="p-3" /><td className="p-3" /><td className="p-3" />
+                    {cumulativeTotals.map((total, i) => (
+                      <td key={months[i].key} className="p-3 text-right font-medium">{fmt(total)}</td>
+                    ))}
+                    <td className="p-3 bg-emerald-100" />
+                    <td className="p-3 text-right font-bold bg-emerald-100">{fmt(yearGrandTotal)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Legend */}
+            <div className="flex flex-wrap gap-4 text-xs text-slate-500">
+              <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-emerald-100 border border-emerald-300" /> Actual entered</span>
+              <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-amber-50 border border-amber-200" /> Locked month</span>
+              <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-white border border-slate-200" /> Forecast (spread)</span>
+              <span className="text-slate-400">· Click any cell to enter or override a value. Actuals show in green. Locked months still accept actuals.</span>
+            </div>
+          </section>
+        );
+      })()}
+
       {/* Forms */}
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} editing={Boolean(editingProjectId)} certifications={certifications} />}
       {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={crews} />}
       {showResourceForm && <ResourceForm form={resourceForm} setForm={setResourceForm} certifications={certifications} onSave={saveResource} onCancel={() => setShowResourceForm(false)} editing={Boolean(editingResourceId)} />}
       {showCrewForm && <CrewForm form={crewForm} setForm={setCrewForm} certifications={certifications} onSave={saveCrew} onCancel={() => setShowCrewForm(false)} editing={Boolean(editingCrewId)} />}
+
+      {/* ── Forecast Settings Modal ── */}
+      {showForecastSettings && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-5 flex items-center justify-between">
+              <div><h2 className="text-xl font-bold">Forecast Settings</h2><p className="text-sm text-slate-500">Global lock freezes all projects up to that month.</p></div>
+              <button onClick={() => setShowForecastSettings(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+            </div>
+            <label className="block space-y-1">
+              <span className="text-sm font-semibold text-slate-700">Global Lock-Through Month</span>
+              <p className="text-xs text-slate-500">All months up to and including this month will be locked for all projects. Enter as YYYY-MM (e.g. 2025-06) or clear to unlock.</p>
+              <div className="mt-2 flex gap-2">
+                <input
+                  type="month"
+                  className="flex-1 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600"
+                  value={globalLockThrough || ""}
+                  onChange={(e) => setGlobalLockThrough(e.target.value || null)}
+                />
+                <button onClick={() => saveGlobalLock(globalLockThrough)} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save</button>
+                <button onClick={() => saveGlobalLock(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Clear</button>
+              </div>
+            </label>
+            {globalLockThrough && <p className="mt-3 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">🔒 All months through <strong>{globalLockThrough}</strong> are globally locked.</p>}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
+
