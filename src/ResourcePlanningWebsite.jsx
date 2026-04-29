@@ -584,7 +584,11 @@ function AssignmentForm({ form, setForm, onSave, onCancel, editing, resources, p
     const start = toDate(startDate);
     const weeks = Number(durationWeeks);
     if (!start || Number.isNaN(weeks) || weeks <= 0) return "";
-    const end = addDays(start, Math.ceil(weeks * 7) - 1);
+
+    // Duration is based on work weeks only: 1 week = 5 business days.
+    // Example: Monday + 1 week = Friday; Monday + 2 weeks = next Friday.
+    const businessDays = Math.ceil(weeks * 5);
+    const end = addBusinessDaysInclusive(start, businessDays);
     return end.toISOString().slice(0, 10);
   }
   function updateMobilization(id, field, value) {
