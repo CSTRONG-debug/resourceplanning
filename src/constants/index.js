@@ -45,6 +45,7 @@ export const blankProject = {
   division: "Hardscape",
   specificRequirements: [],
   status: "Scheduled",
+  includeInForecast: false,
 };
 
 export const blankAssignment = {
