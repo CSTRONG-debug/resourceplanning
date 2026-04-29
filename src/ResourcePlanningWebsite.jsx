@@ -668,12 +668,35 @@ export default function App() {
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
 
   useEffect(() => {
-    async function testConnection() {
-      const { data, error } = await supabase.from("projects").select("*");
-      console.log("SUPABASE TEST:", data, error);
+    async function loadSupabaseData() {
+      if (!supabase) {
+        console.warn("SUPABASE TEST: missing URL or anon key");
+        return;
+      }
+
+      const [projectsRes, resourcesRes, crewsRes, assignmentsRes, mobilizationsRes] = await Promise.all([
+        supabase.from("projects").select("*").order("created_at", { ascending: false }),
+        supabase.from("resources").select("*").order("created_at", { ascending: false }),
+        supabase.from("crews").select("*").order("created_at", { ascending: false }),
+        supabase.from("assignments").select("*").order("created_at", { ascending: false }),
+        supabase.from("mobilizations").select("*"),
+      ]);
+
+      console.log("SUPABASE TEST:", projectsRes.data, projectsRes.error);
+
+      if (projectsRes.error) console.error("Projects load error:", projectsRes.error);
+      if (resourcesRes.error) console.error("Resources load error:", resourcesRes.error);
+      if (crewsRes.error) console.error("Crews load error:", crewsRes.error);
+      if (assignmentsRes.error) console.error("Assignments load error:", assignmentsRes.error);
+      if (mobilizationsRes.error) console.error("Mobilizations load error:", mobilizationsRes.error);
+
+      setProjects((projectsRes.data || []).map(mapProjectFromDb));
+      setResources((resourcesRes.data || []).map(mapResourceFromDb));
+      setCrews((crewsRes.data || []).map(mapCrewFromDb));
+      setAssignments((assignmentsRes.data || []).map((assignment) => mapAssignmentFromDb(assignment, mobilizationsRes.data || [])));
     }
 
-    testConnection();
+    loadSupabaseData();
   }, []);
 
   
@@ -1087,3 +1110,4 @@ export default function App() {
     </main>
   );
 }
+
