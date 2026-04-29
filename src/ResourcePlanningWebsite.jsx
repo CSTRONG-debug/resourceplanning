@@ -521,11 +521,128 @@ function readCsvFile(event, onRows) {
   reader.readAsText(file);
 }
 
+function mapProjectFromDb(p) {
+  return {
+    id: p.id,
+    projectNumber: p.project_number || "",
+    name: p.name || "",
+    client: p.client || "",
+    address: p.address || "",
+    division: p.division || "Hardscape",
+    specificRequirements: p.specific_requirements || [],
+    status: p.status || "Scheduled",
+  };
+}
+
+function mapResourceFromDb(r) {
+  return {
+    id: r.id,
+    name: r.name || "",
+    resourceType: r.resource_type || "Superintendent",
+    homeDivision: r.home_division || "Hardscape",
+    phone: r.phone || "",
+    email: r.email || "",
+    certifications: r.certifications || [],
+    pto: r.pto || [],
+    status: r.status || "Active",
+  };
+}
+
+function mapCrewFromDb(c) {
+  return {
+    id: c.id,
+    crewName: c.crew_name || "",
+    foremanName: c.foreman_name || "",
+    specialty: c.specialty || [],
+  };
+}
+
+function mapAssignmentFromDb(a, mobilizations = []) {
+  return {
+    id: a.id,
+    projectId: a.project_id || "",
+    projectManager: a.project_manager || "",
+    superintendent: a.superintendent || "",
+    fieldCoordinator: a.field_coordinator || "",
+    fieldEngineer: a.field_engineer || "",
+    safety: a.safety || "",
+    crew1Id: a.crew1_id || "",
+    crew2Id: a.crew2_id || "",
+    crew3Id: a.crew3_id || "",
+    crew4Id: a.crew4_id || "",
+    mobilizations: mobilizations
+      .filter((m) => m.assignment_id === a.id)
+      .map((m) => ({
+        id: m.id,
+        start: m.start_date || "",
+        durationWeeks: m.duration_weeks || "",
+        end: m.end_date || "",
+      })),
+  };
+}
+
+function projectToDb(project) {
+  return {
+    project_number: project.projectNumber,
+    name: project.name,
+    client: project.client,
+    address: project.address,
+    division: project.division,
+    specific_requirements: project.specificRequirements || [],
+    status: project.status,
+  };
+}
+
+function resourceToDb(resource) {
+  return {
+    name: resource.name,
+    resource_type: resource.resourceType,
+    home_division: resource.homeDivision,
+    phone: resource.phone,
+    email: resource.email,
+    certifications: resource.certifications || [],
+    pto: resource.pto || [],
+    status: resource.status || "Active",
+  };
+}
+
+function crewToDb(crew) {
+  return {
+    crew_name: crew.crewName,
+    foreman_name: crew.foremanName,
+    specialty: crew.specialty || [],
+  };
+}
+
+function assignmentToDb(assignment) {
+  return {
+    project_id: assignment.projectId,
+    project_manager: assignment.projectManager,
+    superintendent: assignment.superintendent,
+    field_coordinator: assignment.fieldCoordinator,
+    field_engineer: assignment.fieldEngineer,
+    safety: assignment.safety,
+    crew1_id: assignment.crew1Id || null,
+    crew2_id: assignment.crew2Id || null,
+    crew3_id: assignment.crew3Id || null,
+    crew4_id: assignment.crew4Id || null,
+  };
+}
+
+function mobilizationToDb(mob, assignmentId) {
+  return {
+    assignment_id: assignmentId,
+    start_date: mob.start || null,
+    duration_weeks: mob.durationWeeks === "" ? null : Number(mob.durationWeeks),
+    end_date: mob.end || null,
+  };
+}
+
 export default function App() {
-  const [projects, setProjects] = useState([]);
-  const [assignments, setAssignments] = useState([]);
-  const [resources, setResources] = useState([]);
-  const [crews, setCrews] = useState([]);
+  const [projects, setProjects] = useState(() => loadStoredAny(PROJECTS_LEGACY_KEYS, startingProjects));
+  const [assignments, setAssignments] = useState(() => loadStoredAny(ASSIGNMENTS_LEGACY_KEYS, startingAssignments));
+  const [resources, setResources] = useState(() => loadStoredAny(RESOURCES_LEGACY_KEYS, startingResources));
+  const [crews, setCrews] = useState(() => loadStoredAny(CREWS_LEGACY_KEYS, startingCrews));
   const [certifications, setCertifications] = useState(() => loadStoredAny(CERTIFICATIONS_LEGACY_KEYS, startingCertifications));
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [showAssignmentForm, setShowAssignmentForm] = useState(false);
@@ -549,7 +666,20 @@ export default function App() {
   const [dashboardResourceTypeFilter, setDashboardResourceTypeFilter] = useState([...defaultDashboardResourceTypes]);
   const [projectTabDivisionFilter, setProjectTabDivisionFilter] = useState([...divisions]);
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
-  
+
+  useEffect(() => {
+    async function testConnection() {
+      const { data, error } = await supabase.from("projects").select("*");
+      console.log("SUPABASE TEST:", data, error);
+    }
+
+    testConnection();
+  }, []);
+
+  useEffect(() => localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects)), [projects]);
+  useEffect(() => localStorage.setItem(ASSIGNMENTS_KEY, JSON.stringify(assignments)), [assignments]);
+  useEffect(() => localStorage.setItem(RESOURCES_KEY, JSON.stringify(resources)), [resources]);
+  useEffect(() => localStorage.setItem(CREWS_KEY, JSON.stringify(crews)), [crews]);
   useEffect(() => localStorage.setItem(CERTIFICATIONS_KEY, JSON.stringify(certifications)), [certifications]);
 
   const ganttItems = buildGanttItems(projects, assignments);
@@ -588,95 +718,6 @@ export default function App() {
     return { resource, items };
   }).filter(Boolean);
 
-  useEffect(() => {
-  async function testConnection() {
-    if (!supabase) {
-      console.warn("SUPABASE TEST: missing URL or anon key");
-      return;
-    }
-
-    const { data, error } = await supabase.from("projects").select("*");
-    console.log("SUPABASE TEST:", data, error);
-  }
-
-  testConnection();
-}, []);
-
-  useEffect(() => {
-  async function loadData() {
-    if (!supabase) return;
-
-    const [projectsRes, resourcesRes, crewsRes, assignmentsRes, mobilizationsRes] =
-      await Promise.all([
-        supabase.from("projects").select("*").order("created_at", { ascending: false }),
-        supabase.from("resources").select("*").order("created_at", { ascending: false }),
-        supabase.from("crews").select("*").order("created_at", { ascending: false }),
-        supabase.from("assignments").select("*").order("created_at", { ascending: false }),
-        supabase.from("mobilizations").select("*"),
-      ]);
-
-    if (projectsRes.error) console.error(projectsRes.error);
-    if (resourcesRes.error) console.error(resourcesRes.error);
-    if (crewsRes.error) console.error(crewsRes.error);
-    if (assignmentsRes.error) console.error(assignmentsRes.error);
-    if (mobilizationsRes.error) console.error(mobilizationsRes.error);
-
-    setProjects((projectsRes.data || []).map((p) => ({
-      id: p.id,
-      projectNumber: p.project_number || "",
-      name: p.name || "",
-      client: p.client || "",
-      address: p.address || "",
-      division: p.division || "Hardscape",
-      specificRequirements: p.specific_requirements || [],
-      status: p.status || "Scheduled",
-    })));
-
-    setResources((resourcesRes.data || []).map((r) => ({
-      id: r.id,
-      name: r.name || "",
-      resourceType: r.resource_type || "Superintendent",
-      homeDivision: r.home_division || "Hardscape",
-      phone: r.phone || "",
-      email: r.email || "",
-      certifications: r.certifications || [],
-      pto: r.pto || [],
-      status: r.status || "Active",
-    })));
-
-    setCrews((crewsRes.data || []).map((c) => ({
-      id: c.id,
-      crewName: c.crew_name || "",
-      foremanName: c.foreman_name || "",
-      specialty: c.specialty || [],
-    })));
-
-    setAssignments((assignmentsRes.data || []).map((a) => ({
-      id: a.id,
-      projectId: a.project_id,
-      projectManager: a.project_manager || "",
-      superintendent: a.superintendent || "",
-      fieldCoordinator: a.field_coordinator || "",
-      fieldEngineer: a.field_engineer || "",
-      safety: a.safety || "",
-      crew1Id: a.crew1_id || "",
-      crew2Id: a.crew2_id || "",
-      crew3Id: a.crew3_id || "",
-      crew4Id: a.crew4_id || "",
-      mobilizations: (mobilizationsRes.data || [])
-        .filter((m) => m.assignment_id === a.id)
-        .map((m) => ({
-          id: m.id,
-          start: m.start_date || "",
-          durationWeeks: m.duration_weeks || "",
-          end: m.end_date || "",
-        })),
-    })));
-  }
-
-  loadData();
-}, []);
-  
   function openAddProjectForm() { setEditingProjectId(null); setProjectForm(blankProject); setShowProjectForm(true); }
   function openEditProjectForm(project) { setEditingProjectId(project.id); setProjectForm({ ...blankProject, ...project }); setShowProjectForm(true); }
   function saveProject() { if (!projectForm.name.trim()) { alert("Project name is required."); return; } if (editingProjectId) setProjects((current) => current.map((project) => (project.id === editingProjectId ? { ...projectForm, id: editingProjectId } : project))); else setProjects((current) => [{ ...projectForm, id: crypto.randomUUID() }, ...current]); setShowProjectForm(false); setEditingProjectId(null); setProjectForm(blankProject); }
