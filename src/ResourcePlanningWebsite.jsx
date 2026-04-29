@@ -15,7 +15,8 @@ const CERTIFICATIONS_LEGACY_KEYS = ["ggc_resource_planning_certifications_v1", "
 
 const divisions = ["Hardscape", "Commercial", "Industrial", "Tilt"];
 const statuses = ["Pending Award", "Scheduled", "Active", "On Hold", "Complete"];
-const resourceTypes = ["Project Manager", "Superintendent", "Field Coordinator", "Field Engineer", "Safety"];
+const resourceTypes = ["Project Manager", "General Superintendent", "Superintendent", "Field Coordinator", "Field Engineer", "Safety"];
+const defaultDashboardResourceTypes = resourceTypes.filter((type) => type !== "Project Manager");
 
 const divisionStyles = {
   Hardscape: "bg-emerald-700",
@@ -329,7 +330,7 @@ function GanttSegmentBar({ item, timeline, label, conflict = false }) {
     backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(220,38,38,.95) 8px 10px)",
     backgroundSize: "14px 14px",
   } : {};
-  return <div className={`absolute top-1 h-9 overflow-hidden rounded-xl ${colorClass} px-3 text-xs font-semibold leading-9 text-white shadow-sm`} style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, ...conflictStyle }} title={conflict ? `${label || project.name} - conflict` : label || project.name}>{label}{conflict && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white">conflict</span>}</div>;
+  return <div className={`absolute top-1 h-9 overflow-hidden rounded-xl ${colorClass} px-3 text-xs font-semibold leading-9 text-white shadow-sm`} style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, ...conflictStyle }} title={conflict ? `${label || project.name} - conflict` : label || project.name}><span className={conflict ? "rounded bg-white/90 px-1.5 py-0.5 font-bold text-red-700" : ""}>{label}</span>{conflict && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white">conflict</span>}</div>;
 }
 
 function PtoOverlayBar({ pto, timeline }) {
@@ -544,7 +545,7 @@ export default function App() {
   const [showCertSettings, setShowCertSettings] = useState(false);
   const [newCertification, setNewCertification] = useState("");
   const [resourceTypeFilter, setResourceTypeFilter] = useState([...resourceTypes]);
-  const [dashboardResourceTypeFilter, setDashboardResourceTypeFilter] = useState([...resourceTypes]);
+  const [dashboardResourceTypeFilter, setDashboardResourceTypeFilter] = useState([...defaultDashboardResourceTypes]);
   const [projectTabDivisionFilter, setProjectTabDivisionFilter] = useState([...divisions]);
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
 
@@ -864,4 +865,3 @@ export default function App() {
     </main>
   );
 }
-
