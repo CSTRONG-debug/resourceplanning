@@ -273,20 +273,16 @@ export function buildGanttItems(projects, assignments) {
         mobilizationId: mob.id,
         mobilizationNumber: index + 1,
         project,
-        // Build a synthetic assignment that uses THIS mobilization's own roles/crews.
-        // Global fields (PM, Field Engineer, Safety) come from the parent assignment.
-        // Per-mob fields (superintendent, fieldCoordinator, crews) come from the mob only.
         assignment: {
           ...assignment,
           superintendent: mob.superintendent || "",
           fieldCoordinator: mob.fieldCoordinator || "",
-          // Zero out legacy crew slots so getAssignmentCrewIds uses _crewIds only
           crew1Id: "",
           crew2Id: "",
           crew3Id: "",
           crew4Id: "",
-          // Per-mob crew array — used by getAssignmentCrewIds
           _crewIds: mob.crewIds || [],
+          _crewMenCounts: mob.crewMenCounts || {},
         },
         start: mob.start,
         end: mob.end,
