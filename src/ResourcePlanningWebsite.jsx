@@ -445,10 +445,12 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
   function calculateEndDateFromWeeks(startDate, durationWeeks) {
     if (!startDate || durationWeeks === "" || durationWeeks === null || durationWeeks === undefined) return "";
     const start = toDate(startDate);
-    const weeks = Number(durationWeeks);
-    if (!start || Number.isNaN(weeks) || weeks <= 0) return "";
-    const end = addBusinessDaysInclusive(start, weeks * 5);
-    return end ? end.toISOString().slice(0, 10) : "";
+    const weeks = parseFloat(durationWeeks);
+    if (!start || isNaN(weeks) || weeks <= 0) return "";
+    try {
+      const end = addBusinessDaysInclusive(start, Math.round(weeks * 5));
+      return end ? end.toISOString().slice(0, 10) : "";
+    } catch (e) { return ""; }
   }
 
   function updateMobilization(id, field, value) {
@@ -469,12 +471,47 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
   function addMobilization() {
     setForm((c) => ({
       ...c,
-      mobilizations: [...(c.mobilizations || []), { id: crypto.randomUUID(), start: "", durationWeeks: "", end: "" }],
+      mobilizations: [...(c.mobilizations || []), {
+        id: crypto.randomUUID(), start: "", durationWeeks: "", end: "",
+        superintendent: "", fieldCoordinator: "", crewIds: [],
+      }],
     }));
   }
 
   function removeMobilization(id) {
     setForm((c) => ({ ...c, mobilizations: (c.mobilizations || []).filter((m) => m.id !== id) }));
+  }
+
+  function addCrewToMob(mobId) {
+    setForm((c) => ({
+      ...c,
+      mobilizations: (c.mobilizations || []).map((mob) =>
+        mob.id === mobId ? { ...mob, crewIds: [...(mob.crewIds || []), ""] } : mob
+      ),
+    }));
+  }
+
+  function updateCrewInMob(mobId, crewIndex, crewId) {
+    setForm((c) => ({
+      ...c,
+      mobilizations: (c.mobilizations || []).map((mob) => {
+        if (mob.id !== mobId) return mob;
+        const newCrewIds = [...(mob.crewIds || [])];
+        newCrewIds[crewIndex] = crewId;
+        return { ...mob, crewIds: newCrewIds };
+      }),
+    }));
+  }
+
+  function removeCrewFromMob(mobId, crewIndex) {
+    setForm((c) => ({
+      ...c,
+      mobilizations: (c.mobilizations || []).map((mob) => {
+        if (mob.id !== mobId) return mob;
+        const newCrewIds = (mob.crewIds || []).filter((_, i) => i !== crewIndex);
+        return { ...mob, crewIds: newCrewIds };
+      }),
+    }));
   }
 
   return (
@@ -483,71 +520,110 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
         <div className="flex items-center justify-between border-b border-slate-200 p-5">
           <div>
             <h2 className="text-xl font-bold text-slate-900">{editing ? "Edit Assignment" : "Assign Project"}</h2>
-            <p className="text-sm text-slate-500">Select a project, assign resources, crews, and mobilization dates.</p>
+            <p className="text-sm text-slate-500">Global roles apply across all mobilizations. Per-mobilization roles and crews are set inside each mobilization block.</p>
           </div>
           <button onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
         </div>
 
         <div className="grid gap-4 p-5 md:grid-cols-2">
+          {/* Project */}
           <label className="space-y-1 md:col-span-2">
             <span className="text-sm font-medium text-slate-700">Project</span>
             <SearchableProjectSelect value={form.projectId} onChange={(v) => updateField("projectId", v)} projects={projects} />
           </label>
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Project Manager</span>
-            <SearchableResourceSelect value={form.projectManager} onChange={(v) => updateField("projectManager", v)} resources={resources} resourceType="Project Manager" placeholder="Search project manager..." />
-          </label>
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Superintendent</span>
-            <SearchableResourceSelect value={form.superintendent} onChange={(v) => updateField("superintendent", v)} resources={resources} resourceType="Superintendent" placeholder="Search superintendent..." />
-          </label>
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Field Coordinator</span>
-            <SearchableResourceSelect value={form.fieldCoordinator} onChange={(v) => updateField("fieldCoordinator", v)} resources={resources} resourceType="Field Coordinator" placeholder="Search field coordinator..." />
-          </label>
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Field Engineer</span>
-            <SearchableResourceSelect value={form.fieldEngineer} onChange={(v) => updateField("fieldEngineer", v)} resources={resources} resourceType="Field Engineer" placeholder="Search field engineer..." />
-          </label>
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Safety</span>
-            <SearchableResourceSelect value={form.safety} onChange={(v) => updateField("safety", v)} resources={resources} resourceType="Safety" placeholder="Search safety..." />
-          </label>
-          <div />
-          {[1, 2, 3, 4].map((n) => (
-            <label key={n} className="space-y-1">
-              <span className="text-sm font-medium text-slate-700">Crew #{n}</span>
-              <SearchableCrewSelect value={form[`crew${n}Id`]} onChange={(v) => updateField(`crew${n}Id`, v)} crews={crews} />
-            </label>
-          ))}
 
+          {/* Global roles — PM, Safety, Field Engineer */}
+          <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-blue-50 p-4">
+            <h3 className="mb-3 font-bold text-slate-900 text-sm">Global Roles <span className="font-normal text-slate-500">(apply to the entire project)</span></h3>
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-slate-700">Project Manager</span>
+                <SearchableResourceSelect value={form.projectManager} onChange={(v) => updateField("projectManager", v)} resources={resources} resourceType="Project Manager" placeholder="Search PM..." />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-slate-700">Field Engineer</span>
+                <SearchableResourceSelect value={form.fieldEngineer} onChange={(v) => updateField("fieldEngineer", v)} resources={resources} resourceType="Field Engineer" placeholder="Search field engineer..." />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-slate-700">Safety</span>
+                <SearchableResourceSelect value={form.safety} onChange={(v) => updateField("safety", v)} resources={resources} resourceType="Safety" placeholder="Search safety..." />
+              </label>
+            </div>
+          </div>
+
+          {/* Mobilizations with per-mob roles and crews */}
           <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="mb-3 flex items-center justify-between">
               <div>
                 <h3 className="font-bold text-slate-900">Mobilizations</h3>
-                <p className="text-sm text-slate-500">Use + to add additional start/end date ranges for remobilizations.</p>
+                <p className="text-sm text-slate-500">Each mobilization has its own dates, superintendent, field coordinator, and crews.</p>
               </div>
               <button onClick={addMobilization} type="button" className="flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white">
                 <Plus size={16} /> Add Mobilization
               </button>
             </div>
-            <div className="space-y-3">
+            <div className="space-y-4">
               {(form.mobilizations || []).map((mob, index) => (
-                <div key={mob.id} className="grid gap-3 rounded-xl border border-slate-200 bg-white p-3 md:grid-cols-[auto_1fr_1fr_1fr_auto]">
-                  <div className="flex items-center font-semibold text-slate-600">#{index + 1}</div>
-                  <label className="space-y-1">
-                    <span className="text-xs font-medium text-slate-600">Start Date</span>
-                    <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={mob.start} onChange={(e) => updateMobilization(mob.id, "start", e.target.value)} />
-                  </label>
-                  <label className="space-y-1">
-                    <span className="text-xs font-medium text-slate-600">Duration / Weeks</span>
-                    <input type="number" min="0" step="0.5" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={mob.durationWeeks || ""} onChange={(e) => updateMobilization(mob.id, "durationWeeks", e.target.value)} placeholder="Weeks" />
-                  </label>
-                  <label className="space-y-1">
-                    <span className="text-xs font-medium text-slate-600">End Date</span>
-                    <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={mob.end} onChange={(e) => updateMobilization(mob.id, "end", e.target.value)} />
-                  </label>
-                  <button type="button" onClick={() => removeMobilization(mob.id)} className="rounded-xl border border-red-200 px-3 py-2 font-medium text-red-700 hover:bg-red-50">Remove</button>
+                <div key={mob.id} className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+                  {/* Header row */}
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-slate-700">Mobilization #{index + 1}</span>
+                    {(form.mobilizations || []).length > 1 && (
+                      <button type="button" onClick={() => removeMobilization(mob.id)} className="rounded-lg border border-red-200 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-50">Remove</button>
+                    )}
+                  </div>
+
+                  {/* Dates row */}
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <label className="space-y-1">
+                      <span className="text-xs font-medium text-slate-600">Start Date</span>
+                      <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={mob.start} onChange={(e) => updateMobilization(mob.id, "start", e.target.value)} />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-medium text-slate-600">Duration (Weeks)</span>
+                      <input type="number" min="0" step="0.5" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600"
+                        value={mob.durationWeeks || ""}
+                        onChange={(e) => updateMobilization(mob.id, "durationWeeks", e.target.value)}
+                        placeholder="e.g. 4" />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-medium text-slate-600">End Date</span>
+                      <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={mob.end} onChange={(e) => updateMobilization(mob.id, "end", e.target.value)} />
+                    </label>
+                  </div>
+
+                  {/* Per-mob roles */}
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="space-y-1">
+                      <span className="text-xs font-medium text-slate-600">Superintendent</span>
+                      <SearchableResourceSelect value={mob.superintendent || ""} onChange={(v) => updateMobilization(mob.id, "superintendent", v)} resources={resources} resourceType="Superintendent" placeholder="Search superintendent..." />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-medium text-slate-600">Field Coordinator</span>
+                      <SearchableResourceSelect value={mob.fieldCoordinator || ""} onChange={(v) => updateMobilization(mob.id, "fieldCoordinator", v)} resources={resources} resourceType="Field Coordinator" placeholder="Search field coordinator..." />
+                    </label>
+                  </div>
+
+                  {/* Crews */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-slate-600">Crews</span>
+                      <button type="button" onClick={() => addCrewToMob(mob.id)} className="flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                        <Plus size={12} /> Add Crew
+                      </button>
+                    </div>
+                    {(mob.crewIds || []).length === 0 && (
+                      <p className="text-xs text-slate-400 italic">No crews assigned — click + Add Crew to assign one.</p>
+                    )}
+                    {(mob.crewIds || []).map((crewId, crewIdx) => (
+                      <div key={`${mob.id}-crew-${crewIdx}`} className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <SearchableCrewSelect value={crewId} onChange={(v) => updateCrewInMob(mob.id, crewIdx, v)} crews={crews} />
+                        </div>
+                        <button type="button" onClick={() => removeCrewFromMob(mob.id, crewIdx)} className="rounded-lg border border-red-200 px-2 py-1.5 text-xs text-red-700 hover:bg-red-50">✕</button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1145,6 +1221,7 @@ export default function App() {
             contractValue: row.contract_value || 0,
             spreadRule: row.spread_rule || "even",
             actuals: row.actuals || {},
+            redistributedSpread: row.redistributed_spread || {},
             perProjectLockThrough: row.per_project_lock_through || null,
           };
         });
@@ -1305,8 +1382,38 @@ export default function App() {
   }
 
   // ── CRUD: Assignments ──────────────────────────────────────────────────────
-  function openAddAssignmentForm() { setEditingAssignmentId(null); setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "" }] }); setShowAssignmentForm(true); }
-  function openEditAssignmentForm(assignment) { setEditingAssignmentId(assignment.id); setAssignmentForm({ ...blankAssignment, ...assignment, mobilizations: assignment.mobilizations?.length ? assignment.mobilizations : [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "" }] }); setShowAssignmentForm(true); }
+  function openAddAssignmentForm() {
+    setEditingAssignmentId(null);
+    setAssignmentForm({
+      ...blankAssignment,
+      mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [] }],
+    });
+    setShowAssignmentForm(true);
+  }
+
+  function openEditAssignmentForm(assignment) {
+    setEditingAssignmentId(assignment.id);
+    // Migrate legacy flat roles into mobilizations if needed
+    const mobs = (assignment.mobilizations?.length ? assignment.mobilizations : [
+      { id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [] }
+    ]).map((mob, i) => ({
+      id: mob.id || crypto.randomUUID(),
+      start: mob.start || "",
+      durationWeeks: mob.durationWeeks || "",
+      end: mob.end || "",
+      superintendent: mob.superintendent || (i === 0 ? assignment.superintendent || "" : ""),
+      fieldCoordinator: mob.fieldCoordinator || (i === 0 ? assignment.fieldCoordinator || "" : ""),
+      crewIds: mob.crewIds?.length ? mob.crewIds : (i === 0 ? [assignment.crew1Id, assignment.crew2Id, assignment.crew3Id, assignment.crew4Id].filter(Boolean) : []),
+    }));
+    setAssignmentForm({
+      projectId: assignment.projectId || "",
+      projectManager: assignment.projectManager || "",
+      fieldEngineer: assignment.fieldEngineer || "",
+      safety: assignment.safety || "",
+      mobilizations: mobs,
+    });
+    setShowAssignmentForm(true);
+  }
 
   async function saveAssignment() {
     if (!assignmentForm.projectId) { alert("Project is required."); return; }
@@ -1335,7 +1442,8 @@ export default function App() {
     const mapped = mapAssignmentFromDb(savedAssignment, savedMobs);
     if (editingAssignmentId) setAssignments((current) => current.map((a) => (a.id === editingAssignmentId ? mapped : a)));
     else setAssignments((current) => [mapped, ...current]);
-    setShowAssignmentForm(false); setEditingAssignmentId(null); setAssignmentForm(blankAssignment);
+    setShowAssignmentForm(false); setEditingAssignmentId(null);
+    setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [] }] });
   }
 
   async function deleteAssignment(id) {
@@ -1493,10 +1601,14 @@ export default function App() {
     return false;
   }
 
-  // Get the value to display for a month — actual if exists, else spread
+  // Get the value to display for a month — actual if exists, redistributed spread, else original spread
   function getMonthValue(projectId, monthKey, spread) {
     const row = getForecastRow(projectId);
     if (row.actuals[monthKey] !== undefined) return { value: row.actuals[monthKey], isActual: true };
+    // Use redistributed spread if available (actuals have been entered)
+    if (row.redistributedSpread && row.redistributedSpread[monthKey] !== undefined) {
+      return { value: row.redistributedSpread[monthKey], isActual: false, isRedistributed: true };
+    }
     return { value: spread[monthKey] || 0, isActual: false };
   }
 
@@ -1505,39 +1617,54 @@ export default function App() {
     if (!supabase) { alert("Supabase not connected."); return; }
     const existing = forecastData[projectId];
     const newRow = { ...getForecastRow(projectId), ...patch };
+    const dbPayload = {
+      contract_value: newRow.contractValue,
+      spread_rule: newRow.spreadRule,
+      actuals: newRow.actuals,
+      redistributed_spread: newRow.redistributedSpread || {},
+      per_project_lock_through: newRow.perProjectLockThrough || null,
+      updated_at: new Date().toISOString(),
+    };
     if (existing?.id) {
-      const { error } = await supabase.from("forecast").update({
-        contract_value: newRow.contractValue,
-        spread_rule: newRow.spreadRule,
-        actuals: newRow.actuals,
-        per_project_lock_through: newRow.perProjectLockThrough || null,
-        updated_at: new Date().toISOString(),
-      }).eq("id", existing.id);
+      const { error } = await supabase.from("forecast").update(dbPayload).eq("id", existing.id);
       if (error) { console.error(error); alert("Could not save forecast."); return; }
     } else {
-      const { data, error } = await supabase.from("forecast").insert({
-        project_id: projectId,
-        contract_value: newRow.contractValue,
-        spread_rule: newRow.spreadRule,
-        actuals: newRow.actuals,
-        per_project_lock_through: newRow.perProjectLockThrough || null,
-      }).select().single();
+      const { data, error } = await supabase.from("forecast").insert({ project_id: projectId, ...dbPayload }).select().single();
       if (error) { console.error(error); alert("Could not save forecast."); return; }
       newRow.id = data.id;
     }
     setForecastData((prev) => ({ ...prev, [projectId]: newRow }));
   }
 
-  // Save actual revenue for a specific month
+  // Save actual revenue for a specific month — recalculates remaining spread if actual differs
   async function saveActual(projectId, monthKey, value) {
     const row = getForecastRow(projectId);
     const newActuals = { ...row.actuals };
+
     if (value === "" || value === null || isNaN(Number(value))) {
       delete newActuals[monthKey];
     } else {
       newActuals[monthKey] = Number(value);
     }
-    await saveForecastRow(projectId, { actuals: newActuals });
+
+    // Recalculate: if actuals have been entered, redistribute the remaining
+    // contract value (minus all actuals) across the remaining unlocked months
+    // using the project's selected spread rule.
+    const allMonths = getProjectMonths(projectId);
+    const totalActuals = Object.values(newActuals).reduce((s, v) => s + v, 0);
+    const remaining = (row.contractValue || 0) - totalActuals;
+
+    // Remaining months = active months that have no actual and aren't locked
+    const remainingMonths = allMonths.filter((m) => newActuals[m] === undefined && !isMonthLocked(m, projectId));
+
+    if (remainingMonths.length > 0 && remaining >= 0) {
+      // Store the redistributed spread as a virtual override — we keep this in
+      // a separate key so the spread formula knows to use it
+      const redistributed = spreadRevenue(remaining, remainingMonths, row.spreadRule);
+      await saveForecastRow(projectId, { actuals: newActuals, redistributedSpread: redistributed });
+    } else {
+      await saveForecastRow(projectId, { actuals: newActuals, redistributedSpread: {} });
+    }
   }
 
   // Save global lock setting
@@ -1703,14 +1830,48 @@ export default function App() {
 
   function exportSectionPdf(sectionId, title) {
     const section = document.getElementById(sectionId);
-    if (!section) return;
-    const cloned = section.cloneNode(true);
-    cloned.querySelectorAll("button, input, select").forEach((el) => el.remove());
-    cloned.querySelectorAll(".overflow-x-auto").forEach((el) => { el.style.overflow = "visible"; });
+    if (!section) { alert(`Could not find section "${title}" to export.`); return; }
     const printWindow = window.open("", "_blank", "width=1400,height=900");
     if (!printWindow) { alert("Please allow pop-ups to export PDF."); return; }
+
+    // Clone and strip interactive elements
+    const cloned = section.cloneNode(true);
+    cloned.querySelectorAll("button, input, select, label").forEach((el) => el.remove());
+    cloned.querySelectorAll("[class*='overflow-x-auto']").forEach((el) => { el.style.overflow = "visible"; el.style.width = "auto"; });
+    cloned.querySelectorAll("svg").forEach((el) => { el.style.maxWidth = "none"; });
+
+    const css = `
+      @page { size: landscape; margin: 0.3in; }
+      body { font-family: Arial, sans-serif; font-size: 10px; color: #0f172a; margin: 0; background: white; }
+      h1 { font-size: 13px; margin: 0 0 8px 0; }
+      * { box-sizing: border-box; }
+      [class*="rounded"] { border-radius: 8px; }
+      [class*="bg-white"] { background: white !important; }
+      [class*="bg-slate-50"] { background: #f8fafc !important; }
+      [class*="bg-slate-100"] { background: #f1f5f9 !important; }
+      [class*="bg-slate-200"] { background: #e2e8f0 !important; }
+      [class*="bg-emerald-700"] { background: #047857 !important; }
+      [class*="bg-emerald-300"] { background: #6ee7b7 !important; }
+      [class*="bg-blue-700"] { background: #1d4ed8 !important; }
+      [class*="bg-blue-300"] { background: #93c5fd !important; }
+      [class*="bg-orange-600"] { background: #ea580c !important; }
+      [class*="bg-orange-300"] { background: #fdba74 !important; }
+      [class*="bg-purple-700"] { background: #7e22ce !important; }
+      [class*="bg-purple-300"] { background: #d8b4fe !important; }
+      [class*="bg-amber-50"] { background: #fffbeb !important; }
+      [class*="bg-red-600"] { background: #dc2626 !important; }
+      [class*="text-white"] { color: white !important; }
+      [class*="text-slate-900"] { color: #0f172a !important; }
+      [class*="text-slate-500"] { color: #64748b !important; }
+      [class*="border"] { border: 1px solid #e2e8f0; }
+      [class*="shadow"] { box-shadow: none !important; }
+      [class*="sticky"] { position: static !important; }
+      button, input, select, label { display: none !important; }
+      .overflow-x-auto { overflow: visible !important; }
+    `;
+
     printWindow.document.open();
-    printWindow.document.write(`<!doctype html><html><head><title>${title || "GGC Export"}</title><style>@page{size:landscape;margin:.35in}body{font-family:Arial,sans-serif;background:white;color:#0f172a;margin:0}.export-wrap{padding:16px}.overflow-x-auto{overflow:visible!important}svg{max-width:none;height:auto}button{display:none!important}.rounded-2xl{border-radius:16px}.rounded-xl{border-radius:12px}.border{border:1px solid #e2e8f0}.bg-white{background:white}.bg-slate-50{background:#f8fafc}.bg-slate-100{background:#f1f5f9}.bg-emerald-700{background:#047857}.bg-emerald-300{background:#6ee7b7}.bg-blue-700{background:#1d4ed8}.bg-blue-300{background:#93c5fd}.bg-orange-600{background:#ea580c}.bg-orange-300{background:#fdba74}.bg-purple-700{background:#7e22ce}.bg-purple-300{background:#d8b4fe}.text-white{color:white}.text-slate-900{color:#0f172a}.text-slate-500{color:#64748b}.shadow-sm{box-shadow:none}</style></head><body><div class="export-wrap">${cloned.outerHTML}</div><script>window.onload=function(){setTimeout(function(){window.print()},350)}<\/script></body></html>`);
+    printWindow.document.write(`<!doctype html><html><head><title>${title || "GGC Export"}</title><style>${css}</style></head><body><h1>${title || "GGC Export"}</h1><div style="padding:0">${cloned.outerHTML}</div><script>window.onload=function(){setTimeout(function(){window.print()},500)}<\/script></body></html>`);
     printWindow.document.close();
   }
 
@@ -2202,6 +2363,21 @@ export default function App() {
                     </div>
                   </div>
                 ))}
+                {/* PTO rows */}
+                {(focusedResource.pto || []).filter((p) => p.start && p.end).map((pto) => (
+                  <div key={`focused-pto-${pto.id || pto.ptoId}`} className="grid grid-cols-[260px_1fr] items-center gap-5">
+                    <div className="text-left">
+                      <p className="font-semibold text-slate-900">PTO — {pto.ptoId || "Unspecified"}</p>
+                      <p className="mt-1 text-xs text-slate-500">{formatDate(pto.start)} – {formatDate(pto.end)}</p>
+                    </div>
+                    <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
+                      <PtoOverlayBar pto={pto} timeline={timeline} />
+                    </div>
+                  </div>
+                ))}
+                {focusedResourceItems.length === 0 && (focusedResource.pto || []).filter((p) => p.start && p.end).length === 0 && (
+                  <p className="text-sm text-slate-400">No assignments or PTO in the current timeline window.</p>
+                )}
               </div>
             </div>
           </div>
@@ -2461,6 +2637,7 @@ export default function App() {
                     <SortTh label="Project" sortKey="projectNumber" className="sticky left-0 z-10 bg-slate-100 min-w-[200px]" />
                     <SortTh label="Division" sortKey="division" className="min-w-[90px]" />
                     <SortTh label="Contract Value" sortKey="contractValue" className="min-w-[130px]" />
+                    <th className="p-3 min-w-[100px] bg-slate-200 text-right">Prior Year</th>
                     <th className="p-3 min-w-[110px]">Spread Rule</th>
                     <th className="p-3 min-w-[105px]">Project Lock</th>
                     {months.map((m) => (
@@ -2473,49 +2650,66 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {projectRows.map(({ project: p, row, monthValues, yearTotal, thereafter }, rowIdx) => {
-                    const isEven = rowIdx % 2 === 0;
-                    const rowBg = isEven ? "bg-white" : "bg-slate-50";
-                    const rowBgHover = isEven ? "hover:bg-emerald-50" : "hover:bg-emerald-50";
-                    return (
-                      <tr key={p.id} className={`border-t border-slate-100 ${rowBg} ${rowBgHover} group`}>
-                        <td className={`sticky left-0 z-10 p-3 group-hover:bg-emerald-50 ${rowBg}`}>
-                          <p className="font-semibold text-slate-900">{p.projectNumber ? `${p.projectNumber} - ` : ""}{p.name}</p>
-                          <p className="text-xs text-slate-400">{p.status}</p>
-                        </td>
-                        <td className="p-3">
-                          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold text-white ${divisionStyles[p.division] || "bg-slate-500"}`}>{p.division}</span>
-                        </td>
-                        <td className="p-3">
-                          <input type="number" className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-right text-sm outline-none focus:border-emerald-500 focus:bg-white" defaultValue={row.contractValue || ""} placeholder="0"
-                            onBlur={(e) => saveForecastRow(p.id, { contractValue: parseFloat(e.target.value) || 0 })} />
-                        </td>
-                        <td className="p-3">
-                          <select className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-sm outline-none focus:border-emerald-500 focus:bg-white" value={row.spreadRule} onChange={(e) => saveForecastRow(p.id, { spreadRule: e.target.value })}>
-                            <option value="even">Even</option>
-                            <option value="front">Front-Loaded</option>
-                            <option value="back">Back-Loaded</option>
-                            <option value="scurve">S-Curve</option>
-                          </select>
-                        </td>
-                        <td className="p-3">
-                          <input type="month" className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-xs outline-none focus:border-emerald-500 focus:bg-white" value={row.perProjectLockThrough || ""}
-                            onChange={(e) => saveForecastRow(p.id, { perProjectLockThrough: e.target.value || null })} />
-                        </td>
-                        {monthValues.map((mv) => (
-                          <td key={mv.key} className={`p-1 text-right ${mv.locked ? "bg-amber-50" : ""}`}>
-                            <input type="number"
-                              className={`w-full rounded-lg border px-2 py-1 text-right text-xs outline-none focus:bg-white ${mv.isActual ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-800 focus:border-emerald-500" : mv.locked ? "border-amber-200 bg-amber-50 text-slate-600 focus:border-amber-400" : "border-transparent bg-transparent text-slate-700 hover:border-slate-200 focus:border-emerald-500"}`}
-                              defaultValue={mv.isActual ? mv.value : (mv.value > 0 ? mv.value.toFixed(0) : "")}
-                              placeholder={mv.value > 0 && !mv.isActual ? mv.value.toFixed(0) : ""}
-                              onBlur={(e) => saveActual(p.id, mv.key, e.target.value)} />
+                    {projectRows.map(({ project: p, row, monthValues, yearTotal, thereafter }, rowIdx) => {
+                      const isEven = rowIdx % 2 === 0;
+                      const rowBg = isEven ? "bg-white" : "bg-slate-50";
+                      // Prior year total = sum of all actuals from previous year months
+                      const prevYear = forecastYear - 1;
+                      const prevYearMonths = Array.from({ length: 12 }, (_, i) => `${prevYear}-${String(i + 1).padStart(2, "0")}`);
+                      const allMonths = getProjectMonths(p.id);
+                      const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
+                      const priorYearTotal = prevYearMonths.reduce((s, m) => {
+                        const mv = getMonthValue(p.id, m, spread);
+                        return s + mv.value;
+                      }, 0);
+                      return (
+                        <tr key={p.id} className={`border-t border-slate-100 ${rowBg} hover:bg-emerald-50 group`}>
+                          <td className={`sticky left-0 z-10 p-3 group-hover:bg-emerald-50 ${rowBg}`}>
+                            <p className="font-semibold text-slate-900">{p.projectNumber ? `${p.projectNumber} - ` : ""}{p.name}</p>
+                            <p className="text-xs text-slate-400">{p.status}</p>
                           </td>
-                        ))}
-                        <td className="p-3 text-right text-xs text-slate-500 bg-slate-50">{thereafter > 0 ? fmt(thereafter) : ""}</td>
-                        <td className="p-3 text-right text-sm font-semibold text-slate-800 bg-slate-50">{fmt(yearTotal)}</td>
-                      </tr>
-                    );
-                  })}
+                          <td className="p-3">
+                            <span className={`rounded-full px-2 py-0.5 text-xs font-semibold text-white ${divisionStyles[p.division] || "bg-slate-500"}`}>{p.division}</span>
+                          </td>
+                          <td className="p-3">
+                            <input type="number" className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-right text-sm outline-none focus:border-emerald-500 focus:bg-white" defaultValue={row.contractValue || ""} placeholder="0"
+                              onBlur={(e) => saveForecastRow(p.id, { contractValue: parseFloat(e.target.value) || 0 })} />
+                          </td>
+                          {/* Prior Year column */}
+                          <td className="p-3 text-right text-sm bg-slate-100 text-slate-600 font-medium">{priorYearTotal > 0 ? fmt(priorYearTotal) : <span className="text-slate-300">—</span>}</td>
+                          <td className="p-3">
+                            <select className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-sm outline-none focus:border-emerald-500 focus:bg-white" value={row.spreadRule} onChange={(e) => saveForecastRow(p.id, { spreadRule: e.target.value })}>
+                              <option value="even">Even</option>
+                              <option value="front">Front-Loaded</option>
+                              <option value="back">Back-Loaded</option>
+                              <option value="scurve">S-Curve</option>
+                            </select>
+                          </td>
+                          <td className="p-3">
+                            <input type="month" className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-xs outline-none focus:border-emerald-500 focus:bg-white" value={row.perProjectLockThrough || ""}
+                              onChange={(e) => saveForecastRow(p.id, { perProjectLockThrough: e.target.value || null })} />
+                          </td>
+                          {monthValues.map((mv) => (
+                            <td key={mv.key} className={`p-1 text-right ${mv.locked ? "bg-amber-50" : ""}`}>
+                              {mv.locked ? (
+                                // Locked — truly read-only, show value as text or actual
+                                <div className={`w-full rounded-lg px-2 py-1 text-right text-xs ${mv.isActual ? "bg-emerald-50 font-semibold text-emerald-800 border border-emerald-200" : "bg-amber-50 text-slate-500 border border-amber-200"}`}>
+                                  {mv.value > 0 ? fmt(mv.value) : <span className="text-slate-300">—</span>}
+                                </div>
+                              ) : (
+                                <input type="number"
+                                  className={`w-full rounded-lg border px-2 py-1 text-right text-xs outline-none focus:bg-white ${mv.isActual ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-800 focus:border-emerald-500" : mv.isRedistributed ? "border-blue-200 bg-blue-50 text-blue-700 focus:border-blue-400" : "border-transparent bg-transparent text-slate-700 hover:border-slate-200 focus:border-emerald-500"}`}
+                                  defaultValue={mv.isActual || mv.isRedistributed ? mv.value.toFixed(0) : (mv.value > 0 ? mv.value.toFixed(0) : "")}
+                                  placeholder={mv.value > 0 && !mv.isActual ? mv.value.toFixed(0) : ""}
+                                  onBlur={(e) => saveActual(p.id, mv.key, e.target.value)} />
+                              )}
+                            </td>
+                          ))}
+                          <td className="p-3 text-right text-xs text-slate-500 bg-slate-50">{thereafter > 0 ? fmt(thereafter) : ""}</td>
+                          <td className="p-3 text-right text-sm font-semibold text-slate-800 bg-slate-50">{fmt(yearTotal)}</td>
+                        </tr>
+                      );
+                    })}
 
                   {projectRows.length === 0 && (
                     <tr><td colSpan={20} className="p-8 text-center text-slate-400">No projects match. Make sure projects have <strong>Include in Forecast</strong> checked in their edit form.</td></tr>
@@ -2524,7 +2718,7 @@ export default function App() {
                   {/* Monthly totals */}
                   <tr className="border-t-2 border-slate-300 bg-slate-100 font-semibold text-slate-800">
                     <td className="sticky left-0 z-10 bg-slate-100 p-3">Monthly Total</td>
-                    <td className="p-3" /><td className="p-3" /><td className="p-3" /><td className="p-3" />
+                    <td className="p-3" /><td className="p-3" /><td className="p-3 bg-slate-200" /><td className="p-3" /><td className="p-3" />
                     {monthTotals.map((total, i) => (
                       <td key={months[i].key} className={`p-3 text-right ${globalLockThrough && months[i].key <= globalLockThrough ? "bg-amber-100" : ""}`}>{fmt(total)}</td>
                     ))}
@@ -2535,7 +2729,7 @@ export default function App() {
                   {/* Cumulative YTD */}
                   <tr className="border-t border-slate-200 bg-emerald-50 text-emerald-900">
                     <td className="sticky left-0 z-10 bg-emerald-50 p-3 font-semibold">Cumulative YTD</td>
-                    <td className="p-3" /><td className="p-3" /><td className="p-3" /><td className="p-3" />
+                    <td className="p-3" /><td className="p-3" /><td className="p-3 bg-emerald-100" /><td className="p-3" /><td className="p-3" />
                     {cumulativeTotals.map((total, i) => (
                       <td key={months[i].key} className="p-3 text-right font-medium">{fmt(total)}</td>
                     ))}
@@ -2548,9 +2742,10 @@ export default function App() {
 
             <div className="flex flex-wrap gap-4 text-xs text-slate-500">
               <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-emerald-100 border border-emerald-300" /> Actual entered</span>
-              <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-amber-50 border border-amber-200" /> Locked month</span>
+              <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-blue-100 border border-blue-300" /> Redistributed (remaining after actuals)</span>
+              <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-amber-50 border border-amber-200" /> Locked (read-only)</span>
               <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-white border border-slate-200" /> Forecast (spread)</span>
-              <span className="text-slate-400">· Click any month cell to enter an actual. Actuals show green. Column headers are sortable.</span>
+              <span className="text-slate-400">· Click any unlocked cell to enter an actual. Actuals auto-redistribute remaining value across future months.</span>
             </div>
           </section>
         );
@@ -2591,3 +2786,4 @@ export default function App() {
     </main>
   );
 }
+
