@@ -38,20 +38,24 @@ export function mapCrewFromDb(c) {
 }
 
 export function mapAssignmentFromDb(a, mobilizations = []) {
-  const mobs = mobilizations
-    .filter((m) => m.assignment_id === a.id)
-    .map((m) => ({
+  const mobRows = mobilizations.filter((m) => m.assignment_id === a.id);
+
+  const mobs = mobRows.map((m, i) => {
+    // Only apply legacy assignment-level fields to the FIRST mobilization
+    // as a one-time migration. Subsequent mobs start clean if they have no data.
+    const isFirst = i === 0;
+    return {
       id: m.id,
       start: m.start_date || "",
       durationWeeks: m.duration_weeks || "",
       end: m.end_date || "",
-      superintendent: m.superintendent || a.superintendent || "",
-      fieldCoordinator: m.field_coordinator || a.field_coordinator || "",
-      crewIds: m.crew_ids || (
-        // migrate legacy crew columns into first mob
-        [a.crew1_id, a.crew2_id, a.crew3_id, a.crew4_id].filter(Boolean)
-      ),
-    }));
+      superintendent: m.superintendent || (isFirst ? a.superintendent || "" : ""),
+      fieldCoordinator: m.field_coordinator || (isFirst ? a.field_coordinator || "" : ""),
+      crewIds: (m.crew_ids && m.crew_ids.length > 0)
+        ? m.crew_ids
+        : (isFirst ? [a.crew1_id, a.crew2_id, a.crew3_id, a.crew4_id].filter(Boolean) : []),
+    };
+  });
 
   return {
     id: a.id,
