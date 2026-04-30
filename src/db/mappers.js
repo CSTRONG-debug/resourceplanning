@@ -38,26 +38,35 @@ export function mapCrewFromDb(c) {
 }
 
 export function mapAssignmentFromDb(a, mobilizations = []) {
+  const mobs = mobilizations
+    .filter((m) => m.assignment_id === a.id)
+    .map((m) => ({
+      id: m.id,
+      start: m.start_date || "",
+      durationWeeks: m.duration_weeks || "",
+      end: m.end_date || "",
+      superintendent: m.superintendent || a.superintendent || "",
+      fieldCoordinator: m.field_coordinator || a.field_coordinator || "",
+      crewIds: m.crew_ids || (
+        // migrate legacy crew columns into first mob
+        [a.crew1_id, a.crew2_id, a.crew3_id, a.crew4_id].filter(Boolean)
+      ),
+    }));
+
   return {
     id: a.id,
     projectId: a.project_id || "",
     projectManager: a.project_manager || "",
-    superintendent: a.superintendent || "",
-    fieldCoordinator: a.field_coordinator || "",
     fieldEngineer: a.field_engineer || "",
     safety: a.safety || "",
-    crew1Id: a.crew1_id || "",
-    crew2Id: a.crew2_id || "",
-    crew3Id: a.crew3_id || "",
-    crew4Id: a.crew4_id || "",
-    mobilizations: mobilizations
-      .filter((m) => m.assignment_id === a.id)
-      .map((m) => ({
-        id: m.id,
-        start: m.start_date || "",
-        durationWeeks: m.duration_weeks || "",
-        end: m.end_date || "",
-      })),
+    // keep legacy fields for backward compat with Gantt label helpers
+    superintendent: mobs[0]?.superintendent || a.superintendent || "",
+    fieldCoordinator: mobs[0]?.fieldCoordinator || a.field_coordinator || "",
+    crew1Id: mobs[0]?.crewIds?.[0] || a.crew1_id || "",
+    crew2Id: mobs[0]?.crewIds?.[1] || a.crew2_id || "",
+    crew3Id: mobs[0]?.crewIds?.[2] || a.crew3_id || "",
+    crew4Id: mobs[0]?.crewIds?.[3] || a.crew4_id || "",
+    mobilizations: mobs,
   };
 }
 
@@ -80,39 +89,21 @@ export function projectToDb(project) {
   };
 }
 
-export function resourceToDb(resource) {
-  return {
-    name: resource.name,
-    resource_type: resource.resourceType,
-    home_division: resource.homeDivision,
-    phone: resource.phone,
-    email: resource.email,
-    certifications: resource.certifications || [],
-    pto: resource.pto || [],
-    status: resource.status || "Active",
-  };
-}
-
-export function crewToDb(crew) {
-  return {
-    crew_name: crew.crewName,
-    foreman_name: crew.foremanName,
-    specialty: crew.specialty || [],
-  };
-}
-
 export function assignmentToDb(assignment) {
+  // Store global fields; per-mob fields go into mobilizations table
+  const firstMob = assignment.mobilizations?.[0];
   return {
     project_id: assignment.projectId,
     project_manager: assignment.projectManager,
-    superintendent: assignment.superintendent,
-    field_coordinator: assignment.fieldCoordinator,
     field_engineer: assignment.fieldEngineer,
     safety: assignment.safety,
-    crew1_id: assignment.crew1Id || null,
-    crew2_id: assignment.crew2Id || null,
-    crew3_id: assignment.crew3Id || null,
-    crew4_id: assignment.crew4Id || null,
+    // keep legacy columns populated from first mob for backward compat
+    superintendent: firstMob?.superintendent || "",
+    field_coordinator: firstMob?.fieldCoordinator || "",
+    crew1_id: firstMob?.crewIds?.[0] || null,
+    crew2_id: firstMob?.crewIds?.[1] || null,
+    crew3_id: firstMob?.crewIds?.[2] || null,
+    crew4_id: firstMob?.crewIds?.[3] || null,
   };
 }
 
@@ -122,5 +113,8 @@ export function mobilizationToDb(mob, assignmentId) {
     start_date: mob.start || null,
     duration_weeks: mob.durationWeeks === "" ? null : Number(mob.durationWeeks),
     end_date: mob.end || null,
+    superintendent: mob.superintendent || null,
+    field_coordinator: mob.fieldCoordinator || null,
+    crew_ids: mob.crewIds || [],
   };
 }
