@@ -1558,47 +1558,100 @@ export default function App() {
     return [...months].sort();
   }
 
-  // Spread rules: distribute contractValue across active months
-  function spreadRevenue(contractValue, activeMonths, rule) {
+  // Get the number of onsite days a project has in a given month
+  // across all its mobilization date ranges
+  function getProjectDaysInMonth(projectId, monthKey) {
+    const [year, month] = monthKey.split("-").map(Number);
+    const monthStart = new Date(year, month - 1, 1);
+    const monthEnd = new Date(year, month, 0); // last day of month
+    let days = 0;
+    const projectAssignments = assignments.filter((a) => a.projectId === projectId);
+    projectAssignments.forEach((a) => {
+      (a.mobilizations || []).forEach((mob) => {
+        if (!mob.start || !mob.end) return;
+        const mobStart = toDate(mob.start);
+        const mobEnd = toDate(mob.end);
+        if (!mobStart || !mobEnd) return;
+        const overlapStart = mobStart > monthStart ? mobStart : monthStart;
+        const overlapEnd = mobEnd < monthEnd ? mobEnd : monthEnd;
+        if (overlapStart <= overlapEnd) {
+          days += Math.ceil((overlapEnd - overlapStart) / (1000 * 60 * 60 * 24)) + 1;
+        }
+      });
+    });
+    return days;
+  }
+
+  // Spread rules: distribute contractValue across active months weighted by actual onsite days
+  function spreadRevenue(contractValue, activeMonths, rule, projectId = null) {
     const n = activeMonths.length;
     if (n === 0 || !contractValue) return {};
     const result = {};
+
+    // Get day-weights per month if projectId is provided for accurate weighting
+    const dayWeights = projectId
+      ? activeMonths.map((m) => Math.max(1, getProjectDaysInMonth(projectId, m)))
+      : activeMonths.map(() => 1);
+    const totalDays = dayWeights.reduce((s, d) => s + d, 0);
+
     if (rule === "even") {
-      const monthly = contractValue / n;
-      activeMonths.forEach((m) => { result[m] = monthly; });
+      // Weighted by actual onsite days — a 1-day month gets proportionally less than a 25-day month
+      activeMonths.forEach((m, i) => { result[m] = (dayWeights[i] / totalDays) * contractValue; });
     } else if (rule === "front") {
-      // Front-loaded: weights 1/(i+1) normalized
-      const weights = activeMonths.map((_, i) => 1 / (i + 1));
-      const total = weights.reduce((s, w) => s + w, 0);
-      activeMonths.forEach((m, i) => { result[m] = (weights[i] / total) * contractValue; });
+      // Front-loaded: combine day-weight with decreasing index weight
+      const indexWeights = activeMonths.map((_, i) => 1 / (i + 1));
+      const combined = activeMonths.map((_, i) => dayWeights[i] * indexWeights[i]);
+      const total = combined.reduce((s, w) => s + w, 0);
+      activeMonths.forEach((m, i) => { result[m] = (combined[i] / total) * contractValue; });
     } else if (rule === "back") {
-      // Back-loaded: reverse front-loaded
-      const weights = activeMonths.map((_, i) => 1 / (activeMonths.length - i));
-      const total = weights.reduce((s, w) => s + w, 0);
-      activeMonths.forEach((m, i) => { result[m] = (weights[i] / total) * contractValue; });
+      // Back-loaded: combine day-weight with increasing index weight
+      const indexWeights = activeMonths.map((_, i) => 1 / (n - i));
+      const combined = activeMonths.map((_, i) => dayWeights[i] * indexWeights[i]);
+      const total = combined.reduce((s, w) => s + w, 0);
+      activeMonths.forEach((m, i) => { result[m] = (combined[i] / total) * contractValue; });
     } else if (rule === "scurve") {
-      // S-curve: bell-shaped weights peaked in the middle
+      // S-curve: bell-shaped weights peaked in middle, multiplied by day-weight
       const mid = (n - 1) / 2;
-      const sigma = n / 4;
-      const weights = activeMonths.map((_, i) => Math.exp(-Math.pow(i - mid, 2) / (2 * sigma * sigma)));
-      const total = weights.reduce((s, w) => s + w, 0);
-      activeMonths.forEach((m, i) => { result[m] = (weights[i] / total) * contractValue; });
+      const sigma = Math.max(1, n / 4);
+      const bellWeights = activeMonths.map((_, i) => Math.exp(-Math.pow(i - mid, 2) / (2 * sigma * sigma)));
+      const combined = activeMonths.map((_, i) => dayWeights[i] * bellWeights[i]);
+      const total = combined.reduce((s, w) => s + w, 0);
+      activeMonths.forEach((m, i) => { result[m] = (combined[i] / total) * contractValue; });
     }
     return result;
   }
 
-  // Get forecast row for a project (with defaults)
-  function getForecastRow(projectId) {
-    return forecastData[projectId] || { contractValue: 0, spreadRule: "even", actuals: {}, perProjectLockThrough: null };
+  // Recalculate redistributed spread for a single project based on current actuals + rule
+  function recalculateProject(projectId, row) {
+    const allMonths = getProjectMonths(projectId);
+    const actuals = row.actuals || {};
+    const totalActuals = Object.values(actuals).reduce((s, v) => s + v, 0);
+    const remaining = (row.contractValue || 0) - totalActuals;
+    const remainingMonths = allMonths.filter((m) => actuals[m] === undefined && !isMonthLocked(m));
+    if (remainingMonths.length > 0 && remaining >= 0) {
+      return spreadRevenue(remaining, remainingMonths, row.spreadRule, projectId);
+    }
+    return {};
   }
 
-  // Check if a month is locked (global OR per-project)
-  function isMonthLocked(monthKey, projectId) {
-    const row = getForecastRow(projectId);
-    const perLock = row.perProjectLockThrough;
-    if (globalLockThrough && monthKey <= globalLockThrough) return true;
-    if (perLock && monthKey <= perLock) return true;
-    return false;
+  // Recalculate all visible forecast projects and save
+  async function recalculateAll() {
+    const forecastProjects = projects.filter((p) => forecastDivisionFilter.includes(p.division) && p.includeInForecast && p.status !== "Complete");
+    for (const p of forecastProjects) {
+      const row = getForecastRow(p.id);
+      const redistributed = recalculateProject(p.id, row);
+      await saveForecastRow(p.id, { redistributedSpread: redistributed });
+    }
+  }
+
+  // Get forecast row for a project (with defaults)
+  function getForecastRow(projectId) {
+    return forecastData[projectId] || { contractValue: 0, spreadRule: "even", actuals: {}, redistributedSpread: {} };
+  }
+
+  // Check if a month is locked (global lock only)
+  function isMonthLocked(monthKey) {
+    return !!(globalLockThrough && monthKey <= globalLockThrough);
   }
 
   // Get the value to display for a month — actual if exists, redistributed spread, else original spread
@@ -1622,7 +1675,6 @@ export default function App() {
       spread_rule: newRow.spreadRule,
       actuals: newRow.actuals,
       redistributed_spread: newRow.redistributedSpread || {},
-      per_project_lock_through: newRow.perProjectLockThrough || null,
       updated_at: new Date().toISOString(),
     };
     if (existing?.id) {
@@ -1647,24 +1699,31 @@ export default function App() {
       newActuals[monthKey] = Number(value);
     }
 
-    // Recalculate: if actuals have been entered, redistribute the remaining
-    // contract value (minus all actuals) across the remaining unlocked months
-    // using the project's selected spread rule.
     const allMonths = getProjectMonths(projectId);
     const totalActuals = Object.values(newActuals).reduce((s, v) => s + v, 0);
     const remaining = (row.contractValue || 0) - totalActuals;
-
-    // Remaining months = active months that have no actual and aren't locked
-    const remainingMonths = allMonths.filter((m) => newActuals[m] === undefined && !isMonthLocked(m, projectId));
+    const remainingMonths = allMonths.filter((m) => newActuals[m] === undefined && !isMonthLocked(m));
 
     if (remainingMonths.length > 0 && remaining >= 0) {
-      // Store the redistributed spread as a virtual override — we keep this in
-      // a separate key so the spread formula knows to use it
-      const redistributed = spreadRevenue(remaining, remainingMonths, row.spreadRule);
+      const redistributed = spreadRevenue(remaining, remainingMonths, row.spreadRule, projectId);
       await saveForecastRow(projectId, { actuals: newActuals, redistributedSpread: redistributed });
     } else {
       await saveForecastRow(projectId, { actuals: newActuals, redistributedSpread: {} });
     }
+  }
+
+  // When spread rule changes, immediately recalculate remaining months
+  async function saveSpreadRule(projectId, newRule) {
+    const row = getForecastRow(projectId);
+    const allMonths = getProjectMonths(projectId);
+    const actuals = row.actuals || {};
+    const totalActuals = Object.values(actuals).reduce((s, v) => s + v, 0);
+    const remaining = (row.contractValue || 0) - totalActuals;
+    const remainingMonths = allMonths.filter((m) => actuals[m] === undefined && !isMonthLocked(m));
+    const redistributed = remainingMonths.length > 0 && remaining >= 0
+      ? spreadRevenue(remaining, remainingMonths, newRule, projectId)
+      : {};
+    await saveForecastRow(projectId, { spreadRule: newRule, redistributedSpread: redistributed });
   }
 
   // Save global lock setting
@@ -2572,8 +2631,8 @@ export default function App() {
         const projectRows = forecastProjects.map((p) => {
           const row = getForecastRow(p.id);
           const allMonths = getProjectMonths(p.id);
-          const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
-          const monthValues = months.map((m) => ({ ...getMonthValue(p.id, m.key, spread), key: m.key, locked: isMonthLocked(m.key, p.id) }));
+          const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule, p.id);
+          const monthValues = months.map((m) => ({ ...getMonthValue(p.id, m.key, spread), key: m.key, locked: isMonthLocked(m.key) }));
           const yearTotal = monthValues.reduce((s, mv) => s + mv.value, 0);
           const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + (spread[m] || 0), 0);
           return { project: p, row, spread, monthValues, yearTotal, thereafter };
@@ -2619,6 +2678,7 @@ export default function App() {
               </div>
               <button onClick={exportForecastCsv} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">Export CSV</button>
               <button onClick={exportForecastPdf} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">Export PDF</button>
+              <button onClick={recalculateAll} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 shadow-sm">↻ Recalculate</button>
               <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm cursor-pointer">
                 Import CSV<input type="file" accept=".csv" onChange={importForecastCsv} className="hidden" />
               </label>
@@ -2639,7 +2699,6 @@ export default function App() {
                     <SortTh label="Contract Value" sortKey="contractValue" className="min-w-[130px]" />
                     <th className="p-3 min-w-[100px] bg-slate-200 text-right">Prior Year</th>
                     <th className="p-3 min-w-[110px]">Spread Rule</th>
-                    <th className="p-3 min-w-[105px]">Project Lock</th>
                     {months.map((m) => (
                       <th key={m.key} className={`p-3 text-right min-w-[88px] ${globalLockThrough && m.key <= globalLockThrough ? "bg-amber-50" : ""}`}>
                         {m.label}{globalLockThrough && m.key <= globalLockThrough ? " 🔒" : ""}
@@ -2657,7 +2716,7 @@ export default function App() {
                       const prevYear = forecastYear - 1;
                       const prevYearMonths = Array.from({ length: 12 }, (_, i) => `${prevYear}-${String(i + 1).padStart(2, "0")}`);
                       const allMonths = getProjectMonths(p.id);
-                      const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
+                      const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule, p.id);
                       const priorYearTotal = prevYearMonths.reduce((s, m) => {
                         const mv = getMonthValue(p.id, m, spread);
                         return s + mv.value;
@@ -2678,16 +2737,12 @@ export default function App() {
                           {/* Prior Year column */}
                           <td className="p-3 text-right text-sm bg-slate-100 text-slate-600 font-medium">{priorYearTotal > 0 ? fmt(priorYearTotal) : <span className="text-slate-300">—</span>}</td>
                           <td className="p-3">
-                            <select className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-sm outline-none focus:border-emerald-500 focus:bg-white" value={row.spreadRule} onChange={(e) => saveForecastRow(p.id, { spreadRule: e.target.value })}>
+                            <select className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-sm outline-none focus:border-emerald-500 focus:bg-white" value={row.spreadRule} onChange={(e) => saveSpreadRule(p.id, e.target.value)}>
                               <option value="even">Even</option>
                               <option value="front">Front-Loaded</option>
                               <option value="back">Back-Loaded</option>
                               <option value="scurve">S-Curve</option>
                             </select>
-                          </td>
-                          <td className="p-3">
-                            <input type="month" className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-xs outline-none focus:border-emerald-500 focus:bg-white" value={row.perProjectLockThrough || ""}
-                              onChange={(e) => saveForecastRow(p.id, { perProjectLockThrough: e.target.value || null })} />
                           </td>
                           {monthValues.map((mv) => (
                             <td key={mv.key} className={`p-1 text-right ${mv.locked ? "bg-amber-50" : ""}`}>
@@ -2718,7 +2773,7 @@ export default function App() {
                   {/* Monthly totals */}
                   <tr className="border-t-2 border-slate-300 bg-slate-100 font-semibold text-slate-800">
                     <td className="sticky left-0 z-10 bg-slate-100 p-3">Monthly Total</td>
-                    <td className="p-3" /><td className="p-3" /><td className="p-3 bg-slate-200" /><td className="p-3" /><td className="p-3" />
+                    <td className="p-3" /><td className="p-3" /><td className="p-3 bg-slate-200" /><td className="p-3" />
                     {monthTotals.map((total, i) => (
                       <td key={months[i].key} className={`p-3 text-right ${globalLockThrough && months[i].key <= globalLockThrough ? "bg-amber-100" : ""}`}>{fmt(total)}</td>
                     ))}
@@ -2729,7 +2784,7 @@ export default function App() {
                   {/* Cumulative YTD */}
                   <tr className="border-t border-slate-200 bg-emerald-50 text-emerald-900">
                     <td className="sticky left-0 z-10 bg-emerald-50 p-3 font-semibold">Cumulative YTD</td>
-                    <td className="p-3" /><td className="p-3" /><td className="p-3 bg-emerald-100" /><td className="p-3" /><td className="p-3" />
+                    <td className="p-3" /><td className="p-3" /><td className="p-3 bg-emerald-100" /><td className="p-3" />
                     {cumulativeTotals.map((total, i) => (
                       <td key={months[i].key} className="p-3 text-right font-medium">{fmt(total)}</td>
                     ))}
@@ -2786,4 +2841,3 @@ export default function App() {
     </main>
   );
 }
-
