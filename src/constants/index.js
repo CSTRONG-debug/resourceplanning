@@ -51,15 +51,17 @@ export const blankProject = {
 export const blankAssignment = {
   projectId: "",
   projectManager: "",
-  superintendent: "",
-  fieldCoordinator: "",
   fieldEngineer: "",
   safety: "",
-  crew1Id: "",
-  crew2Id: "",
-  crew3Id: "",
-  crew4Id: "",
-  mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "" }],
+  mobilizations: [{
+    id: crypto.randomUUID(),
+    start: "",
+    durationWeeks: "",
+    end: "",
+    superintendent: "",
+    fieldCoordinator: "",
+    crewIds: [],
+  }],
 };
 
 export const blankResource = {
