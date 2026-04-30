@@ -1220,6 +1220,7 @@ export default function App() {
   const today = new Date();
   const [utilizationStart, setUtilizationStart] = useState(today.toISOString().slice(0, 10));
   const [utilizationEnd, setUtilizationEnd] = useState(new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10));
+  const [utilizationSearch, setUtilizationSearch] = useState("");
 
   // ── Initial Supabase load ──────────────────────────────────────────────────
   useEffect(() => {
@@ -1439,16 +1440,15 @@ export default function App() {
     setEditingAssignmentId(null);
     setAssignmentForm({
       ...blankAssignment,
-      mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [] }],
+      mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false }],
     });
     setShowAssignmentForm(true);
   }
 
   function openEditAssignmentForm(assignment) {
     setEditingAssignmentId(assignment.id);
-    // Migrate legacy flat roles into mobilizations if needed
     const mobs = (assignment.mobilizations?.length ? assignment.mobilizations : [
-      { id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [] }
+      { id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false }
     ]).map((mob, i) => {
       const isFirst = i === 0;
       return {
@@ -1456,12 +1456,13 @@ export default function App() {
         start: mob.start || "",
         durationWeeks: mob.durationWeeks || "",
         end: mob.end || "",
-        // Only fall back to legacy assignment-level fields for the first mob
         superintendent: mob.superintendent || (isFirst ? assignment.superintendent || "" : ""),
         fieldCoordinator: mob.fieldCoordinator || (isFirst ? assignment.fieldCoordinator || "" : ""),
         crewIds: mob.crewIds?.length
           ? mob.crewIds
           : (isFirst ? [assignment.crew1Id, assignment.crew2Id, assignment.crew3Id, assignment.crew4Id].filter(Boolean) : []),
+        crewMenCounts: mob.crewMenCounts || {},
+        crewOnly: mob.crewOnly || false,
       };
     });
     setAssignmentForm({
@@ -1502,7 +1503,7 @@ export default function App() {
     if (editingAssignmentId) setAssignments((current) => current.map((a) => (a.id === editingAssignmentId ? mapped : a)));
     else setAssignments((current) => [mapped, ...current]);
     setShowAssignmentForm(false); setEditingAssignmentId(null);
-    setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [] }] });
+    setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false }] });
   }
 
   async function deleteAssignment(id) {
@@ -2434,8 +2435,7 @@ export default function App() {
             const utilEnd = toDate(utilizationEnd);
             if (!utilStart || !utilEnd || utilStart > utilEnd) return null;
 
-            const utilizationRows = crews.map((crew) => {
-              // All mobs that overlap the utilization window and include this crew
+            const allUtilizationRows = crews.map((crew) => {
               const activeMobs = ganttItems.filter((item) => {
                 if (!getAssignmentCrewIds(item.assignment).includes(crew.id)) return false;
                 const s = toDate(item.start);
@@ -2444,8 +2444,6 @@ export default function App() {
                 return rangesOverlap(s, addDays(e, 1), utilStart, addDays(utilEnd, 1));
               });
 
-              // Men mobilized = sum of crewMenCounts for this crew across active mobs
-              // falls back to totalMembers if no specific count set
               const menMobilized = activeMobs.reduce((sum, item) => {
                 const count = (item.assignment._crewMenCounts || {})[crew.id];
                 return sum + (count !== undefined ? count : (crew.totalMembers || 0));
@@ -2458,30 +2456,86 @@ export default function App() {
               return { crew, totalMen, menMobilized, delta, projects };
             }).filter((r) => r.crew.totalMembers > 0 || r.menMobilized > 0);
 
+            // Apply search filter
+            const utilizationRows = utilizationSearch
+              ? allUtilizationRows.filter((r) => {
+                  const q = utilizationSearch.toLowerCase();
+                  return (
+                    r.crew.crewName.toLowerCase().includes(q) ||
+                    (r.crew.foremanName || "").toLowerCase().includes(q) ||
+                    r.projects.some((p) => p.toLowerCase().includes(q))
+                  );
+                })
+              : allUtilizationRows;
+
             const grandTotalMen = utilizationRows.reduce((s, r) => s + r.totalMen, 0);
             const grandMobilized = utilizationRows.reduce((s, r) => s + r.menMobilized, 0);
             const grandDelta = grandTotalMen - grandMobilized;
 
+            function exportUtilizationPdf() {
+              const section = document.getElementById("crew-utilization");
+              if (!section) return;
+              const cloned = section.cloneNode(true);
+              // Remove interactive controls (inputs, buttons, search bar)
+              cloned.querySelectorAll("input, button, .no-print").forEach((el) => el.remove());
+              // Convert progress bar divs to width-styled spans for print
+              const css = `
+                @page { size: portrait; margin: 0.4in; }
+                body { font-family: Arial, sans-serif; font-size: 11px; color: #0f172a; }
+                h2 { font-size: 14px; margin: 0 0 4px 0; }
+                p { margin: 0 0 8px 0; color: #64748b; font-size: 10px; }
+                table { border-collapse: collapse; width: 100%; }
+                th { background: #f1f5f9; padding: 6px 8px; text-align: left; border-bottom: 2px solid #cbd5e1; font-size: 10px; }
+                td { padding: 6px 8px; border-bottom: 1px solid #e2e8f0; font-size: 10px; }
+                .bar-wrap { background: #e2e8f0; border-radius: 4px; height: 8px; width: 120px; display: inline-block; vertical-align: middle; }
+                .bar-fill { height: 8px; border-radius: 4px; display: inline-block; }
+                .badge-over { background: #fee2e2; color: #b91c1c; padding: 2px 6px; border-radius: 9999px; font-weight: 700; }
+                .badge-bench { background: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 9999px; font-weight: 700; }
+                .badge-ok { background: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 9999px; font-weight: 700; }
+                .totals { background: #f1f5f9; font-weight: 700; }
+              `;
+              const title = `Crew Utilization — ${utilizationStart} to ${utilizationEnd}`;
+              const w = window.open("", "_blank", "width=900,height=1100");
+              if (!w) { alert("Please allow pop-ups to export PDF."); return; }
+              w.document.open();
+              w.document.write(`<!doctype html><html><head><title>${title}</title><style>${css}</style></head><body><h2>${title}</h2>${cloned.outerHTML}<script>window.onload=function(){setTimeout(function(){window.print()},400)}<\/script></body></html>`);
+              w.document.close();
+            }
+
             return (
-              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex flex-wrap items-center gap-4">
+              <section id="crew-utilization" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex flex-wrap items-center gap-3">
                   <div>
                     <h2 className="text-xl font-bold">Crew Utilization</h2>
                     <p className="text-sm text-slate-500">Men deployed vs. available capacity across the selected date range.</p>
                   </div>
-                  <div className="flex items-center gap-3 ml-auto">
-                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                  <div className="ml-auto flex flex-wrap items-center gap-3">
+                    {/* Search */}
+                    <div className="no-print flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
+                      <Search size={15} className="text-slate-400" />
+                      <input className="outline-none text-sm w-40" placeholder="Search crew or project…"
+                        value={utilizationSearch} onChange={(e) => setUtilizationSearch(e.target.value)} />
+                    </div>
+                    {/* Date range */}
+                    <label className="no-print flex items-center gap-2 text-sm font-medium text-slate-700">
                       From
                       <input type="date" className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600 text-sm"
                         value={utilizationStart} onChange={(e) => setUtilizationStart(e.target.value)} />
                     </label>
-                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <label className="no-print flex items-center gap-2 text-sm font-medium text-slate-700">
                       To
                       <input type="date" className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600 text-sm"
                         value={utilizationEnd} onChange={(e) => setUtilizationEnd(e.target.value)} />
                     </label>
+                    {/* PDF export */}
+                    <button onClick={exportUtilizationPdf} className="no-print rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                      Export PDF
+                    </button>
                   </div>
                 </div>
+
+                {/* Date range label shown in PDF */}
+                <p className="mb-3 text-xs text-slate-400">{utilizationStart} → {utilizationEnd}{utilizationSearch ? ` · Filtered: "${utilizationSearch}"` : ""}</p>
 
                 <div className="overflow-x-auto rounded-xl border border-slate-200">
                   <table className="w-full text-left text-sm">
@@ -2510,15 +2564,16 @@ export default function App() {
                             <td className="p-3 text-center font-semibold text-slate-700">{row.totalMen || <span className="text-slate-300">—</span>}</td>
                             <td className="p-3 text-center font-semibold text-slate-900">{row.menMobilized}</td>
                             <td className="p-3 text-center">
-                              <span className={`rounded-full px-3 py-1 text-xs font-bold ${isOver ? "bg-red-100 text-red-700" : isBench ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+                              <span className={`rounded-full px-3 py-1 text-xs font-bold ${isOver ? "bg-red-100 text-red-700 badge-over" : isBench ? "bg-amber-100 text-amber-700 badge-bench" : "bg-emerald-100 text-emerald-700 badge-ok"}`}>
                                 {isOver ? `+${Math.abs(row.delta)} over` : isBench ? `${row.delta} on bench` : "Fully utilized"}
                               </span>
                             </td>
                             <td className="p-3 min-w-[160px]">
                               {row.totalMen > 0 ? (
                                 <div className="flex items-center gap-2">
-                                  <div className="flex-1 h-3 rounded-full bg-slate-200 overflow-hidden">
-                                    <div className={`h-full rounded-full ${isOver ? "bg-red-500" : utilPct >= 80 ? "bg-emerald-500" : "bg-amber-400"}`} style={{ width: `${Math.min(100, utilPct)}%` }} />
+                                  <div className="flex-1 h-3 rounded-full bg-slate-200 overflow-hidden bar-wrap">
+                                    <div className={`h-full rounded-full bar-fill ${isOver ? "bg-red-500" : utilPct >= 80 ? "bg-emerald-500" : "bg-amber-400"}`}
+                                      style={{ width: `${Math.min(100, utilPct)}%`, background: isOver ? "#ef4444" : utilPct >= 80 ? "#10b981" : "#f59e0b" }} />
                                   </div>
                                   <span className="text-xs font-semibold text-slate-600 w-9 text-right">{utilPct}%</span>
                                 </div>
@@ -2529,11 +2584,13 @@ export default function App() {
                         );
                       })}
                       {utilizationRows.length === 0 && (
-                        <tr><td colSpan={6} className="p-6 text-center text-slate-400">No crews with capacity set. Add total members in the Crews tab.</td></tr>
+                        <tr><td colSpan={6} className="p-6 text-center text-slate-400">
+                          {utilizationSearch ? `No results matching "${utilizationSearch}".` : "No crews with capacity set. Add total members in the Crews tab."}
+                        </td></tr>
                       )}
                       {/* Totals row */}
-                      <tr className="border-t-2 border-slate-300 bg-slate-100 font-semibold">
-                        <td className="p-3">Total</td>
+                      <tr className="border-t-2 border-slate-300 bg-slate-100 font-semibold totals">
+                        <td className="p-3">Total ({utilizationRows.length} crew{utilizationRows.length === 1 ? "" : "s"})</td>
                         <td className="p-3 text-center">{grandTotalMen}</td>
                         <td className="p-3 text-center">{grandMobilized}</td>
                         <td className="p-3 text-center">
@@ -2545,7 +2602,8 @@ export default function App() {
                           {grandTotalMen > 0 && (
                             <div className="flex items-center gap-2 max-w-xs">
                               <div className="flex-1 h-3 rounded-full bg-slate-200 overflow-hidden">
-                                <div className={`h-full rounded-full ${grandDelta < 0 ? "bg-red-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(100, Math.round((grandMobilized / grandTotalMen) * 100))}%` }} />
+                                <div className={`h-full rounded-full ${grandDelta < 0 ? "bg-red-500" : "bg-emerald-500"}`}
+                                  style={{ width: `${Math.min(100, Math.round((grandMobilized / grandTotalMen) * 100))}%` }} />
                               </div>
                               <span className="text-xs font-semibold text-slate-600 w-9">{Math.round((grandMobilized / grandTotalMen) * 100)}%</span>
                             </div>
@@ -3056,4 +3114,3 @@ export default function App() {
     </main>
   );
 }
-
