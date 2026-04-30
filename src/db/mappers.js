@@ -34,6 +34,7 @@ export function mapCrewFromDb(c) {
     crewName: c.crew_name || "",
     foremanName: c.foreman_name || "",
     specialty: c.specialty || [],
+    totalMembers: c.total_members || 0,
   };
 }
 
@@ -54,6 +55,8 @@ export function mapAssignmentFromDb(a, mobilizations = []) {
       crewIds: (m.crew_ids && m.crew_ids.length > 0)
         ? m.crew_ids
         : (isFirst ? [a.crew1_id, a.crew2_id, a.crew3_id, a.crew4_id].filter(Boolean) : []),
+      crewMenCounts: m.crew_men_counts || {},
+      crewOnly: m.crew_only || false,
     };
   });
 
@@ -111,6 +114,7 @@ export function crewToDb(crew) {
     crew_name: crew.crewName,
     foreman_name: crew.foremanName,
     specialty: crew.specialty || [],
+    total_members: crew.totalMembers || 0,
   };
 }
 
@@ -141,5 +145,7 @@ export function mobilizationToDb(mob, assignmentId) {
     superintendent: mob.superintendent || null,
     field_coordinator: mob.fieldCoordinator || null,
     crew_ids: mob.crewIds || [],
+    crew_men_counts: mob.crewMenCounts || {},
+    crew_only: mob.crewOnly || false,
   };
 }
