@@ -1148,6 +1148,7 @@ export default function App() {
   const [dashboardResourceTypeFilter, setDashboardResourceTypeFilter] = useState([...defaultDashboardResourceTypes]);
   const [projectTabDivisionFilter, setProjectTabDivisionFilter] = useState([...divisions]);
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
+  const [demandZoom, setDemandZoom] = useState("Months");
   const [expandedView, setExpandedView] = useState(null);
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [currentUser, setCurrentUser] = useState(() => sessionStorage.getItem("ggc_current_user") || "");
@@ -1254,6 +1255,7 @@ export default function App() {
 
   const assignmentMatchesDashboardResourceType = (assignment) => {
     const names = [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety].filter(Boolean);
+    // Crew-only mobilization — no named resources, always show
     if (!names.length) return true;
     const selectedNames = resources.filter((r) => dashboardResourceTypeFilter.includes(r.resourceType)).map((r) => r.name);
     return names.some((name) => selectedNames.includes(name));
@@ -1269,6 +1271,8 @@ export default function App() {
   const activeProjects = projects.filter((p) => p.status !== "Complete");
   const timeline = useMemo(() => buildTimeline(visibleItems, zoom), [visibleItems, zoom]);
   const timelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, timeline));
+  // Demand chart uses its own independent timeline scoped to demandZoom
+  const demandTimeline = useMemo(() => buildTimeline(visibleItems, demandZoom), [visibleItems, demandZoom]);
 
   function toggleSort(setter, key) {
     setter((current) => ({ key, direction: current.key === key && current.direction === "asc" ? "desc" : "asc" }));
@@ -2310,23 +2314,35 @@ export default function App() {
 
           {/* Demand Chart */}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <MultiSelectFilter label="Resource Demand Home Division Filter" options={divisions} selected={demandHomeDivisionFilter} setSelected={setDemandHomeDivisionFilter} />
+            <div className="flex flex-wrap gap-4 items-start">
+              <div className="flex-1 min-w-[200px]">
+                <MultiSelectFilter label="Resource Demand Home Division Filter" options={divisions} selected={demandHomeDivisionFilter} setSelected={setDemandHomeDivisionFilter} />
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="mb-2 text-sm font-semibold text-slate-700">Demand Chart Zoom</p>
+                <div className="flex flex-wrap gap-2">
+                  {zoomModes.map((mode) => (
+                    <button key={mode} onClick={() => setDemandZoom(mode)}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${demandZoom === mode ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"}`}>
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
           <ResourceDemandChart
-            items={timelineVisibleItems.map((item) => {
-              // Find the primary assigned resource to get their home division
+            items={visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, demandTimeline)).map((item) => {
               const assignedNames = [item.assignment.superintendent, item.assignment.projectManager, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].filter(Boolean);
               const assignedResource = resources.find((r) => assignedNames.includes(r.name) && demandHomeDivisionFilter.includes(r.homeDivision));
-              // Fall back: check any assigned resource regardless of filter to get home division
               const anyAssignedResource = assignedResource || resources.find((r) => assignedNames.includes(r.name));
               const resourceHomeDivision = anyAssignedResource?.homeDivision || item.project.division;
-              // Only include this item if its resolved home division is in the current filter
               return demandHomeDivisionFilter.includes(resourceHomeDivision)
                 ? { ...item, assignment: { ...item.assignment, _resourceHomeDivision: resourceHomeDivision } }
                 : null;
             }).filter(Boolean)}
-            timeline={timeline}
-            zoom={zoom}
+            timeline={demandTimeline}
+            zoom={demandZoom}
             totalResources={resources.filter((r) => dashboardResourceTypeFilter.includes(r.resourceType) && demandHomeDivisionFilter.includes(r.homeDivision)).length}
             onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")}
             onBarClick={setDemandDrilldown}
@@ -2470,7 +2486,7 @@ export default function App() {
                 <button onClick={() => setDemandDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
               </div>
               <div className="flex-1 overflow-auto p-5">
-                <GanttHeader timeline={periodTimeline} zoom={zoom} />
+                <GanttHeader timeline={periodTimeline} zoom={demandZoom} />
                 <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 280}px` }}>
                   {items.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments found for this segment.</div>}
                   {items.map((item) => (
@@ -2506,7 +2522,7 @@ export default function App() {
                 <button onClick={() => setDemandPeriodDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
               </div>
               <div className="flex-1 overflow-auto p-5">
-                <GanttHeader timeline={periodTimeline} zoom={zoom} />
+                <GanttHeader timeline={periodTimeline} zoom={demandZoom} />
                 <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 280}px` }}>
                   {periodItems.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments active in this period.</div>}
                   {periodItems.map((item) => (
@@ -2861,5 +2877,3 @@ export default function App() {
     </main>
   );
 }
-
-
