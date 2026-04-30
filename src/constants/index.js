@@ -79,4 +79,5 @@ export const blankCrew = {
   crewName: "",
   foremanName: "",
   specialty: [],
+  totalMembers: 0,
 };
