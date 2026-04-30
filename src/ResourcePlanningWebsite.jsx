@@ -473,7 +473,7 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
       ...c,
       mobilizations: [...(c.mobilizations || []), {
         id: crypto.randomUUID(), start: "", durationWeeks: "", end: "",
-        superintendent: "", fieldCoordinator: "", crewIds: [],
+        superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false,
       }],
     }));
   }
@@ -499,6 +499,16 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
         const newCrewIds = [...(mob.crewIds || [])];
         newCrewIds[crewIndex] = crewId;
         return { ...mob, crewIds: newCrewIds };
+      }),
+    }));
+  }
+
+  function updateCrewMenCount(mobId, crewId, count) {
+    setForm((c) => ({
+      ...c,
+      mobilizations: (c.mobilizations || []).map((mob) => {
+        if (mob.id !== mobId) return mob;
+        return { ...mob, crewMenCounts: { ...(mob.crewMenCounts || {}), [crewId]: Number(count) || 0 } };
       }),
     }));
   }
@@ -592,17 +602,28 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
                     </label>
                   </div>
 
-                  {/* Per-mob roles */}
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className="space-y-1">
-                      <span className="text-xs font-medium text-slate-600">Superintendent</span>
-                      <SearchableResourceSelect value={mob.superintendent || ""} onChange={(v) => updateMobilization(mob.id, "superintendent", v)} resources={resources} resourceType="Superintendent" placeholder="Search superintendent..." />
-                    </label>
-                    <label className="space-y-1">
-                      <span className="text-xs font-medium text-slate-600">Field Coordinator</span>
-                      <SearchableResourceSelect value={mob.fieldCoordinator || ""} onChange={(v) => updateMobilization(mob.id, "fieldCoordinator", v)} resources={resources} resourceType="Field Coordinator" placeholder="Search field coordinator..." />
-                    </label>
-                  </div>
+                  {/* Per-mob roles — hidden if crew-only */}
+                  {!mob.crewOnly && (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className="space-y-1">
+                        <span className="text-xs font-medium text-slate-600">Superintendent</span>
+                        <SearchableResourceSelect value={mob.superintendent || ""} onChange={(v) => updateMobilization(mob.id, "superintendent", v)} resources={resources} resourceType="Superintendent" placeholder="Search superintendent..." />
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-xs font-medium text-slate-600">Field Coordinator</span>
+                        <SearchableResourceSelect value={mob.fieldCoordinator || ""} onChange={(v) => updateMobilization(mob.id, "fieldCoordinator", v)} resources={resources} resourceType="Field Coordinator" placeholder="Search field coordinator..." />
+                      </label>
+                    </div>
+                  )}
+
+                  {/* Crew-only toggle */}
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" className="h-4 w-4 accent-emerald-600 rounded"
+                      checked={mob.crewOnly || false}
+                      onChange={(e) => updateMobilization(mob.id, "crewOnly", e.target.checked)} />
+                    <span className="text-xs font-semibold text-slate-700">Crew-only mobilization</span>
+                    <span className="text-xs text-slate-400">(no superintendent — crew appears in Crew Gantt only)</span>
+                  </label>
 
                   {/* Crews */}
                   <div className="space-y-2">
@@ -620,6 +641,14 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
                         <div className="flex-1">
                           <SearchableCrewSelect value={crewId} onChange={(v) => updateCrewInMob(mob.id, crewIdx, v)} crews={crews} />
                         </div>
+                        <label className="flex items-center gap-1 shrink-0">
+                          <span className="text-xs text-slate-500">Men:</span>
+                          <input type="number" min="0" step="1"
+                            className="w-16 rounded-lg border border-slate-300 px-2 py-1 text-sm text-right outline-none focus:border-emerald-600"
+                            value={(mob.crewMenCounts || {})[crewId] || ""}
+                            placeholder="0"
+                            onChange={(e) => updateCrewMenCount(mob.id, crewId, e.target.value)} />
+                        </label>
                         <button type="button" onClick={() => removeCrewFromMob(mob.id, crewIdx)} className="rounded-lg border border-red-200 px-2 py-1.5 text-xs text-red-700 hover:bg-red-50">✕</button>
                       </div>
                     ))}
@@ -766,6 +795,10 @@ export function CrewForm({ form, setForm, certifications, onSave, onCancel, edit
           <label className="space-y-1">
             <span className="text-sm font-medium text-slate-700">Foreman Name</span>
             <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.foremanName} onChange={(e) => updateField("foremanName", e.target.value)} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Total Crew Members</span>
+            <input type="number" min="0" step="1" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.totalMembers || ""} placeholder="0" onChange={(e) => updateField("totalMembers", Number(e.target.value) || 0)} />
           </label>
           <label className="space-y-1 md:col-span-2">
             <span className="text-sm font-medium text-slate-700">Specialty</span>
@@ -1183,6 +1216,11 @@ export default function App() {
   const [dashboardResourceSearch, setDashboardResourceSearch] = useState("");
   const [dashboardCrewSearch, setDashboardCrewSearch] = useState("");
 
+  // Crew utilization date range
+  const today = new Date();
+  const [utilizationStart, setUtilizationStart] = useState(today.toISOString().slice(0, 10));
+  const [utilizationEnd, setUtilizationEnd] = useState(new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10));
+
   // ── Initial Supabase load ──────────────────────────────────────────────────
   useEffect(() => {
     async function loadSupabaseData() {
@@ -1337,7 +1375,10 @@ export default function App() {
 
   const crewGanttRows = crews
     .filter((c) => {
-      if (!crewGanttFilter.includes(c.id)) return false;
+      // If filter is empty (no selection made), show all crews
+      // A crew is shown if it's in the filter OR if the filter hasn't been explicitly set
+      const filterIsDefault = crewGanttFilter.length === 0 || crews.every((crew) => crewGanttFilter.includes(crew.id));
+      if (!filterIsDefault && !crewGanttFilter.includes(c.id)) return false;
       if (dashboardCrewSearch) {
         const q = dashboardCrewSearch.toLowerCase();
         return c.crewName.toLowerCase().includes(q) || (c.foremanName || "").toLowerCase().includes(q);
@@ -1345,7 +1386,14 @@ export default function App() {
       return true;
     })
     .map((crew) => {
-      const items = timelineVisibleItems.filter((item) => getAssignmentCrewIds(item.assignment).includes(crew.id));
+      // Check ALL gantt items (not just timelineVisibleItems) filtered to timeline window
+      // so crew-only mobs (which have no named resources) are always included
+      const items = ganttItems.filter((item) =>
+        getAssignmentCrewIds(item.assignment).includes(crew.id) &&
+        itemOverlapsTimeline(item.start, item.end, timeline) &&
+        divisionFilter.includes(item.project.division) &&
+        statusFilter.includes(item.project.status)
+      );
       if (!items.length) return null;
       return { crew, items };
     }).filter(Boolean);
@@ -2078,6 +2126,7 @@ export default function App() {
                   <tr>
                     <th onClick={() => toggleSort(setCrewSort, "crewName")} className="cursor-pointer p-3 hover:bg-slate-200">Crew Name</th>
                     <th onClick={() => toggleSort(setCrewSort, "foremanName")} className="cursor-pointer p-3 hover:bg-slate-200">Foreman Name</th>
+                    <th className="p-3 text-center">Total Members</th>
                     <th className="p-3">Specialty</th>
                     <th className="p-3">Current Assignments</th>
                     <th className="p-3 text-right">Actions</th>
@@ -2088,6 +2137,7 @@ export default function App() {
                     <tr key={crew.id} className="border-t border-slate-200 align-top">
                       <td className="p-3 font-medium">{crew.crewName}</td>
                       <td className="p-3">{crew.foremanName}</td>
+                      <td className="p-3 text-center font-semibold">{crew.totalMembers || <span className="text-slate-300">—</span>}</td>
                       <td className="p-3">{(crew.specialty || []).join(", ")}</td>
                       <td className="p-3">{assignments.filter((a) => getAssignmentCrewIds(a).includes(crew.id)).map((a) => findProject(projects, a.projectId)?.name).filter(Boolean).join(", ")}</td>
                       <td className="p-3 text-right">
@@ -2378,7 +2428,136 @@ export default function App() {
             </div>
           </section>
 
-          {/* Assignments Table */}
+          {/* Crew Utilization Chart */}
+          {(() => {
+            const utilStart = toDate(utilizationStart);
+            const utilEnd = toDate(utilizationEnd);
+            if (!utilStart || !utilEnd || utilStart > utilEnd) return null;
+
+            const utilizationRows = crews.map((crew) => {
+              // All mobs that overlap the utilization window and include this crew
+              const activeMobs = ganttItems.filter((item) => {
+                if (!getAssignmentCrewIds(item.assignment).includes(crew.id)) return false;
+                const s = toDate(item.start);
+                const e = toDate(item.end);
+                if (!s || !e) return false;
+                return rangesOverlap(s, addDays(e, 1), utilStart, addDays(utilEnd, 1));
+              });
+
+              // Men mobilized = sum of crewMenCounts for this crew across active mobs
+              // falls back to totalMembers if no specific count set
+              const menMobilized = activeMobs.reduce((sum, item) => {
+                const count = (item.assignment._crewMenCounts || {})[crew.id];
+                return sum + (count !== undefined ? count : (crew.totalMembers || 0));
+              }, 0);
+
+              const totalMen = crew.totalMembers || 0;
+              const delta = totalMen - menMobilized;
+              const projects = [...new Set(activeMobs.map((item) => item.project.name))];
+
+              return { crew, totalMen, menMobilized, delta, projects };
+            }).filter((r) => r.crew.totalMembers > 0 || r.menMobilized > 0);
+
+            const grandTotalMen = utilizationRows.reduce((s, r) => s + r.totalMen, 0);
+            const grandMobilized = utilizationRows.reduce((s, r) => s + r.menMobilized, 0);
+            const grandDelta = grandTotalMen - grandMobilized;
+
+            return (
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex flex-wrap items-center gap-4">
+                  <div>
+                    <h2 className="text-xl font-bold">Crew Utilization</h2>
+                    <p className="text-sm text-slate-500">Men deployed vs. available capacity across the selected date range.</p>
+                  </div>
+                  <div className="flex items-center gap-3 ml-auto">
+                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                      From
+                      <input type="date" className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600 text-sm"
+                        value={utilizationStart} onChange={(e) => setUtilizationStart(e.target.value)} />
+                    </label>
+                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                      To
+                      <input type="date" className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600 text-sm"
+                        value={utilizationEnd} onChange={(e) => setUtilizationEnd(e.target.value)} />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-100 text-slate-600 border-b border-slate-200">
+                      <tr>
+                        <th className="p-3">Crew</th>
+                        <th className="p-3 text-center">Total Members</th>
+                        <th className="p-3 text-center">Men Mobilized</th>
+                        <th className="p-3 text-center">Delta</th>
+                        <th className="p-3">Utilization</th>
+                        <th className="p-3">Active Projects</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {utilizationRows.map((row, idx) => {
+                        const utilPct = row.totalMen > 0 ? Math.min(100, Math.round((row.menMobilized / row.totalMen) * 100)) : 0;
+                        const isOver = row.delta < 0;
+                        const isBench = row.delta > 0;
+                        const rowBg = idx % 2 === 0 ? "bg-white" : "bg-slate-50";
+                        return (
+                          <tr key={row.crew.id} className={`border-t border-slate-100 ${rowBg}`}>
+                            <td className="p-3">
+                              <p className="font-semibold text-slate-900">{getCrewDisplayName(row.crew)}</p>
+                              <p className="text-xs text-slate-400">{(row.crew.specialty || []).join(", ")}</p>
+                            </td>
+                            <td className="p-3 text-center font-semibold text-slate-700">{row.totalMen || <span className="text-slate-300">—</span>}</td>
+                            <td className="p-3 text-center font-semibold text-slate-900">{row.menMobilized}</td>
+                            <td className="p-3 text-center">
+                              <span className={`rounded-full px-3 py-1 text-xs font-bold ${isOver ? "bg-red-100 text-red-700" : isBench ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+                                {isOver ? `+${Math.abs(row.delta)} over` : isBench ? `${row.delta} on bench` : "Fully utilized"}
+                              </span>
+                            </td>
+                            <td className="p-3 min-w-[160px]">
+                              {row.totalMen > 0 ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="flex-1 h-3 rounded-full bg-slate-200 overflow-hidden">
+                                    <div className={`h-full rounded-full ${isOver ? "bg-red-500" : utilPct >= 80 ? "bg-emerald-500" : "bg-amber-400"}`} style={{ width: `${Math.min(100, utilPct)}%` }} />
+                                  </div>
+                                  <span className="text-xs font-semibold text-slate-600 w-9 text-right">{utilPct}%</span>
+                                </div>
+                              ) : <span className="text-xs text-slate-300">No capacity set</span>}
+                            </td>
+                            <td className="p-3 text-xs text-slate-500">{row.projects.join(", ") || "—"}</td>
+                          </tr>
+                        );
+                      })}
+                      {utilizationRows.length === 0 && (
+                        <tr><td colSpan={6} className="p-6 text-center text-slate-400">No crews with capacity set. Add total members in the Crews tab.</td></tr>
+                      )}
+                      {/* Totals row */}
+                      <tr className="border-t-2 border-slate-300 bg-slate-100 font-semibold">
+                        <td className="p-3">Total</td>
+                        <td className="p-3 text-center">{grandTotalMen}</td>
+                        <td className="p-3 text-center">{grandMobilized}</td>
+                        <td className="p-3 text-center">
+                          <span className={`rounded-full px-3 py-1 text-xs font-bold ${grandDelta < 0 ? "bg-red-100 text-red-700" : grandDelta > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+                            {grandDelta < 0 ? `+${Math.abs(grandDelta)} over` : grandDelta > 0 ? `${grandDelta} on bench` : "Fully utilized"}
+                          </span>
+                        </td>
+                        <td className="p-3" colSpan={2}>
+                          {grandTotalMen > 0 && (
+                            <div className="flex items-center gap-2 max-w-xs">
+                              <div className="flex-1 h-3 rounded-full bg-slate-200 overflow-hidden">
+                                <div className={`h-full rounded-full ${grandDelta < 0 ? "bg-red-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(100, Math.round((grandMobilized / grandTotalMen) * 100))}%` }} />
+                              </div>
+                              <span className="text-xs font-semibold text-slate-600 w-9">{Math.round((grandMobilized / grandTotalMen) * 100)}%</span>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            );
+          })()}
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <div><h2 className="text-xl font-bold">Assignments</h2><p className="text-sm text-slate-500">Assign existing projects to resources and crews.</p></div>
@@ -2877,3 +3056,4 @@ export default function App() {
     </main>
   );
 }
+
