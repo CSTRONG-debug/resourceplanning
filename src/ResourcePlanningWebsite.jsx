@@ -1172,6 +1172,7 @@ export default function App() {
   const [forecastSettingsId, setForecastSettingsId] = useState(null);
   const [forecastSort, setForecastSort] = useState({ key: "projectNumber", direction: "asc" });
   const [forecastSearch, setForecastSearch] = useState("");
+  const [forecastKey, setForecastKey] = useState(0); // increment to force table re-render
 
   // ── Per-tab search state ───────────────────────────────────────────────────
   const [projectSearch, setProjectSearch] = useState("");
@@ -1642,6 +1643,8 @@ export default function App() {
       const redistributed = recalculateProject(p.id, row);
       await saveForecastRow(p.id, { redistributedSpread: redistributed });
     }
+    // Force uncontrolled inputs to re-mount with fresh values
+    setForecastKey((k) => k + 1);
   }
 
   // Get forecast row for a project (with defaults)
@@ -1710,6 +1713,7 @@ export default function App() {
     } else {
       await saveForecastRow(projectId, { actuals: newActuals, redistributedSpread: {} });
     }
+    setForecastKey((k) => k + 1);
   }
 
   // When spread rule changes, immediately recalculate remaining months
@@ -1724,6 +1728,7 @@ export default function App() {
       ? spreadRevenue(remaining, remainingMonths, newRule, projectId)
       : {};
     await saveForecastRow(projectId, { spreadRule: newRule, redistributedSpread: redistributed });
+    setForecastKey((k) => k + 1);
   }
 
   // Save global lock setting
@@ -2708,7 +2713,7 @@ export default function App() {
                     <SortTh label="Year Total" sortKey="yearTotal" className="text-right min-w-[100px] bg-slate-200" />
                   </tr>
                 </thead>
-                <tbody>
+                <tbody key={forecastKey}>
                     {projectRows.map(({ project: p, row, monthValues, yearTotal, thereafter }, rowIdx) => {
                       const isEven = rowIdx % 2 === 0;
                       const rowBg = isEven ? "bg-white" : "bg-slate-50";
@@ -2747,16 +2752,25 @@ export default function App() {
                           {monthValues.map((mv) => (
                             <td key={mv.key} className={`p-1 text-right ${mv.locked ? "bg-amber-50" : ""}`}>
                               {mv.locked ? (
-                                // Locked — truly read-only, show value as text or actual
                                 <div className={`w-full rounded-lg px-2 py-1 text-right text-xs ${mv.isActual ? "bg-emerald-50 font-semibold text-emerald-800 border border-emerald-200" : "bg-amber-50 text-slate-500 border border-amber-200"}`}>
                                   {mv.value > 0 ? fmt(mv.value) : <span className="text-slate-300">—</span>}
                                 </div>
                               ) : (
-                                <input type="number"
-                                  className={`w-full rounded-lg border px-2 py-1 text-right text-xs outline-none focus:bg-white ${mv.isActual ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-800 focus:border-emerald-500" : mv.isRedistributed ? "border-blue-200 bg-blue-50 text-blue-700 focus:border-blue-400" : "border-transparent bg-transparent text-slate-700 hover:border-slate-200 focus:border-emerald-500"}`}
-                                  defaultValue={mv.isActual || mv.isRedistributed ? mv.value.toFixed(0) : (mv.value > 0 ? mv.value.toFixed(0) : "")}
-                                  placeholder={mv.value > 0 && !mv.isActual ? mv.value.toFixed(0) : ""}
-                                  onBlur={(e) => saveActual(p.id, mv.key, e.target.value)} />
+                                <div className="relative group/cell">
+                                  <input type="number"
+                                    className={`w-full rounded-lg border px-2 py-1 text-right text-xs outline-none focus:bg-white ${mv.isActual ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-800 focus:border-emerald-500" : mv.isRedistributed ? "border-blue-200 bg-blue-50 text-blue-700 focus:border-blue-400" : "border-transparent bg-transparent text-slate-700 hover:border-slate-200 focus:border-emerald-500"}`}
+                                    defaultValue={mv.isActual || mv.isRedistributed ? mv.value.toFixed(0) : (mv.value > 0 ? mv.value.toFixed(0) : "")}
+                                    placeholder={mv.value > 0 && !mv.isActual ? mv.value.toFixed(0) : ""}
+                                    onBlur={(e) => saveActual(p.id, mv.key, e.target.value)} />
+                                  {mv.isActual && (
+                                    <button
+                                      type="button"
+                                      title="Clear actual — revert to system calculation"
+                                      onClick={() => saveActual(p.id, mv.key, "")}
+                                      className="absolute -right-1.5 -top-1.5 z-10 hidden h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white shadow hover:bg-red-600 group-hover/cell:flex"
+                                    >×</button>
+                                  )}
+                                </div>
                               )}
                             </td>
                           ))}
@@ -2796,11 +2810,11 @@ export default function App() {
             </div>
 
             <div className="flex flex-wrap gap-4 text-xs text-slate-500">
-              <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-emerald-100 border border-emerald-300" /> Actual entered</span>
+              <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-emerald-100 border border-emerald-300" /> Actual entered (hover to see × clear button)</span>
               <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-blue-100 border border-blue-300" /> Redistributed (remaining after actuals)</span>
               <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-amber-50 border border-amber-200" /> Locked (read-only)</span>
               <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-5 rounded bg-white border border-slate-200" /> Forecast (spread)</span>
-              <span className="text-slate-400">· Click any unlocked cell to enter an actual. Actuals auto-redistribute remaining value across future months.</span>
+              <span className="text-slate-400">· Changing spread rule or clicking ↻ Recalculate redistributes remaining value instantly.</span>
             </div>
           </section>
         );
