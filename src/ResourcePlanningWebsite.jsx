@@ -1397,15 +1397,21 @@ export default function App() {
     // Migrate legacy flat roles into mobilizations if needed
     const mobs = (assignment.mobilizations?.length ? assignment.mobilizations : [
       { id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [] }
-    ]).map((mob, i) => ({
-      id: mob.id || crypto.randomUUID(),
-      start: mob.start || "",
-      durationWeeks: mob.durationWeeks || "",
-      end: mob.end || "",
-      superintendent: mob.superintendent || (i === 0 ? assignment.superintendent || "" : ""),
-      fieldCoordinator: mob.fieldCoordinator || (i === 0 ? assignment.fieldCoordinator || "" : ""),
-      crewIds: mob.crewIds?.length ? mob.crewIds : (i === 0 ? [assignment.crew1Id, assignment.crew2Id, assignment.crew3Id, assignment.crew4Id].filter(Boolean) : []),
-    }));
+    ]).map((mob, i) => {
+      const isFirst = i === 0;
+      return {
+        id: mob.id || crypto.randomUUID(),
+        start: mob.start || "",
+        durationWeeks: mob.durationWeeks || "",
+        end: mob.end || "",
+        // Only fall back to legacy assignment-level fields for the first mob
+        superintendent: mob.superintendent || (isFirst ? assignment.superintendent || "" : ""),
+        fieldCoordinator: mob.fieldCoordinator || (isFirst ? assignment.fieldCoordinator || "" : ""),
+        crewIds: mob.crewIds?.length
+          ? mob.crewIds
+          : (isFirst ? [assignment.crew1Id, assignment.crew2Id, assignment.crew3Id, assignment.crew4Id].filter(Boolean) : []),
+      };
+    });
     setAssignmentForm({
       projectId: assignment.projectId || "",
       projectManager: assignment.projectManager || "",
@@ -2855,4 +2861,5 @@ export default function App() {
     </main>
   );
 }
+
 
