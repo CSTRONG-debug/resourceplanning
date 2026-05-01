@@ -1516,10 +1516,13 @@ export default function App() {
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
   const [demandZoom, setDemandZoom] = useState("Weeks");
   const [expandedView, setExpandedView] = useState(null);
-  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
-  const [currentUser, setCurrentUser] = useState(() => sessionStorage.getItem("ggc_current_user") || "");
+  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
+  const [currentUser, setCurrentUser] = useState("");
+  const [authUser, setAuthUser] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [showUserSettings, setShowUserSettings] = useState(false);
-  const [newUserForm, setNewUserForm] = useState({ username: "", password: "" });
+  const [newUserForm, setNewUserForm] = useState({ email: "", fullName: "", role: "viewer" });
   const [appUsers, setAppUsers] = useState([]);
   const [crewGanttFilter, setCrewGanttFilter] = useState([]);
   const [focusedResource, setFocusedResource] = useState(null);
@@ -1629,8 +1632,40 @@ export default function App() {
   // ── Realtime subscriptions (#5) ────────────────────────────────────────────
   useSupabaseRealtime({ setProjects, setResources, setCrews, setAssignments, setCertifications });
 
-  // ── Load app users after login ─────────────────────────────────────────────
-  useEffect(() => { if (currentUser) { loadAppUsers(); loadProjectTypes(); } }, [currentUser]);
+  // ── Load project type settings after login ────────────────────────────────
+  useEffect(() => { if (currentUser) { loadProjectTypes(); } }, [currentUser]);
+
+  // ── Supabase Auth session ─────────────────────────────────────────────────
+  useEffect(() => {
+    let mounted = true;
+    async function loadAuthSession() {
+      if (!supabase) { setAuthLoading(false); return; }
+      const { data, error } = await supabase.auth.getSession();
+      if (error) console.error("Auth session load error:", error);
+      const user = data?.session?.user || null;
+      if (!mounted) return;
+      setAuthUser(user);
+      setCurrentUser(user?.email || "");
+      if (user) await loadUserProfile(user.id);
+      else setUserProfile(null);
+      if (mounted) setAuthLoading(false);
+    }
+    loadAuthSession();
+
+    if (!supabase?.auth?.onAuthStateChange) return () => { mounted = false; };
+    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      const user = session?.user || null;
+      setAuthUser(user);
+      setCurrentUser(user?.email || "");
+      if (user) await loadUserProfile(user.id);
+      else setUserProfile(null);
+      setAuthLoading(false);
+    });
+    return () => {
+      mounted = false;
+      listener?.subscription?.unsubscribe?.();
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("ggc_project_types", JSON.stringify(projectTypes));
@@ -2549,22 +2584,60 @@ export default function App() {
   }
 
   // ── Auth ───────────────────────────────────────────────────────────────────
+  async function loadUserProfile(userId) {
+    if (!supabase || !userId) return null;
+    const { data, error } = await supabase
+      .from("user_profiles")
+      .select("full_name, role, active")
+      .eq("id", userId)
+      .single();
+
+    if (error) {
+      console.warn("User profile not found yet. Add this user to user_profiles:", error);
+      setUserProfile({ full_name: "", role: "viewer", active: true, missingProfile: true });
+      return null;
+    }
+
+    if (data && data.active === false) {
+      alert("Your user profile is inactive. Contact an administrator.");
+      await supabase.auth.signOut();
+      setAuthUser(null);
+      setCurrentUser("");
+      setUserProfile(null);
+      return null;
+    }
+
+    setUserProfile(data || null);
+    return data;
+  }
+
   async function handleLogin(event) {
     event.preventDefault();
-    if (!supabase) { alert("Supabase is not connected."); return; }
-    const { data, error } = await supabase.rpc("authenticate_app_user", { input_username: loginForm.username, input_password: loginForm.password });
-    if (error) { console.error(error); alert("Login setup is missing. Run the user SQL block in Supabase."); return; }
-    if (!data) { alert("Invalid username or password."); return; }
-    sessionStorage.setItem("ggc_current_user", loginForm.username);
-    setCurrentUser(loginForm.username);
-    setLoginForm({ username: "", password: "" });
-    await loadAppUsers();
+    if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
+    const email = loginForm.email.trim();
+    if (!email || !loginForm.password) { alert("Email and password are required."); return; }
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password: loginForm.password,
+    });
+
+    if (error) { alert(error.message || "Could not log in."); return; }
+
+    const user = data?.user || null;
+    setAuthUser(user);
+    setCurrentUser(user?.email || email);
+    if (user) await loadUserProfile(user.id);
+    setLoginForm({ email: "", password: "" });
   }
 
   async function loadAppUsers() {
     if (!supabase) return;
-    const { data, error } = await supabase.rpc("list_app_users");
-    if (error) { console.error("Could not load app users:", error); return; }
+    const { data, error } = await supabase
+      .from("user_profiles")
+      .select("id, full_name, role, active, created_at")
+      .order("created_at", { ascending: false });
+    if (error) { console.warn("Could not load user profiles. RLS may need an admin policy:", error); return; }
     setAppUsers(data || []);
   }
 
@@ -2576,24 +2649,19 @@ export default function App() {
   }
 
   async function addAppUser() {
-    if (!newUserForm.username.trim() || !newUserForm.password.trim()) { alert("Username and password are required."); return; }
-    if (!supabase) { alert("Supabase is not connected."); return; }
-    const { error } = await supabase.rpc("create_app_user", { input_username: newUserForm.username, input_password: newUserForm.password });
-    if (error) { console.error(error); alert("Could not create user."); return; }
-    setNewUserForm({ username: "", password: "" });
-    await loadAppUsers();
+    alert("Create the user in Supabase Authentication > Users first. Then insert/update their role in the user_profiles table. Browser apps cannot safely create Auth users directly.");
   }
 
-  async function deleteAppUser(username) {
-    if (username === currentUser) { alert("You cannot delete the user currently signed in."); return; }
-    if (!confirm(`Delete login user ${username}?`)) return;
-    if (!supabase) { alert("Supabase is not connected."); return; }
-    const { error } = await supabase.rpc("delete_app_user", { input_username: username });
-    if (error) { console.error(error); alert("Could not delete user."); return; }
-    await loadAppUsers();
+  async function deleteAppUser() {
+    alert("For security, deactivate users in Supabase by setting user_profiles.active = false, or remove them from Authentication > Users.");
   }
 
-  function logout() { sessionStorage.removeItem("ggc_current_user"); setCurrentUser(""); }
+  async function logout() {
+    if (supabase?.auth) await supabase.auth.signOut();
+    setAuthUser(null);
+    setCurrentUser("");
+    setUserProfile(null);
+  }
 
   function parseYesNo(value) {
     const text = String(value ?? "").trim().toLowerCase();
@@ -2765,6 +2833,14 @@ export default function App() {
   }
 
   // ── Login Screen ───────────────────────────────────────────────────────────
+  if (authLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-600 shadow-xl">Loading secure session…</div>
+      </main>
+    );
+  }
+
   if (!currentUser) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
@@ -2773,12 +2849,12 @@ export default function App() {
           <h1 className="mt-4 text-2xl font-bold text-slate-900">GGC Resource Planning</h1>
           <p className="mt-1 text-sm text-slate-500">Sign in to access the scheduling system.</p>
           <label className="mt-6 block space-y-1">
-            <span className="text-sm font-semibold text-slate-700">Username</span>
-            <input value={loginForm.username} onChange={(e) => setLoginForm((c) => ({ ...c, username: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
+            <span className="text-sm font-semibold text-slate-700">Email</span>
+            <input type="email" autoComplete="email" value={loginForm.email} onChange={(e) => setLoginForm((c) => ({ ...c, email: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
           </label>
           <label className="mt-4 block space-y-1">
             <span className="text-sm font-semibold text-slate-700">Password</span>
-            <input type="password" value={loginForm.password} onChange={(e) => setLoginForm((c) => ({ ...c, password: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
+            <input type="password" autoComplete="current-password" value={loginForm.password} onChange={(e) => setLoginForm((c) => ({ ...c, password: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
           </label>
           <button type="submit" className="mt-6 w-full rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800">Log In</button>
         </form>
@@ -2802,7 +2878,7 @@ export default function App() {
           </div>
           <div className="flex flex-wrap justify-end gap-3">
             <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-              <span>{currentUser}</span>
+              <span>{userProfile?.full_name || currentUser}</span><span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-600">{userProfile?.role || "viewer"}</span>
               <button onClick={() => setShowUserSettings(true)} className="rounded-lg p-1 hover:bg-slate-200" title="User settings"><Settings size={16} /></button>
               <button onClick={logout} className="rounded-lg px-2 py-1 text-xs text-red-700 hover:bg-red-50">Logout</button>
             </div>
@@ -3832,27 +3908,31 @@ export default function App() {
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4">
           <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
-              <div><h2 className="text-xl font-bold">User Settings</h2><p className="text-sm text-slate-500">Add users who can log in to this system.</p></div>
+              <div>
+                <h2 className="text-xl font-bold">User Settings</h2>
+                <p className="text-sm text-slate-500">Supabase Auth is now handling login security.</p>
+              </div>
               <button onClick={() => setShowUserSettings(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
             </div>
-            <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-              <input placeholder="Username" value={newUserForm.username} onChange={(e) => setNewUserForm((c) => ({ ...c, username: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
-              <input placeholder="Password" type="password" value={newUserForm.password} onChange={(e) => setNewUserForm((c) => ({ ...c, password: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
-              <button onClick={addAppUser} className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800">Add User</button>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+              <p><strong>Signed in as:</strong> {userProfile?.full_name || currentUser}</p>
+              <p><strong>Email:</strong> {authUser?.email || currentUser}</p>
+              <p><strong>Role:</strong> {userProfile?.role || "viewer"}</p>
+              {userProfile?.missingProfile && (
+                <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
+                  This Auth user does not have a matching row in <strong>user_profiles</strong> yet. Add one before enabling Row Level Security.
+                </p>
+              )}
             </div>
-            <div className="mt-5 rounded-xl border border-slate-200">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Username</th><th className="p-3">Created</th><th className="p-3 text-right">Action</th></tr></thead>
-                <tbody>
-                  {appUsers.map((user) => (
-                    <tr key={user.username} className="border-t border-slate-200">
-                      <td className="p-3 font-semibold">{user.username}</td>
-                      <td className="p-3">{user.created_at ? formatDate(user.created_at) : ""}</td>
-                      <td className="p-3 text-right"><button onClick={() => deleteAppUser(user.username)} className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50">Delete</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+
+            <div className="mt-5 rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-900">
+              <p className="font-bold">To add users now:</p>
+              <ol className="mt-2 list-decimal space-y-1 pl-5">
+                <li>Create the user in Supabase → Authentication → Users.</li>
+                <li>Add that user ID to the <code className="rounded bg-white px-1">user_profiles</code> table with role <code className="rounded bg-white px-1">admin</code>, <code className="rounded bg-white px-1">manager</code>, or <code className="rounded bg-white px-1">viewer</code>.</li>
+                <li>Keep RLS off until this login is tested successfully.</li>
+              </ol>
             </div>
           </div>
         </div>
