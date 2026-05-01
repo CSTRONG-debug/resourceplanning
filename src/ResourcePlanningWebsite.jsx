@@ -1255,6 +1255,8 @@ export default function App() {
   const [utilizationEnd, setUtilizationEnd] = useState(new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10));
   const [utilizationSearch, setUtilizationSearch] = useState("");
   const [selectedUtilizationCrew, setSelectedUtilizationCrew] = useState(null);
+  const [utilizationSort, setUtilizationSort] = useState({ key: "crew", direction: "asc" });
+  const [crewDeactivationOverrides, setCrewDeactivationOverrides] = useState({});
 
   // ── Initial Supabase load ──────────────────────────────────────────────────
   useEffect(() => {
@@ -1328,6 +1330,32 @@ export default function App() {
     if (page === "dashboard") setShowAssignments(false);
   }, [page]);
 
+  function formatLocalIsoDate(date) {
+    const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function setUtilizationWeekFromDate(baseDate) {
+    const base = baseDate ? new Date(baseDate) : new Date();
+    const day = base.getDay(); // Sunday = 0
+    const start = new Date(base.getFullYear(), base.getMonth(), base.getDate() - day);
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+    setUtilizationStart(formatLocalIsoDate(start));
+    setUtilizationEnd(formatLocalIsoDate(end));
+  }
+
+  function shiftUtilizationWeek(direction) {
+    const base = toDate(utilizationStart) || new Date();
+    const nextBase = new Date(base.getFullYear(), base.getMonth(), base.getDate() + direction * 7);
+    setUtilizationWeekFromDate(nextBase);
+  }
+
+  function isCrewDeactivated(crew) {
+    return Object.prototype.hasOwnProperty.call(crewDeactivationOverrides, crew.id)
+      ? crewDeactivationOverrides[crew.id]
+      : !!crew.deactivated;
+  }
+
   // ── Derived data ───────────────────────────────────────────────────────────
   const ganttItems = buildGanttItems(projects, assignments);
 
@@ -1361,7 +1389,7 @@ export default function App() {
       : null;
   }).filter(Boolean);
 
-  const activeCrews = crews.filter((c) => !c.deactivated);
+  const activeCrews = crews.filter((c) => !isCrewDeactivated(c));
 
   function toggleSort(setter, key) {
     setter((current) => ({ key, direction: current.key === key && current.direction === "asc" ? "desc" : "asc" }));
@@ -1385,7 +1413,7 @@ export default function App() {
   const sortedCrews = [...crews].filter((c) => {
     if (!crewSearch) return true;
     const q = crewSearch.toLowerCase();
-    const statusLabel = c.deactivated ? "deactivated inactive" : "active";
+    const statusLabel = isCrewDeactivated(c) ? "deactivated inactive" : "active";
     return c.crewName.toLowerCase().includes(q) || (c.foremanName || "").toLowerCase().includes(q) || statusLabel.includes(q);
   }).sort((a, b) => compareValues(a[crewSort.key], b[crewSort.key], crewSort.direction));
   const filteredProjectsForTab = projects.filter((p) => {
@@ -1594,16 +1622,26 @@ export default function App() {
 
   // ── CRUD: Crews ────────────────────────────────────────────────────────────
   function openAddCrewForm() { setEditingCrewId(null); setCrewForm(blankCrew); setShowCrewForm(true); }
-  function openEditCrewForm(crew) { setEditingCrewId(crew.id); setCrewForm({ ...blankCrew, ...crew }); setShowCrewForm(true); }
+  function openEditCrewForm(crew) { setEditingCrewId(crew.id); setCrewForm({ ...blankCrew, ...crew, deactivated: isCrewDeactivated(crew) }); setShowCrewForm(true); }
 
   async function saveCrew() {
     if (!crewForm.crewName.trim()) { alert("Crew name is required."); return; }
+    if (editingCrewId) {
+      setCrewDeactivationOverrides((current) => ({ ...current, [editingCrewId]: !!crewForm.deactivated }));
+      setCrews((current) => current.map((c) => (c.id === editingCrewId ? { ...c, ...crewForm, id: editingCrewId, deactivated: !!crewForm.deactivated } : c)));
+    }
     if (!supabase) { alert("Supabase is not connected."); return; }
     const payload = crewToDbLocal(crewForm);
     if (editingCrewId) {
       const { data, error } = await supabase.from("crews").update(payload).eq("id", editingCrewId).select().single();
       if (error) { console.error(error); alert("Could not update crew."); return; }
-      setCrews((current) => current.map((c) => (c.id === editingCrewId ? mapCrewFromDbLocal(data) : c)));
+      const mappedCrew = { ...mapCrewFromDbLocal(data), deactivated: !!crewForm.deactivated };
+      setCrewDeactivationOverrides((current) => ({ ...current, [editingCrewId]: !!crewForm.deactivated }));
+      setCrews((current) => current.map((c) => (c.id === editingCrewId ? mappedCrew : c)));
+      setTimeout(() => {
+        setCrewDeactivationOverrides((current) => ({ ...current, [editingCrewId]: !!crewForm.deactivated }));
+        setCrews((current) => current.map((c) => (c.id === editingCrewId ? { ...c, deactivated: !!crewForm.deactivated } : c)));
+      }, 500);
     } else {
       const { data, error } = await supabase.from("crews").insert(payload).select().single();
       if (error) { console.error(error); alert("Could not save crew."); return; }
@@ -2194,8 +2232,8 @@ export default function App() {
                       <td className="p-3">{crew.foremanName}</td>
                       <td className="p-3 text-center font-semibold">{crew.totalMembers || <span className="text-slate-300">—</span>}</td>
                       <td className="p-3 text-center">
-                        <span className={`rounded-full px-2 py-1 text-xs font-bold ${crew.deactivated ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>
-                          {crew.deactivated ? "Deactivated" : "Active"}
+                        <span className={`rounded-full px-2 py-1 text-xs font-bold ${isCrewDeactivated(crew) ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>
+                          {isCrewDeactivated(crew) ? "Deactivated" : "Active"}
                         </span>
                       </td>
                       <td className="p-3">{(crew.specialty || []).join(", ")}</td>
@@ -2506,8 +2544,8 @@ export default function App() {
               return { crew, totalMen, menMobilized, delta, projects };
             }).filter((r) => r.crew.totalMembers > 0 || r.menMobilized > 0);
 
-            // Apply search filter
-            const utilizationRows = utilizationSearch
+            // Apply search filter, then sort
+            const searchedUtilizationRows = utilizationSearch
               ? allUtilizationRows.filter((r) => {
                   const q = utilizationSearch.toLowerCase();
                   return (
@@ -2517,6 +2555,33 @@ export default function App() {
                   );
                 })
               : allUtilizationRows;
+
+            const utilizationRows = [...searchedUtilizationRows].sort((a, b) => {
+              const dir = utilizationSort.direction === "asc" ? 1 : -1;
+              if (utilizationSort.key === "crew") return compareValues(getCrewDisplayName(a.crew), getCrewDisplayName(b.crew), utilizationSort.direction);
+              if (utilizationSort.key === "totalMen") return (a.totalMen - b.totalMen) * dir;
+              if (utilizationSort.key === "menMobilized") return (a.menMobilized - b.menMobilized) * dir;
+              if (utilizationSort.key === "delta") return (a.delta - b.delta) * dir;
+              if (utilizationSort.key === "utilization") {
+                const aPct = a.totalMen > 0 ? a.menMobilized / a.totalMen : 0;
+                const bPct = b.totalMen > 0 ? b.menMobilized / b.totalMen : 0;
+                return (aPct - bPct) * dir;
+              }
+              if (utilizationSort.key === "projects") return compareValues(a.projects.join(", "), b.projects.join(", "), utilizationSort.direction);
+              return 0;
+            });
+
+            function UtilizationSortTh({ label, sortKey, className = "" }) {
+              const active = utilizationSort.key === sortKey;
+              return (
+                <th
+                  onClick={() => setUtilizationSort((current) => ({ key: sortKey, direction: current.key === sortKey && current.direction === "asc" ? "desc" : "asc" }))}
+                  className={`cursor-pointer select-none p-3 hover:bg-slate-200 ${className}`}
+                >
+                  {label} {active ? (utilizationSort.direction === "asc" ? "↑" : "↓") : ""}
+                </th>
+              );
+            }
 
             const grandTotalMen = utilizationRows.reduce((s, r) => s + r.totalMen, 0);
             const grandMobilized = utilizationRows.reduce((s, r) => s + r.menMobilized, 0);
@@ -2566,6 +2631,12 @@ export default function App() {
                       <input className="outline-none text-sm w-40" placeholder="Search crew or project…"
                         value={utilizationSearch} onChange={(e) => setUtilizationSearch(e.target.value)} />
                     </div>
+                    {/* Week controls */}
+                    <div className="no-print flex items-center gap-1 rounded-xl border border-slate-300 bg-white px-2 py-2">
+                      <button type="button" onClick={() => shiftUtilizationWeek(-1)} className="rounded-lg px-2 py-1 text-sm font-bold text-slate-700 hover:bg-slate-100" title="Previous week">←</button>
+                      <button type="button" onClick={() => setUtilizationWeekFromDate(new Date())} className="rounded-lg bg-emerald-700 px-3 py-1 text-xs font-bold text-white hover:bg-emerald-800">Current Week</button>
+                      <button type="button" onClick={() => shiftUtilizationWeek(1)} className="rounded-lg px-2 py-1 text-sm font-bold text-slate-700 hover:bg-slate-100" title="Next week">→</button>
+                    </div>
                     {/* Date range */}
                     <label className="no-print flex items-center gap-2 text-sm font-medium text-slate-700">
                       From
@@ -2596,12 +2667,12 @@ export default function App() {
                   <table className="w-full text-left text-sm">
                     <thead className="bg-slate-100 text-slate-600 border-b border-slate-200">
                       <tr>
-                        <th className="p-3">Crew</th>
-                        <th className="p-3 text-center">Total Members</th>
-                        <th className="p-3 text-center">Men Mobilized</th>
-                        <th className="p-3 text-center">Delta</th>
-                        <th className="p-3">Utilization</th>
-                        <th className="p-3">Active Projects</th>
+                        <UtilizationSortTh label="Crew" sortKey="crew" />
+                        <UtilizationSortTh label="Total Members" sortKey="totalMen" className="text-center" />
+                        <UtilizationSortTh label="Men Mobilized" sortKey="menMobilized" className="text-center" />
+                        <UtilizationSortTh label="Delta" sortKey="delta" className="text-center" />
+                        <UtilizationSortTh label="Utilization" sortKey="utilization" />
+                        <UtilizationSortTh label="Active Projects" sortKey="projects" />
                       </tr>
                     </thead>
                     <tbody>
