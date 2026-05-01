@@ -32,7 +32,7 @@ function mapProjectFromDbLocal(p) {
     client: p.client || "",
     address: p.address || "",
     division: p.division || "Hardscape",
-    projectType: p.project_type || "",
+    projectType: normalizeProjectTypes(p.project_type),
     owner: p.owner || "",
     architect: p.architect || "",
     engineer: p.engineer || "",
@@ -48,7 +48,7 @@ function projectToDbLocal(project) {
     client: project.client,
     address: project.address,
     division: project.division,
-    project_type: project.projectType || "",
+    project_type: projectTypeLabel(project.projectType),
     owner: project.owner || "",
     architect: project.architect || "",
     engineer: project.engineer || "",
@@ -164,6 +164,22 @@ function mobilizationToDbLocal(mobilization, assignmentId) {
 }
 
 import { useSupabaseRealtime } from "./hooks/useSupabaseRealtime";
+
+function normalizeProjectTypes(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (!value) return [];
+  if (typeof value === "string") {
+    return value
+      .split(/[;,]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function projectTypeLabel(value) {
+  return normalizeProjectTypes(value).join(", ");
+}
 
 
 // ─── StatCard ────────────────────────────────────────────────────────────────
@@ -513,13 +529,18 @@ export function ProjectForm({ form, setForm, onSave, onCancel, onDelete, editing
               {divisions.map((d) => <option key={d}>{d}</option>)}
             </select>
           </label>
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Project Type</span>
-            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.projectType || ""} onChange={(e) => updateField("projectType", e.target.value)}>
-              <option value="">Select type...</option>
-              {(projectTypes || []).map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </label>
+          <div className="space-y-1">
+            <SearchableMultiSelect
+              label="Project Type"
+              options={(projectTypes || []).map((t) => ({ value: t, label: t }))}
+              selected={normalizeProjectTypes(form.projectType)}
+              setSelected={(next) => setForm((current) => ({
+                ...current,
+                projectType: typeof next === "function" ? next(normalizeProjectTypes(current.projectType)) : next,
+              }))}
+              getLabel={(option) => option.label}
+            />
+          </div>
           <label className="space-y-1">
             <span className="text-sm font-medium text-slate-700">Project Owner</span>
             <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.owner || ""} onChange={(e) => updateField("owner", e.target.value)} />
@@ -1763,7 +1784,7 @@ export default function App() {
     if (!projectTabDivisionFilter.includes(p.division)) return false;
     if (!projectSearch) return true;
     const q = projectSearch.toLowerCase();
-    return (p.projectNumber || "").toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || (p.client || "").toLowerCase().includes(q) || (p.projectType || "").toLowerCase().includes(q) || (p.owner || "").toLowerCase().includes(q) || (p.architect || "").toLowerCase().includes(q) || (p.engineer || "").toLowerCase().includes(q);
+    return (p.projectNumber || "").toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || (p.client || "").toLowerCase().includes(q) || projectTypeLabel(p.projectType).toLowerCase().includes(q) || (p.owner || "").toLowerCase().includes(q) || (p.architect || "").toLowerCase().includes(q) || (p.engineer || "").toLowerCase().includes(q);
   });
   const sortedProjectsForTab = [...filteredProjectsForTab].sort((a, b) => compareValues(a[projectSort.key], b[projectSort.key], projectSort.direction));
 
@@ -1966,7 +1987,7 @@ export default function App() {
       owners: topCountsFromItems(items, (p) => p.owner),
       architects: topCountsFromItems(items, (p) => p.architect),
       engineers: topCountsFromItems(items, (p) => p.engineer),
-      projectTypes: topCountsFromItems(items, (p) => p.projectType),
+      projectTypes: topCountsFromItems(items, (p) => projectTypeLabel(p.projectType)),
       items,
     };
   }
@@ -1980,7 +2001,7 @@ export default function App() {
     const statList = (title, rows) => `<div class="stat"><h3>${title}</h3>${rows.length ? `<ol>${rows.map((r) => `<li><span>${escapeHtml(r.name)}</span><strong>${r.count}</strong></li>`).join("")}</ol>` : `<p class="muted">No history</p>`}</div>`;
     const projectRows = stats.items.map((item) => `<tr>
       <td><strong>${escapeHtml(item.project.projectNumber ? `${item.project.projectNumber} - ${item.project.name}` : item.project.name)}</strong><br><span>${escapeHtml(item.project.status)}</span></td>
-      <td>${escapeHtml(item.project.projectType || "")}</td>
+      <td>${escapeHtml(projectTypeLabel(item.project.projectType))}</td>
       <td>${escapeHtml(item.project.owner || "")}</td>
       <td>${escapeHtml(item.project.architect || "")}</td>
       <td>${escapeHtml(item.project.engineer || "")}</td>
@@ -2574,6 +2595,15 @@ export default function App() {
 
   function logout() { sessionStorage.removeItem("ggc_current_user"); setCurrentUser(""); }
 
+  function parseYesNo(value) {
+    const text = String(value ?? "").trim().toLowerCase();
+    return ["yes", "y", "true", "1", "active", "checked", "include", "included"].includes(text);
+  }
+
+  function formatYesNo(value) {
+    return value ? "Yes" : "No";
+  }
+
   // ── Exports ────────────────────────────────────────────────────────────────
   function exportDashboardExcel() {
     const rows = [
@@ -2584,7 +2614,23 @@ export default function App() {
   }
 
   function exportProjectsExcel() {
-    const rows = [["Project Number", "Project Name", "Client", "Address", "Division", "Project Type", "Owner", "Architect", "Engineer", "Specific Requirements", "Status"], ...projects.map((p) => [p.projectNumber, p.name, p.client, p.address, p.division, p.projectType || "", p.owner || "", p.architect || "", p.engineer || "", (p.specificRequirements || []).join("; "), p.status])];
+    const rows = [
+      ["Project Number", "Project Name", "Client", "Address", "Division", "Project Type", "Owner", "Architect", "Engineer", "Specific Requirements", "Status", "Include in Forecast"],
+      ...projects.map((p) => [
+        p.projectNumber,
+        p.name,
+        p.client,
+        p.address,
+        p.division,
+        projectTypeLabel(p.projectType),
+        p.owner || "",
+        p.architect || "",
+        p.engineer || "",
+        (p.specificRequirements || []).join("; "),
+        p.status,
+        formatYesNo(p.includeInForecast),
+      ]),
+    ];
     downloadTextFile("ggc-projects.csv", rows.map((r) => r.map(csvEscape).join(",")).join("\n"));
   }
 
@@ -2649,7 +2695,20 @@ export default function App() {
   function importProjectsCsv(event) {
     readCsvFile(event, async (rows) => {
       if (!supabase) { alert("Supabase is not connected."); return; }
-      const imported = rows.map((row) => ({ project_number: row.projectnumber || row.project || "", name: row.projectname || row.name || "", client: row.client || "", address: row.address || "", division: divisions.includes(row.division) ? row.division : "Hardscape", project_type: row.projecttype || row.type || "", owner: row.owner || row.projectowner || "", architect: row.architect || "", engineer: row.engineer || "", specific_requirements: splitList(row.specificrequirements || row.requirements || row.certifications), status: statuses.includes(row.status) ? row.status : "Scheduled" })).filter((p) => p.project_number || p.name);
+      const imported = rows.map((row) => ({
+        project_number: row.projectnumber || row.project || "",
+        name: row.projectname || row.name || "",
+        client: row.client || "",
+        address: row.address || "",
+        division: divisions.includes(row.division) ? row.division : "Hardscape",
+        project_type: splitList(row.projecttype || row.projecttypes || row.type || "").join("; "),
+        owner: row.owner || row.projectowner || "",
+        architect: row.architect || "",
+        engineer: row.engineer || "",
+        specific_requirements: splitList(row.specificrequirements || row.requirements || row.certifications),
+        status: statuses.includes(row.status) ? row.status : "Scheduled",
+        include_in_forecast: parseYesNo(row.includeinforecast || row.forecast || row.activeforecast || row.includeforecast || row.inforecast),
+      })).filter((p) => p.project_number || p.name);
       if (!imported.length) { alert("No valid projects found in CSV."); return; }
       const { data, error } = await supabase.from("projects").insert(imported).select();
       if (error) { console.error(error); alert("Could not import projects."); return; }
@@ -2941,7 +3000,7 @@ export default function App() {
                       <td className="p-3">{project.client}</td>
                       <td className="p-3">{project.address}</td>
                       <td className="p-3">{project.division}</td>
-                      <td className="p-3">{project.projectType || <span className="text-slate-300">—</span>}</td>
+                      <td className="p-3">{projectTypeLabel(project.projectType) || <span className="text-slate-300">—</span>}</td>
                       <td className="p-3">{(project.specificRequirements || []).join(", ")}</td>
                       <td className="p-3">{project.status}</td>
                     </tr>
