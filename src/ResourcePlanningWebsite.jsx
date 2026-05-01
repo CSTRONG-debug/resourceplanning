@@ -1523,7 +1523,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authErrorMessage, setAuthErrorMessage] = useState("");
   const [showUserSettings, setShowUserSettings] = useState(false);
-  const [newUserForm, setNewUserForm] = useState({ userId: "", fullName: "", role: "viewer" });
+  const [newUserForm, setNewUserForm] = useState({ email: "", password: "", fullName: "", role: "viewer" });
   const [appUsers, setAppUsers] = useState([]);
   const [userManagementLoading, setUserManagementLoading] = useState(false);
   const [crewGanttFilter, setCrewGanttFilter] = useState([]);
@@ -2653,7 +2653,7 @@ export default function App() {
     if (!supabase || !userId) return null;
     const { data, error } = await supabase
       .from("user_profiles")
-      .select("full_name, role, active")
+      .select("full_name, email, role, active")
       .eq("id", userId)
       .single();
 
@@ -2700,7 +2700,7 @@ export default function App() {
     if (!supabase) return;
     const { data, error } = await supabase
       .from("user_profiles")
-      .select("id, full_name, role, active, created_at")
+      .select("id, email, full_name, role, active, created_at")
       .order("created_at", { ascending: false });
     if (error) { console.warn("Could not load user profiles. RLS may need an admin policy:", error); return; }
     setAppUsers(data || []);
@@ -2716,23 +2716,29 @@ export default function App() {
   async function addAppUser() {
     if (!supabase) { alert("Supabase is not connected."); return; }
     if ((userProfile?.role || "viewer") !== "admin") { alert("Only admins can add users."); return; }
-    const userId = newUserForm.userId.trim();
+
+    const email = newUserForm.email.trim().toLowerCase();
+    const password = newUserForm.password;
     const fullName = newUserForm.fullName.trim();
     const role = newUserForm.role || "viewer";
-    if (!userId) { alert("Auth User ID is required. Create the user in Supabase Authentication first, then paste their user ID here."); return; }
+
+    if (!email || !password) { alert("Email and password are required."); return; }
+    if (password.length < 8) { alert("Password must be at least 8 characters."); return; }
 
     setUserManagementLoading(true);
     try {
-      const { error } = await supabase
-        .from("user_profiles")
-        .upsert({ id: userId, full_name: fullName, role, active: true }, { onConflict: "id" });
-      if (error) { throw error; }
-      setNewUserForm({ userId: "", fullName: "", role: "viewer" });
+      const { data, error } = await supabase.functions.invoke("create-app-user", {
+        body: { email, password, fullName, role },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      setNewUserForm({ email: "", password: "", fullName: "", role: "viewer" });
       await loadAppUsers();
-      alert("User profile added. They can now log in with their Supabase Auth email/password.");
+      alert("User created. They can now log in with the email and password you set.");
     } catch (error) {
       console.error(error);
-      alert(error.message || "Could not add user profile. Confirm the Auth User ID exists in Supabase Authentication.");
+      alert(error.message || "Could not create user. Confirm the create-app-user Edge Function is deployed.");
     } finally {
       setUserManagementLoading(false);
     }
@@ -2964,29 +2970,36 @@ export default function App() {
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
       {/* Header */}
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
-          <div className="flex items-center gap-4">
-            <img src="/logo.png" alt="Greater Georgia Concrete logo" className="h-16 w-auto object-contain" onError={(e) => { e.currentTarget.style.display = "none"; }} />
-            <div>
+      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-6 px-6 py-4">
+          <div className="flex min-w-0 items-center gap-4">
+            <img src="/logo.png" alt="Greater Georgia Concrete logo" className="h-14 w-auto shrink-0 object-contain" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+            <div className="min-w-0">
               <div className="h-1 w-24 rounded-full bg-emerald-700" />
-              <h1 className="mt-3 text-3xl font-bold tracking-tight">GGC Resource Planning</h1>
-              <p className="mt-1 text-slate-500">Project master list, resource assignments, and mobilization scheduling.</p>
+              <h1 className="mt-2 truncate text-2xl font-bold tracking-tight">GGC Resource Planning</h1>
+              <p className="mt-1 truncate text-sm text-slate-500">Project master list, resource assignments, and mobilization scheduling.</p>
             </div>
           </div>
-          <div className="flex flex-wrap justify-end gap-3">
-            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-              <span>{userProfile?.full_name || currentUser}</span><span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-600">{userProfile?.role || "viewer"}</span>
-              <button onClick={() => setShowUserSettings(true)} className="rounded-lg p-1 hover:bg-slate-200" title="User settings"><Settings size={16} /></button>
-              <button onClick={logout} className="rounded-lg px-2 py-1 text-xs text-red-700 hover:bg-red-50">Logout</button>
+          <div className="flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+            <span className="max-w-[180px] truncate">{userProfile?.full_name || currentUser}</span>
+            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-600">{userProfile?.role || "viewer"}</span>
+            <button onClick={() => setShowUserSettings(true)} className="rounded-lg p-1 hover:bg-slate-200" title="User settings"><Settings size={16} /></button>
+            <button onClick={logout} className="rounded-lg px-2 py-1 text-xs text-red-700 hover:bg-red-50">Logout</button>
+          </div>
+        </div>
+        <div className="border-t border-slate-100 bg-white">
+          <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-6 py-3">
+            <nav className="flex min-w-0 flex-1 flex-nowrap gap-2 overflow-x-auto">
+              {["dashboard", "projects", "resources", "crews", "forecast"].map((p) => (
+                <button key={p} onClick={() => setPage(p)} className={`shrink-0 rounded-xl px-4 py-2.5 font-semibold shadow-sm capitalize ${page === p ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>{p}</button>
+              ))}
+            </nav>
+            <div className="flex shrink-0 items-center gap-2">
+              {page === "dashboard" && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><ClipboardCheck size={18} /> Assign</button>}
+              {page === "projects" && <button onClick={openAddProjectForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Project</button>}
+              {page === "resources" && <button onClick={openAddResourceForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Resource</button>}
+              {page === "crews" && <button onClick={openAddCrewForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Crew</button>}
             </div>
-            {["dashboard", "projects", "resources", "crews", "forecast"].map((p) => (
-              <button key={p} onClick={() => setPage(p)} className={`rounded-xl px-4 py-3 font-semibold shadow-sm capitalize ${page === p ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>{p}</button>
-            ))}
-            {page === "dashboard" && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white shadow-sm hover:bg-emerald-800"><ClipboardCheck size={18} /> Assign</button>}
-            {page === "projects" && <button onClick={openAddProjectForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Project</button>}
-            {page === "resources" && <button onClick={openAddResourceForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Resource</button>}
-            {page === "crews" && <button onClick={openAddCrewForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Crew</button>}
           </div>
         </div>
       </header>
@@ -4027,13 +4040,21 @@ export default function App() {
             {(userProfile?.role || "viewer") === "admin" ? (
               <>
                 <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-                  <h3 className="font-bold text-slate-900">Add User Profile</h3>
-                  <p className="mt-1 text-sm text-slate-600">Create the user in Supabase Authentication first, then paste their Auth User ID here to assign app access and role.</p>
-                  <div className="mt-4 grid gap-3 md:grid-cols-[1.3fr_1fr_.7fr_auto]">
+                  <h3 className="font-bold text-slate-900">Add User</h3>
+                  <p className="mt-1 text-sm text-slate-600">Create the login here, set the temporary password, and assign the app role.</p>
+                  <div className="mt-4 grid gap-3 md:grid-cols-[1.2fr_1fr_1fr_.7fr_auto]">
                     <input
-                      placeholder="Auth User ID"
-                      value={newUserForm.userId}
-                      onChange={(e) => setNewUserForm((c) => ({ ...c, userId: e.target.value }))}
+                      type="email"
+                      placeholder="Email"
+                      value={newUserForm.email}
+                      onChange={(e) => setNewUserForm((c) => ({ ...c, email: e.target.value }))}
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600"
+                    />
+                    <input
+                      type="password"
+                      placeholder="Temporary password"
+                      value={newUserForm.password}
+                      onChange={(e) => setNewUserForm((c) => ({ ...c, password: e.target.value }))}
                       className="rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600"
                     />
                     <input
@@ -4056,7 +4077,7 @@ export default function App() {
                       disabled={userManagementLoading}
                       className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
                     >
-                      {userManagementLoading ? "Saving..." : "Add User"}
+                      {userManagementLoading ? "Creating..." : "Add User"}
                     </button>
                   </div>
                 </div>
@@ -4077,7 +4098,7 @@ export default function App() {
                         <tr key={user.id} className="border-t border-slate-200">
                           <td className="p-3">
                             <p className="font-semibold text-slate-900">{user.full_name || "Unnamed user"}</p>
-                            <p className="text-xs text-slate-500">{user.id}</p>
+                            <p className="text-xs text-slate-500">{user.email || user.id}</p>
                           </td>
                           <td className="p-3">
                             <select
