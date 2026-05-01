@@ -93,15 +93,29 @@ export async function verifyApiKey(key, model = getStoredModel()) {
 
 // ── App context for the system prompt ──────────────────────────────────────
 
-// Build a compact JSON snapshot of relevant app state. We keep it lean because
-// large contexts cost more tokens. For very large datasets you would switch to
-// tool-use and let Claude query subsets on demand — that's a v2.
+// Build a compact JSON snapshot of relevant app state. We denormalize names
+// into assignments so Claude doesn't have to mentally join IDs across arrays —
+// it can see "Chris Salmon assigned to Project #1042" directly.
+//
+// For very large datasets (thousands of assignments) you would switch to
+// tool-use and let Claude query subsets on demand. That's a v2.
 export function buildAppContext({
   projects = [], resources = [], crews = [], assignments = [],
   certifications = [], forecastData = null, today = new Date().toISOString().slice(0, 10),
 }) {
+  // Build ID → entity lookup maps for denormalization.
+  const projectMap = new Map(projects.map((p) => [p.id, p]));
+  const resourceMap = new Map(resources.map((r) => [r.id, r]));
+  const crewMap = new Map(crews.map((c) => [c.id, c]));
+
   return {
     today,
+    counts: {
+      projects: projects.length,
+      resources: resources.length,
+      crews: crews.length,
+      assignments: assignments.length,
+    },
     projects: projects.map((p) => ({
       id: p.id,
       projectNumber: p.projectNumber,
@@ -130,30 +144,74 @@ export function buildAppContext({
       specialty: c.specialty,
       deactivated: !!c.deactivated,
     })),
-    assignments: assignments.map((a) => ({
-      id: a.id,
-      projectId: a.projectId,
-      resourceId: a.resourceId,
-      crewIds: a.crewIds || [],
-      start: a.start,
-      end: a.end,
-    })),
+    // Assignments are enriched with project/resource/crew names so questions
+    // like "when does Chris Salmon become free" can be answered without
+    // cross-referencing IDs. start/end are ISO date strings.
+    assignments: assignments.map((a) => {
+      const project = projectMap.get(a.projectId);
+      const resource = resourceMap.get(a.resourceId);
+      const crewsOnAssignment = (a.crewIds || [])
+        .map((id) => crewMap.get(id))
+        .filter(Boolean);
+      return {
+        id: a.id,
+        projectId: a.projectId,
+        projectNumber: project?.projectNumber || null,
+        projectName: project?.name || null,
+        projectDivision: project?.division || null,
+        resourceId: a.resourceId || null,
+        resourceName: resource?.name || null,
+        resourceType: resource?.resourceType || null,
+        crewIds: a.crewIds || [],
+        crewNames: crewsOnAssignment.map((c) => c.crewName),
+        start: a.start,
+        end: a.end,
+      };
+    }),
     certificationsKnown: certifications,
     forecast: forecastData,
   };
 }
 
-const SYSTEM_PROMPT = `You are an assistant embedded in Greater Georgia Concrete's internal Resource Planning application. You help schedulers, foremen, and managers with three jobs:
+const SYSTEM_PROMPT = `You are an assistant embedded in Greater Georgia Concrete's internal Resource Planning application. You help schedulers, foremen, and managers with their work.
 
-1. Answering questions about projects, resources, crews, certifications, and assignments.
-2. Suggesting crew assignments based on availability, division fit, and required certifications.
-3. Summarizing the forecast and flagging risks: expiring certifications, scheduling conflicts, thin months, overruns.
+Each user message includes a JSON snapshot of current app state under "Current app state". Use ONLY that data. Do not invent project numbers, names, dates, or numbers. Today's date is provided as context.today.
 
-Each user message will include a JSON snapshot of the current app state under "Current app state". Use ONLY that data. Do not invent project numbers, names, dates, or numbers. If a question cannot be answered from the data, say so plainly and suggest what data would be needed.
+# Data shapes
 
-Style: concise. Plain prose for short answers. Short bullet lists when listing 3+ items. When suggesting a crew, give one or two sentences of reasoning (which certs match, which division, current load). Never narrate your process.
+The snapshot contains these arrays. They are SEPARATE — don't confuse them:
 
-Treat all data as confidential to GGC. Do not repeat the entire JSON back; reference specific items by project number or name.`;
+- **projects**: construction projects (division, status, type, client). No dates here.
+- **resources**: individual people (foremen, operators, laborers) with their resourceType and certifications. Each certification has start/expiration dates.
+- **crews**: named crews with foreman, member count, and specialties. May be deactivated.
+- **assignments**: THIS IS THE SCHEDULE. Each assignment links a resource and/or crew to a project for a date range (start to end, ISO format). Already enriched with projectName, resourceName, crewNames so you don't need to join by ID.
+- **forecast**: revenue forecasting only ($/month projections). Often null. NOT related to scheduling.
+
+# How to answer common questions
+
+* "Who/which crews are available [next week / on date X]?"
+  → Look at assignments. Compute the date range from context.today. A resource/crew is BUSY during a range if any of their assignments overlap. Otherwise AVAILABLE. List by name.
+
+* "When does [person] become free?" / "When is [crew] next available?"
+  → Find their assignments by resourceName or crewNames. Return the latest end date. They become free the day after.
+
+* "Whose certifications expire in the next N days?"
+  → Walk resources[].certifications[].expiration. Compare to context.today. Group by resource.
+
+* "Suggest a crew for [project]"
+  → Match crew specialty/division to the project. Prefer crews not currently assigned during the project window (check assignments). Mention required certifications if relevant.
+
+* "Summarize the forecast" / revenue questions
+  → Use the forecast field. If null, say "no forecast data was passed to me — that feature isn't wired up yet" and stop.
+
+* "How many [X]?" / general inventory
+  → Use the counts object or count the relevant array.
+
+# Style
+
+Concise. Plain prose for short answers. Short bullet lists when listing 3+ items. Reference projects by projectNumber and people by name, not internal IDs. Don't repeat JSON back. Don't narrate your reasoning unless asked.
+
+If a question genuinely cannot be answered from the data, name the SPECIFIC field that's missing or empty (not just "I need more data"). For example: "There are 0 assignments in the snapshot, so I can't tell who's busy" is good; "I need forecast data" is wrong if the question was about scheduling.`;
 
 // Send a question + app context and return Claude's text reply.
 // `conversation` is prior turns in {role, content} form for follow-ups.
