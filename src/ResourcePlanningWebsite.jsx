@@ -1640,29 +1640,62 @@ export default function App() {
   // ── Supabase Auth session ─────────────────────────────────────────────────
   useEffect(() => {
     let mounted = true;
+
     async function loadAuthSession() {
-      if (!supabase) { setAuthLoading(false); return; }
-      const { data, error } = await supabase.auth.getSession();
-      if (error) console.error("Auth session load error:", error);
-      const user = data?.session?.user || null;
-      if (!mounted) return;
-      setAuthUser(user);
-      setCurrentUser(user?.email || "");
-      if (user) await loadUserProfile(user.id);
-      else setUserProfile(null);
-      if (mounted) setAuthLoading(false);
+      try {
+        if (!supabase?.auth) {
+          console.warn("Supabase Auth is not available. Check your Supabase client/environment variables.");
+          return;
+        }
+
+        const { data, error } = await supabase.auth.getSession();
+        if (error) console.error("Auth session load error:", error);
+
+        const user = data?.session?.user || null;
+        if (!mounted) return;
+
+        setAuthUser(user);
+        setCurrentUser(user?.email || "");
+
+        if (user) {
+          try {
+            await loadUserProfile(user.id);
+          } catch (profileError) {
+            console.error("User profile load failed:", profileError);
+            setUserProfile({ full_name: user.email || "", role: "viewer", active: true, missingProfile: true });
+          }
+        } else {
+          setUserProfile(null);
+        }
+      } catch (sessionError) {
+        console.error("Secure session initialization failed:", sessionError);
+        if (mounted) {
+          setAuthUser(null);
+          setCurrentUser("");
+          setUserProfile(null);
+        }
+      } finally {
+        if (mounted) setAuthLoading(false);
+      }
     }
+
     loadAuthSession();
 
     if (!supabase?.auth?.onAuthStateChange) return () => { mounted = false; };
     const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      const user = session?.user || null;
-      setAuthUser(user);
-      setCurrentUser(user?.email || "");
-      if (user) await loadUserProfile(user.id);
-      else setUserProfile(null);
-      setAuthLoading(false);
+      try {
+        const user = session?.user || null;
+        setAuthUser(user);
+        setCurrentUser(user?.email || "");
+        if (user) await loadUserProfile(user.id);
+        else setUserProfile(null);
+      } catch (authChangeError) {
+        console.error("Auth state change failed:", authChangeError);
+      } finally {
+        setAuthLoading(false);
+      }
     });
+
     return () => {
       mounted = false;
       listener?.subscription?.unsubscribe?.();
