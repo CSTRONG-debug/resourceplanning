@@ -106,35 +106,31 @@ export default function ClaudeAssistant({ open, onClose, appData }) {
   }
 
   return (
-    <div className="fixed inset-0 z-[90] flex">
-      {/* Backdrop — click to close */}
-      <button
-        aria-label="Close assistant"
-        onClick={onClose}
-        className="flex-1 bg-slate-950/40 backdrop-blur-sm"
-      />
-      {/* Panel */}
-      <aside className="flex h-full w-full max-w-lg flex-col border-l border-slate-200 bg-white shadow-2xl">
-        <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-700 text-white">
-              <Sparkles size={18} />
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">Claude Assistant</h2>
-              <p className="text-xs text-slate-500">
-                {connected ? `Connected · ${shortModelName(model)}` : "Not connected"}
-              </p>
-            </div>
+    <aside
+      className="fixed top-0 right-0 z-[90] flex h-full w-full max-w-lg flex-col border-l border-slate-200 bg-white shadow-2xl"
+      role="complementary"
+      aria-label="Claude Assistant"
+    >
+      <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-700 text-white">
+            <Sparkles size={18} />
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-            aria-label="Close"
-          >
-            <X size={20} />
-          </button>
-        </header>
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">Claude Assistant</h2>
+            <p className="text-xs text-slate-500">
+              {connected ? `Connected · ${shortModelName(model)}` : "Not connected"}
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+          aria-label="Close"
+        >
+          <X size={20} />
+        </button>
+      </header>
 
         {!connected ? (
           <ConnectPanel
@@ -190,8 +186,7 @@ export default function ClaudeAssistant({ open, onClose, appData }) {
             </form>
           </>
         )}
-      </aside>
-    </div>
+    </aside>
   );
 }
 
