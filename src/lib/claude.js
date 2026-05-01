@@ -93,20 +93,91 @@ export async function verifyApiKey(key, model = getStoredModel()) {
 
 // ── App context for the system prompt ──────────────────────────────────────
 
-// Build a compact JSON snapshot of relevant app state. We denormalize names
-// into assignments so Claude doesn't have to mentally join IDs across arrays —
-// it can see "Chris Salmon assigned to Project #1042" directly.
+// Build a compact JSON snapshot of relevant app state.
 //
-// For very large datasets (thousands of assignments) you would switch to
-// tool-use and let Claude query subsets on demand. That's a v2.
+// IMPORTANT — this app's actual data model:
+//   - Assignments use NAMED ROLE FIELDS (projectManager, superintendent,
+//     fieldCoordinator, fieldEngineer, safety) holding person-name strings,
+//     not foreign keys to resources.
+//   - The actual scheduled time blocks live in assignment.mobilizations[],
+//     each with its own start/end and per-mobilization superintendent /
+//     fieldCoordinator / crewIds overrides.
+//   - PTO lives on resource.pto[] — a separate dimension from assignments.
+//
+// We flatten all of this into two flat arrays (scheduledBlocks, ptoBlocks)
+// so Claude can answer "who's busy / who's free / when is X available"
+// without traversing nested structures or guessing field names.
 export function buildAppContext({
   projects = [], resources = [], crews = [], assignments = [],
   certifications = [], forecastData = null, today = new Date().toISOString().slice(0, 10),
 }) {
-  // Build ID → entity lookup maps for denormalization.
   const projectMap = new Map(projects.map((p) => [p.id, p]));
-  const resourceMap = new Map(resources.map((r) => [r.id, r]));
   const crewMap = new Map(crews.map((c) => [c.id, c]));
+
+  // Flatten assignments → scheduledBlocks (one row per mobilization).
+  const scheduledBlocks = [];
+  for (const a of assignments) {
+    const project = projectMap.get(a.projectId);
+    // Legacy fallback: assignment without mobilizations uses assignment-level
+    // fields directly. Newer assignments always have a mobilizations array.
+    const mobs = (a.mobilizations && a.mobilizations.length)
+      ? a.mobilizations
+      : [{
+          id: null,
+          start: a.start || null,
+          end: a.end || null,
+          superintendent: a.superintendent || "",
+          fieldCoordinator: a.fieldCoordinator || "",
+          crewIds: [a.crew1Id, a.crew2Id, a.crew3Id, a.crew4Id].filter(Boolean),
+          unassignedNeeds: [],
+        }];
+
+    mobs.forEach((mob, i) => {
+      const isFirst = i === 0;
+      // Mobilization-level superintendent/fieldCoordinator override
+      // assignment-level. First mobilization falls back to assignment-level
+      // if its own field is blank — matches the app's own form behavior.
+      const superintendent = mob.superintendent || (isFirst ? (a.superintendent || "") : "") || null;
+      const fieldCoordinator = mob.fieldCoordinator || (isFirst ? (a.fieldCoordinator || "") : "") || null;
+      const mobCrewIds = (mob.crewIds && mob.crewIds.length)
+        ? mob.crewIds
+        : (isFirst ? [a.crew1Id, a.crew2Id, a.crew3Id, a.crew4Id].filter(Boolean) : []);
+      const crewNames = mobCrewIds.map((id) => crewMap.get(id)?.crewName).filter(Boolean);
+
+      scheduledBlocks.push({
+        assignmentId: a.id,
+        mobilizationId: mob.id || null,
+        projectId: a.projectId,
+        projectNumber: project?.projectNumber || null,
+        projectName: project?.name || null,
+        projectDivision: project?.division || null,
+        start: mob.start || null,
+        end: mob.end || null,
+        // Assignment-level roles (apply to all mobilizations in the assignment)
+        projectManager: a.projectManager || null,
+        fieldEngineer: a.fieldEngineer || null,
+        safety: a.safety || null,
+        // Per-mobilization roles
+        superintendent,
+        fieldCoordinator,
+        crewNames,
+        unassignedNeeds: mob.unassignedNeeds || [],
+      });
+    });
+  }
+
+  // Flatten resource.pto[] → ptoBlocks.
+  const ptoBlocks = [];
+  for (const r of resources) {
+    for (const p of (r.pto || [])) {
+      ptoBlocks.push({
+        resourceName: r.name,
+        ptoId: p.ptoId || null,
+        start: p.start || null,
+        end: p.end || null,
+      });
+    }
+  }
 
   return {
     today,
@@ -115,6 +186,8 @@ export function buildAppContext({
       resources: resources.length,
       crews: crews.length,
       assignments: assignments.length,
+      scheduledBlocks: scheduledBlocks.length,
+      ptoBlocks: ptoBlocks.length,
     },
     projects: projects.map((p) => ({
       id: p.id,
@@ -144,30 +217,8 @@ export function buildAppContext({
       specialty: c.specialty,
       deactivated: !!c.deactivated,
     })),
-    // Assignments are enriched with project/resource/crew names so questions
-    // like "when does Chris Salmon become free" can be answered without
-    // cross-referencing IDs. start/end are ISO date strings.
-    assignments: assignments.map((a) => {
-      const project = projectMap.get(a.projectId);
-      const resource = resourceMap.get(a.resourceId);
-      const crewsOnAssignment = (a.crewIds || [])
-        .map((id) => crewMap.get(id))
-        .filter(Boolean);
-      return {
-        id: a.id,
-        projectId: a.projectId,
-        projectNumber: project?.projectNumber || null,
-        projectName: project?.name || null,
-        projectDivision: project?.division || null,
-        resourceId: a.resourceId || null,
-        resourceName: resource?.name || null,
-        resourceType: resource?.resourceType || null,
-        crewIds: a.crewIds || [],
-        crewNames: crewsOnAssignment.map((c) => c.crewName),
-        start: a.start,
-        end: a.end,
-      };
-    }),
+    scheduledBlocks,
+    ptoBlocks,
     certificationsKnown: certifications,
     forecast: forecastData,
   };
@@ -182,24 +233,30 @@ Each user message includes a JSON snapshot of current app state under "Current a
 The snapshot contains these arrays. They are SEPARATE — don't confuse them:
 
 - **projects**: construction projects (division, status, type, client). No dates here.
-- **resources**: individual people (foremen, operators, laborers) with their resourceType and certifications. Each certification has start/expiration dates.
+- **resources**: individual people (foremen, operators, superintendents, etc.) with resourceType and certifications. Each certification has start/expiration dates.
 - **crews**: named crews with foreman, member count, and specialties. May be deactivated.
-- **assignments**: THIS IS THE SCHEDULE. Each assignment links a resource and/or crew to a project for a date range (start to end, ISO format). Already enriched with projectName, resourceName, crewNames so you don't need to join by ID.
-- **forecast**: revenue forecasting only ($/month projections). Often null. NOT related to scheduling.
+- **scheduledBlocks**: THE SCHEDULE. One row per mobilization (date block). Each block names who is on it via these role fields, all of which are PERSON NAMES as strings (or null):
+    - projectManager, superintendent, fieldCoordinator, fieldEngineer, safety
+  Plus crewNames (array of crew name strings). Plus start/end (ISO dates) and projectNumber/projectName/projectDivision.
+- **ptoBlocks**: PTO time off. resourceName + start + end. SEPARATE from scheduledBlocks.
+- **forecast**: revenue forecasting only (often null). NOT related to scheduling.
 
 # How to answer common questions
 
-* "Who/which crews are available [next week / on date X]?"
-  → Look at assignments. Compute the date range from context.today. A resource/crew is BUSY during a range if any of their assignments overlap. Otherwise AVAILABLE. List by name.
+* "When does [person] become free?" / "When is [person] next available?"
+  → Search scheduledBlocks for any block where the person's NAME appears in any role field (projectManager, superintendent, fieldCoordinator, fieldEngineer, safety). Also search ptoBlocks where resourceName matches. Return the latest end date across all of those. They become free the day AFTER that date.
 
-* "When does [person] become free?" / "When is [crew] next available?"
-  → Find their assignments by resourceName or crewNames. Return the latest end date. They become free the day after.
+* "Who's on project [X]?" / "Who's the superintendent on [X]?"
+  → Filter scheduledBlocks by projectNumber or projectName (case-insensitive substring matching is fine). Each block lists the role assignments and crews.
+
+* "Which crews/people are available [next week / on date X]?"
+  → Compute the date range from context.today. A person is BUSY in that range if their name appears in any role on a scheduledBlock whose [start, end] overlaps the range, OR in a ptoBlock that overlaps. Otherwise AVAILABLE. Same logic for crews against block.crewNames. List people from \`resources\` and crews from \`crews\` who are NOT busy.
 
 * "Whose certifications expire in the next N days?"
   → Walk resources[].certifications[].expiration. Compare to context.today. Group by resource.
 
 * "Suggest a crew for [project]"
-  → Match crew specialty/division to the project. Prefer crews not currently assigned during the project window (check assignments). Mention required certifications if relevant.
+  → Match crew specialty/division to the project. Prefer crews not appearing in any scheduledBlock.crewNames during the project window. Mention required certifications if relevant.
 
 * "Summarize the forecast" / revenue questions
   → Use the forecast field. If null, say "no forecast data was passed to me — that feature isn't wired up yet" and stop.
@@ -211,7 +268,7 @@ The snapshot contains these arrays. They are SEPARATE — don't confuse them:
 
 Concise. Plain prose for short answers. Short bullet lists when listing 3+ items. Reference projects by projectNumber and people by name, not internal IDs. Don't repeat JSON back. Don't narrate your reasoning unless asked.
 
-If a question genuinely cannot be answered from the data, name the SPECIFIC field that's missing or empty (not just "I need more data"). For example: "There are 0 assignments in the snapshot, so I can't tell who's busy" is good; "I need forecast data" is wrong if the question was about scheduling.`;
+If a question genuinely cannot be answered from the data, name the SPECIFIC field that's empty (e.g. "scheduledBlocks is empty so I can't tell who's busy"). Don't say "I need forecast data" if the question was about scheduling.`;
 
 // Send a question + app context and return Claude's text reply.
 // `conversation` is prior turns in {role, content} form for follow-ups.
