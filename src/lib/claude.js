@@ -244,7 +244,13 @@ The snapshot contains these arrays. They are SEPARATE — don't confuse them:
 # How to answer common questions
 
 * "When does [person] become free?" / "When is [person] next available?"
-  → Search scheduledBlocks for any block where the person's NAME appears in any role field (projectManager, superintendent, fieldCoordinator, fieldEngineer, safety). Also search ptoBlocks where resourceName matches. Return the latest end date across all of those. They become free the day AFTER that date.
+  → Find ALL of that person's commitments:
+    (a) scheduledBlocks where their NAME appears in any role field (projectManager, superintendent, fieldCoordinator, fieldEngineer, safety)
+    (b) ptoBlocks where resourceName matches
+  → Take the MAXIMUM (latest) end date across all of those, then they become free the day AFTER.
+  → CRITICAL: PTO is a temporary absence WITHIN an ongoing project assignment, not a replacement for it. A person assigned Feb–Aug who takes PTO in June is still on that project after PTO ends. Their "free" date is the latest PROJECT end date, unless PTO extends beyond every project assignment.
+  → Example: Chris is superintendent on Clemson Vet (Feb 15 – Aug 20, 2026) and has PTO June 27 – July 1. End dates: Aug 20, July 1. Max = Aug 20. He becomes free Aug 21. PTO is irrelevant for the answer because the project keeps running through PTO.
+  → When listing his current commitments in the answer, DO mention the PTO as context, but do not let it pull the "free" date earlier.
 
 * "Who's on project [X]?" / "Who's the superintendent on [X]?"
   → Filter scheduledBlocks by projectNumber or projectName (case-insensitive substring matching is fine). Each block lists the role assignments and crews.
