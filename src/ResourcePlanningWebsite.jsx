@@ -947,9 +947,10 @@ export function GanttHeader({ timeline, zoom }) {
 export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
   const project = item.project;
   const isUnassigned = !!item.isUnassignedNeed;
+  const barDivision = isUnassigned ? (item.unassignedDivision || project.division) : project.division;
   const colorClass = isUnassigned || project.status === "Pending Award"
-    ? pendingDivisionStyles[project.division] || "bg-slate-300"
-    : divisionStyles[project.division] || "bg-slate-700";
+    ? pendingDivisionStyles[barDivision] || "bg-slate-300"
+    : divisionStyles[barDivision] || "bg-slate-700";
   const { left, width } = timelineSpanPercent(item.start, item.end, timeline);
   const patternStyle = isUnassigned ? {
     border: "2px solid #111827",
@@ -963,7 +964,7 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
   } : {};
   const tooltip = [
     project.projectNumber ? `${project.projectNumber} - ${project.name}` : project.name,
-    `${project.division} • ${project.status}`,
+    `${isUnassigned ? (item.unassignedDivision || project.division) : project.division} • ${project.status}`,
     `${formatDate(item.start)} - ${formatDate(item.end)}`,
     label ? `Assignment: ${label}` : item.isUnassignedNeed ? `${item.unassignedAbbreviation} - Unassigned` : "Unassigned",
     conflict ? "Conflict detected" : "",
@@ -1082,7 +1083,8 @@ export function UnassignedNeedGanttRow({ resource, items, timeline }) {
     <div className="grid grid-cols-[260px_1fr] items-start gap-5">
       <div className="sticky left-0 z-20 bg-white pr-3 text-left">
         <p className="font-semibold text-amber-800">{resource.name}</p>
-        <p className="mt-1 text-xs text-slate-500">{resource.homeDivision} • {items.length} unassigned need{items.length === 1 ? "" : "s"}</p>
+        <p className="mt-1 text-xs text-slate-500">{resource.homeDivision} • unassigned need</p>
+        {resource.projectLabel && <p className="mt-0.5 text-xs font-medium text-slate-700">{resource.projectLabel}</p>}
       </div>
       <div className="relative rounded-xl bg-amber-50" style={{ width: `${timeline.width}px`, height: `${Math.max(48, lanes.length * 48)}px` }}>
         {lanes.map((lane, laneIndex) =>
@@ -1583,20 +1585,29 @@ export default function App() {
   }).filter(Boolean);
 
   const unassignedNeedResourceRows = showUnassignedNeedRows
-    ? divisions.map((division) => {
-        const abbr = getDivisionAbbreviation(division);
-        if (dashboardResourceSearch) {
-          const q = dashboardResourceSearch.toLowerCase();
-          if (!`${abbr} unassigned ${division}`.toLowerCase().includes(q)) return null;
-        }
-        const items = unassignedNeedItems.filter((item) => item.unassignedDivision === division);
-        if (!items.length) return null;
-        return {
-          isUnassignedNeedRow: true,
-          resource: { id: `unassigned-${abbr}`, name: `${abbr} - Unassigned`, resourceType: "Unassigned Need", homeDivision: division },
-          items,
-        };
-      }).filter(Boolean)
+    ? unassignedNeedItems
+        .sort((a, b) => {
+          const divCompare = String(a.unassignedDivision || "").localeCompare(String(b.unassignedDivision || ""));
+          if (divCompare !== 0) return divCompare;
+          return new Date(a.start) - new Date(b.start);
+        })
+        .map((item) => {
+          const abbr = item.unassignedAbbreviation || getDivisionAbbreviation(item.unassignedDivision);
+          const searchText = `${abbr} unassigned ${item.unassignedDivision} ${item.project?.projectNumber || ""} ${item.project?.name || ""}`.toLowerCase();
+          if (dashboardResourceSearch && !searchText.includes(dashboardResourceSearch.toLowerCase())) return null;
+          return {
+            isUnassignedNeedRow: true,
+            resource: {
+              id: `unassigned-${abbr}-${item.id}`,
+              name: `${abbr} - Unassigned`,
+              resourceType: "Unassigned Need",
+              homeDivision: item.unassignedDivision,
+              projectLabel: `${item.project?.projectNumber ? item.project.projectNumber + " - " : ""}${item.project?.name || ""}`,
+            },
+            items: [item],
+          };
+        })
+        .filter(Boolean)
     : [];
 
   const resourceGanttRowsWithUnassigned = [...resourceGanttRows, ...unassignedNeedResourceRows];
@@ -1723,7 +1734,16 @@ export default function App() {
       if (error) { console.error(error); alert("Could not save mobilizations."); return; }
       savedMobs = data || [];
     }
-    const mapped = mapAssignmentFromDbLocal(savedAssignment, savedMobs);
+    let mapped = mapAssignmentFromDbLocal(savedAssignment, savedMobs);
+    // Preserve mobilization-level unassigned selections immediately so the Gantt updates without a refresh.
+    const formMobs = (assignmentForm.mobilizations || []).filter((m) => m.start && m.end);
+    mapped = {
+      ...mapped,
+      mobilizations: (mapped.mobilizations || []).map((mob, index) => {
+        const formMob = formMobs[index] || formMobs.find((m) => String(m.start || "") === String(mob.start || "") && String(m.end || "") === String(mob.end || ""));
+        return formMob ? { ...mob, unassignedNeeds: normalizeUnassignedNeeds(formMob.unassignedNeeds) } : mob;
+      }),
+    };
     if (editingAssignmentId) setAssignments((current) => current.map((a) => (a.id === editingAssignmentId ? mapped : a)));
     else setAssignments((current) => [mapped, ...current]);
     setShowAssignmentForm(false); setEditingAssignmentId(null);
