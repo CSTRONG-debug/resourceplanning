@@ -317,7 +317,7 @@ export function SearchableProjectSelect({ value, onChange, projects }) {
           value={query}
           placeholder="Search project..."
           onFocus={() => setOpen(true)}
-          onChange={(e) => { setQuery(e.target.value); onChange(""); setOpen(true); }}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
         />
       </div>
       {open && (
@@ -365,7 +365,7 @@ export function SearchableCrewSelect({ value, onChange, crews }) {
           value={query}
           placeholder="Search crew..."
           onFocus={() => setOpen(true)}
-          onChange={(e) => { setQuery(e.target.value); onChange(""); setOpen(true); }}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
         />
       </div>
       {open && (
@@ -2845,6 +2845,16 @@ export default function App() {
           if (!s || !e) return false;
           return rangesOverlap(s, addDays(e, 1), utilStart, addDays(utilEnd, 1));
         }) : [];
+        const getCrewMenForItem = (item) => {
+          const crewMenCount = (item.assignment._crewMenCounts || item.assignment.crewMenCounts || {})[selectedUtilizationCrew.id];
+          return crewMenCount !== undefined && crewMenCount !== null && crewMenCount !== ""
+            ? Number(crewMenCount) || 0
+            : (selectedUtilizationCrew.totalMembers || 0);
+        };
+        const totalAssignedMen = items.reduce((sum, item) => sum + getCrewMenForItem(item), 0);
+        const crewCapacity = selectedUtilizationCrew.totalMembers || 0;
+        const utilizationDelta = crewCapacity - totalAssignedMen;
+        const utilizationPct = crewCapacity > 0 ? Math.round((totalAssignedMen / crewCapacity) * 100) : 0;
         const popupTimeline = {
           minDate: utilStart || new Date(),
           maxDate: utilEnd || new Date(),
@@ -2860,6 +2870,16 @@ export default function App() {
                 <div>
                   <h2 className="text-2xl font-bold">{getCrewDisplayName(selectedUtilizationCrew)} — Utilization Assignments</h2>
                   <p className="text-sm text-slate-500">{utilizationStart} to {utilizationEnd} · {items.length} active assignment{items.length === 1 ? "" : "s"}</p>
+                  {validRange && (
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">Crew Capacity: {crewCapacity}</span>
+                      <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-800">Assigned Men: {totalAssignedMen}</span>
+                      <span className={`rounded-full px-3 py-1 ${utilizationDelta < 0 ? "bg-red-100 text-red-700" : utilizationDelta > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-800"}`}>
+                        {utilizationDelta < 0 ? `+${Math.abs(utilizationDelta)} over` : utilizationDelta > 0 ? `${utilizationDelta} on bench` : "Fully utilized"}
+                      </span>
+                      <span className="rounded-full bg-blue-100 px-3 py-1 text-blue-800">Utilization: {utilizationPct}%</span>
+                    </div>
+                  )}
                 </div>
                 <button onClick={() => setSelectedUtilizationCrew(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
               </div>
@@ -2871,20 +2891,34 @@ export default function App() {
                     <div className="mt-3 space-y-3" style={{ minWidth: `${popupTimeline.width + 280}px` }}>
                       {items.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments found for this crew during the selected period.</div>}
                       {items.map((item) => {
-                        const crewMenCount = (item.assignment._crewMenCounts || item.assignment.crewMenCounts || {})[selectedUtilizationCrew.id];
+                        const rowMen = getCrewMenForItem(item);
                         return (
-                          <div key={`util-drilldown-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5">
+                          <div key={`util-drilldown-${item.id}`} className="grid grid-cols-[320px_1fr] items-center gap-5">
                             <div className="text-left">
-                              <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
+                              <div className="flex items-start justify-between gap-3">
+                                <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
+                                <span className="shrink-0 rounded-full bg-slate-900 px-2.5 py-1 text-xs font-bold text-white">{rowMen} men</span>
+                              </div>
                               <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
-                              <p className="mt-0.5 text-xs text-slate-400">Men assigned: {crewMenCount !== undefined ? crewMenCount : (selectedUtilizationCrew.totalMembers || 0)}</p>
+                              <p className="mt-0.5 text-xs text-slate-400">Counts toward selected period total.</p>
                             </div>
                             <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${popupTimeline.width}px` }}>
-                              <GanttSegmentBar item={item} timeline={popupTimeline} label={item.project.name} />
+                              <GanttSegmentBar item={item} timeline={popupTimeline} label={`${item.project.name} · ${rowMen} men`} />
                             </div>
                           </div>
                         );
                       })}
+                      {items.length > 0 && (
+                        <div className="grid grid-cols-[320px_1fr] items-center gap-5 border-t border-slate-200 pt-3">
+                          <div className="text-left">
+                            <p className="font-bold text-slate-900">Selected Period Total</p>
+                            <p className="text-xs text-slate-500">{utilizationStart} – {utilizationEnd}</p>
+                          </div>
+                          <div className="rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-800">
+                            {totalAssignedMen} assigned men / {crewCapacity} crew capacity · {utilizationDelta < 0 ? `+${Math.abs(utilizationDelta)} over` : utilizationDelta > 0 ? `${utilizationDelta} on bench` : "fully utilized"}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </>
                 )}
