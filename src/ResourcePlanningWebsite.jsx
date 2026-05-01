@@ -1331,6 +1331,7 @@ export default function App() {
   const [crewGanttFilter, setCrewGanttFilter] = useState([]);
   const [focusedResource, setFocusedResource] = useState(null);
   const [projectSort, setProjectSort] = useState({ key: "projectNumber", direction: "asc" });
+  const [projectGanttSort, setProjectGanttSort] = useState("projectNumber");
   const [resourceSort, setResourceSort] = useState({ key: "name", direction: "asc" });
   const [crewSort, setCrewSort] = useState({ key: "crewName", direction: "asc" });
   const [demandDrilldown, setDemandDrilldown] = useState(null);
@@ -1357,10 +1358,18 @@ export default function App() {
   const [dashboardResourceSearch, setDashboardResourceSearch] = useState("");
   const [dashboardCrewSearch, setDashboardCrewSearch] = useState("");
 
-  // Crew utilization date range
-  const today = new Date();
-  const [utilizationStart, setUtilizationStart] = useState(today.toISOString().slice(0, 10));
-  const [utilizationEnd, setUtilizationEnd] = useState(new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10));
+  // Crew utilization date range — defaults to the current Sunday-Saturday week
+  const [utilizationStart, setUtilizationStart] = useState(() => {
+    const today = new Date();
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay());
+    return `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
+  });
+  const [utilizationEnd, setUtilizationEnd] = useState(() => {
+    const today = new Date();
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay());
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+    return `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
+  });
   const [utilizationSearch, setUtilizationSearch] = useState("");
   const [selectedUtilizationCrew, setSelectedUtilizationCrew] = useState(null);
   const [utilizationSort, setUtilizationSort] = useState({ key: "crew", direction: "asc" });
@@ -1555,6 +1564,25 @@ export default function App() {
   });
   const sortedProjectsForTab = [...filteredProjectsForTab].sort((a, b) => compareValues(a[projectSort.key], b[projectSort.key], projectSort.direction));
 
+  function getProjectGanttStart(row) {
+    const dates = (row.items || []).map((item) => toDate(item.start)).filter(Boolean);
+    if (!dates.length) return new Date(8640000000000000);
+    return new Date(Math.min(...dates.map((d) => d.getTime())));
+  }
+
+  function getProjectGanttEnd(row) {
+    const dates = (row.items || []).map((item) => toDate(item.end)).filter(Boolean);
+    if (!dates.length) return new Date(-8640000000000000);
+    return new Date(Math.max(...dates.map((d) => d.getTime())));
+  }
+
+  function projectGanttSortValue(row) {
+    if (projectGanttSort === "startDate") return getProjectGanttStart(row).getTime();
+    if (projectGanttSort === "endDate") return getProjectGanttEnd(row).getTime();
+    if (projectGanttSort === "unassigned") return (row.items || []).some((item) => item.isUnassignedNeed) ? 0 : 1;
+    return `${row.project.projectNumber || ""} ${row.project.name || ""}`.toLowerCase();
+  }
+
   const projectGanttRows = projects
     .filter((p) => {
       if (!divisionFilter.includes(p.division) || !statusFilter.includes(p.status)) return false;
@@ -1569,7 +1597,22 @@ export default function App() {
       const items = [...timelineVisibleItems, ...unassignedNeedItems].filter((item) => item.project.id === project.id);
       if (!items.length) return null;
       return { project, assignments: projectAssignments, assignment: projectAssignments[0] || {}, items };
-    }).filter(Boolean);
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const aPending = a.project.status === "Pending Award" ? 1 : 0;
+      const bPending = b.project.status === "Pending Award" ? 1 : 0;
+      if (aPending !== bPending) return aPending - bPending;
+
+      const aValue = projectGanttSortValue(a);
+      const bValue = projectGanttSortValue(b);
+      if (typeof aValue === "number" && typeof bValue === "number") {
+        const result = aValue - bValue;
+        return result !== 0 ? result : compareValues(a.project.projectNumber, b.project.projectNumber, "asc");
+      }
+      const result = String(aValue).localeCompare(String(bValue), undefined, { numeric: true });
+      return result !== 0 ? result : compareValues(a.project.name, b.project.name, "asc");
+    });
 
   const resourceGanttRows = resources.map((resource) => {
     if (!dashboardResourceTypeFilter.includes(resource.resourceType)) return null;
@@ -2587,7 +2630,20 @@ export default function App() {
             <div className="mb-4 grid gap-3 lg:grid-cols-3">
               <MultiSelectFilter label="Project Division Filter" options={divisions} selected={divisionFilter} setSelected={setDivisionFilter} />
               <MultiSelectFilter label="Status Filter" options={statuses} selected={statusFilter} setSelected={setStatusFilter} />
-              <MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={dashboardResourceTypeFilter} setSelected={setDashboardResourceTypeFilter} />
+              <label className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <span className="mb-2 block text-sm font-semibold text-slate-700">Sort Project Gantt By</span>
+                <select
+                  value={projectGanttSort}
+                  onChange={(e) => setProjectGanttSort(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-emerald-600"
+                >
+                  <option value="projectNumber">Project Number</option>
+                  <option value="startDate">Start Date</option>
+                  <option value="endDate">Project End</option>
+                  <option value="unassigned">Unassigned Needs First</option>
+                </select>
+                <p className="mt-1 text-xs text-slate-500">Pending Awards always stay at the bottom.</p>
+              </label>
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
@@ -2600,6 +2656,10 @@ export default function App() {
               </div>
             </div>
           </section>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={dashboardResourceTypeFilter} setSelected={setDashboardResourceTypeFilter} />
+          </div>
 
           {/* Resource Gantt */}
           <section id="resource-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -2809,7 +2869,7 @@ export default function App() {
                     {/* Week controls */}
                     <div className="no-print flex items-center gap-1 rounded-xl border border-slate-300 bg-white px-2 py-2">
                       <button type="button" onClick={() => shiftUtilizationWeek(-1)} className="rounded-lg px-2 py-1 text-sm font-bold text-slate-700 hover:bg-slate-100" title="Previous week">←</button>
-                      <button type="button" onClick={() => setUtilizationWeekFromDate(new Date())} className="rounded-lg bg-emerald-700 px-3 py-1 text-xs font-bold text-white hover:bg-emerald-800">Current Week</button>
+                      <button type="button" onClick={() => setUtilizationWeekFromDate(new Date())} className="rounded-lg bg-emerald-700 px-3 py-1 text-xs font-bold text-white hover:bg-emerald-800">Week</button>
                       <button type="button" onClick={() => shiftUtilizationWeek(1)} className="rounded-lg px-2 py-1 text-sm font-bold text-slate-700 hover:bg-slate-100" title="Next week">→</button>
                     </div>
                     {/* Date range */}
