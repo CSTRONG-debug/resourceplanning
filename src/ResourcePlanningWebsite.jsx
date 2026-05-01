@@ -1546,6 +1546,8 @@ export default function App() {
   const [utilizationSearch, setUtilizationSearch] = useState("");
   const [selectedUtilizationCrew, setSelectedUtilizationCrew] = useState(null);
   const [utilizationSort, setUtilizationSort] = useState({ key: "crew", direction: "asc" });
+  const [selectedProjectManagerUtilization, setSelectedProjectManagerUtilization] = useState(null);
+  const [projectManagerUtilizationZoom, setProjectManagerUtilizationZoom] = useState("Months");
   const [crewDeactivationOverrides, setCrewDeactivationOverrides] = useState({});
 
   // ── Initial Supabase load ──────────────────────────────────────────────────
@@ -1648,6 +1650,25 @@ export default function App() {
     return Object.prototype.hasOwnProperty.call(crewDeactivationOverrides, crew.id)
       ? crewDeactivationOverrides[crew.id]
       : !!crew.deactivated;
+  }
+
+  function isProjectManagerActiveStatus(status) {
+    const normalized = String(status || "").toLowerCase().replace(/[-_]+/g, " ").trim();
+    return ["scheduled", "schedule", "active", "on hold"].includes(normalized);
+  }
+
+  function isProjectManagerPendingStatus(status) {
+    return String(status || "").toLowerCase().replace(/[-_]+/g, " ").trim() === "pending award";
+  }
+
+  function getProjectStartFromItems(items) {
+    const dates = (items || []).map((item) => toDate(item.start)).filter(Boolean);
+    return dates.length ? new Date(Math.min(...dates.map((d) => d.getTime()))) : null;
+  }
+
+  function getProjectEndFromItems(items) {
+    const dates = (items || []).map((item) => toDate(item.end)).filter(Boolean);
+    return dates.length ? new Date(Math.max(...dates.map((d) => d.getTime()))) : null;
   }
 
   // ── Derived data ───────────────────────────────────────────────────────────
@@ -1861,6 +1882,34 @@ export default function App() {
       if (!items.length) return null;
       return { crew, items };
     }).filter(Boolean);
+
+  const projectManagerUtilizationRows = Object.values(assignments.reduce((groups, assignment) => {
+    const pmName = (assignment.projectManager || "").trim();
+    if (!pmName) return groups;
+    const project = findProject(projects, assignment.projectId);
+    if (!project) return groups;
+    if (!isProjectManagerActiveStatus(project.status) && !isProjectManagerPendingStatus(project.status)) return groups;
+    if (!groups[pmName]) {
+      groups[pmName] = {
+        projectManager: pmName,
+        activeProjectIds: new Set(),
+        pendingProjectIds: new Set(),
+        projectIds: new Set(),
+      };
+    }
+    groups[pmName].projectIds.add(project.id);
+    if (isProjectManagerPendingStatus(project.status)) groups[pmName].pendingProjectIds.add(project.id);
+    else groups[pmName].activeProjectIds.add(project.id);
+    return groups;
+  }, {})).map((row) => ({
+    projectManager: row.projectManager,
+    activeCount: row.activeProjectIds.size,
+    pendingCount: row.pendingProjectIds.size,
+    totalCount: row.projectIds.size,
+  })).sort((a, b) => {
+    if (b.totalCount !== a.totalCount) return b.totalCount - a.totalCount;
+    return compareValues(a.projectManager, b.projectManager, "asc");
+  });
 
   const focusedResourceItems = focusedResource
     ? timelineVisibleItems.filter((item) =>
@@ -3290,6 +3339,43 @@ export default function App() {
               </section>
             );
           })()}
+
+          {/* Project Manager Utilization */}
+          <section id="project-manager-utilization" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-xl font-bold">Project Manager Utilization</h2>
+                <p className="text-sm text-slate-500">Current workload by project manager. Active includes Scheduled, Active, and On-Hold projects.</p>
+              </div>
+              <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">Click a PM row to view project duration Gantt</div>
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full min-w-[760px] text-left text-sm">
+                <thead className="bg-slate-100 text-slate-600">
+                  <tr>
+                    <th className="p-3">Project Manager</th>
+                    <th className="p-3 text-center">Current Active Projects</th>
+                    <th className="p-3 text-center">Pending Awards</th>
+                    <th className="p-3 text-center">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {projectManagerUtilizationRows.map((row) => (
+                    <tr key={row.projectManager} onClick={() => setSelectedProjectManagerUtilization(row.projectManager)} className="cursor-pointer border-t border-slate-200 hover:bg-emerald-50">
+                      <td className="p-3 font-semibold text-slate-900 hover:text-emerald-700">{row.projectManager}</td>
+                      <td className="p-3 text-center font-semibold text-slate-700">{row.activeCount}</td>
+                      <td className="p-3 text-center font-semibold text-amber-700">{row.pendingCount}</td>
+                      <td className="p-3 text-center font-bold text-slate-900">{row.totalCount}</td>
+                    </tr>
+                  ))}
+                  {projectManagerUtilizationRows.length === 0 && (
+                    <tr><td colSpan={4} className="p-6 text-center text-slate-400">No project manager assignments found for active or pending projects.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <div><h2 className="text-xl font-bold">Assignments</h2><p className="text-sm text-slate-500">Assign existing projects to resources and crews.</p></div>
@@ -3467,6 +3553,86 @@ export default function App() {
                           </div>
                         </div>
                       )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Project Manager Utilization Drilldown */}
+      {selectedProjectManagerUtilization && (() => {
+        const pmAssignments = assignments.filter((assignment) => assignment.projectManager === selectedProjectManagerUtilization);
+        const pmProjectIds = new Set(pmAssignments.map((assignment) => assignment.projectId));
+        const pmItems = ganttItems.filter((item) =>
+          pmProjectIds.has(item.project.id) &&
+          (isProjectManagerActiveStatus(item.project.status) || isProjectManagerPendingStatus(item.project.status))
+        );
+        const pmTimeline = buildTimeline(pmItems, projectManagerUtilizationZoom);
+        const pmRows = Object.values(pmItems.reduce((groups, item) => {
+          const id = item.project.id;
+          if (!groups[id]) groups[id] = { project: item.project, items: [] };
+          groups[id].items.push(item);
+          return groups;
+        }, {})).sort((a, b) => {
+          const aPending = isProjectManagerPendingStatus(a.project.status) ? 1 : 0;
+          const bPending = isProjectManagerPendingStatus(b.project.status) ? 1 : 0;
+          if (aPending !== bPending) return aPending - bPending;
+          const aStart = getProjectStartFromItems(a.items);
+          const bStart = getProjectStartFromItems(b.items);
+          if (aStart && bStart && aStart.getTime() !== bStart.getTime()) return aStart - bStart;
+          return compareValues(a.project.projectNumber || a.project.name, b.project.projectNumber || b.project.name, "asc");
+        });
+        const activeCount = pmRows.filter((row) => isProjectManagerActiveStatus(row.project.status)).length;
+        const pendingCount = pmRows.filter((row) => isProjectManagerPendingStatus(row.project.status)).length;
+        return (
+          <div className="fixed inset-0 z-[89] bg-slate-950/70 p-4">
+            <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="sticky top-0 z-30 flex flex-col gap-4 border-b border-slate-200 bg-white p-5 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold">{selectedProjectManagerUtilization} — Project Manager Utilization</h2>
+                  <p className="text-sm text-slate-500">{activeCount} current active · {pendingCount} pending award · {pmRows.length} total project{pmRows.length === 1 ? "" : "s"}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <ZoomIn size={16} className="text-slate-500" />
+                    <span className="text-sm font-medium text-slate-700">Time Scale</span>
+                    <select value={projectManagerUtilizationZoom} onChange={(e) => setProjectManagerUtilizationZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">
+                      {zoomModes.map((m) => <option key={m}>{m}</option>)}
+                    </select>
+                  </div>
+                  <button onClick={() => setSelectedProjectManagerUtilization(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-auto p-5">
+                {pmRows.length === 0 ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No active or pending project durations found for this project manager.</div>
+                ) : (
+                  <>
+                    <GanttHeader timeline={pmTimeline} zoom={projectManagerUtilizationZoom} />
+                    <div className="mt-3 space-y-3" style={{ minWidth: `${pmTimeline.width + 280}px` }}>
+                      {pmRows.map((row) => {
+                        const start = getProjectStartFromItems(row.items);
+                        const end = getProjectEndFromItems(row.items);
+                        return (
+                          <div key={`pm-util-${row.project.id}`} className="grid grid-cols-[300px_1fr] items-center gap-5">
+                            <div className="text-left">
+                              <div className="flex items-center gap-2">
+                                <span className={`h-3 w-3 rounded-full ${row.project.status === "Pending Award" ? pendingDivisionStyles[row.project.division] : divisionStyles[row.project.division] || "bg-slate-600"}`} />
+                                <p className="font-semibold text-slate-900">{row.project.projectNumber ? `${row.project.projectNumber} - ` : ""}{row.project.name}</p>
+                              </div>
+                              <p className="mt-1 text-xs text-slate-500">{row.project.division} • {row.project.status} • {start ? formatDate(start) : "No start"} – {end ? formatDate(end) : "No end"}</p>
+                            </div>
+                            <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${pmTimeline.width}px` }}>
+                              {row.items.map((item) => (
+                                <GanttSegmentBar key={`pm-util-${row.project.id}-${item.id}`} item={item} timeline={pmTimeline} label={row.project.name} />
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </>
                 )}
