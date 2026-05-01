@@ -32,6 +32,10 @@ function mapProjectFromDbLocal(p) {
     client: p.client || "",
     address: p.address || "",
     division: p.division || "Hardscape",
+    projectType: p.project_type || "",
+    owner: p.owner || "",
+    architect: p.architect || "",
+    engineer: p.engineer || "",
     specificRequirements: p.specific_requirements || [],
     status: p.status || "Scheduled",
     includeInForecast: p.include_in_forecast || false,
@@ -44,6 +48,10 @@ function projectToDbLocal(project) {
     client: project.client,
     address: project.address,
     division: project.division,
+    project_type: project.projectType || "",
+    owner: project.owner || "",
+    architect: project.architect || "",
+    engineer: project.engineer || "",
     specific_requirements: project.specificRequirements || [],
     status: project.status,
     include_in_forecast: project.includeInForecast || false,
@@ -459,7 +467,7 @@ export function SearchableCrewSelect({ value, onChange, crews }) {
 
 // ─── ProjectForm ──────────────────────────────────────────────────────────────
 
-export function ProjectForm({ form, setForm, onSave, onCancel, editing, certifications }) {
+export function ProjectForm({ form, setForm, onSave, onCancel, onDelete, editing, certifications, projectTypes }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
 
   return (
@@ -492,6 +500,25 @@ export function ProjectForm({ form, setForm, onSave, onCancel, editing, certific
               {divisions.map((d) => <option key={d}>{d}</option>)}
             </select>
           </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Project Type</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.projectType || ""} onChange={(e) => updateField("projectType", e.target.value)}>
+              <option value="">Select type...</option>
+              {(projectTypes || []).map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Project Owner</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.owner || ""} onChange={(e) => updateField("owner", e.target.value)} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Architect</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.architect || ""} onChange={(e) => updateField("architect", e.target.value)} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Engineer</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.engineer || ""} onChange={(e) => updateField("engineer", e.target.value)} />
+          </label>
           <label className="space-y-1 md:col-span-2">
             <span className="text-sm font-medium text-slate-700">Address</span>
             <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.address} onChange={(e) => updateField("address", e.target.value)} />
@@ -520,9 +547,12 @@ export function ProjectForm({ form, setForm, onSave, onCancel, editing, certific
           </label>
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-slate-200 p-5">
-          <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-          <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Project</button>
+        <div className="flex justify-between gap-3 border-t border-slate-200 p-5">
+          <div>{editing && <button onClick={onDelete} className="rounded-xl border border-red-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-50">Delete Project</button>}</div>
+          <div className="flex gap-3">
+            <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+            <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Project</button>
+          </div>
         </div>
       </div>
     </div>
@@ -795,7 +825,7 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
 
 // ─── ResourceForm ─────────────────────────────────────────────────────────────
 
-export function ResourceForm({ form, setForm, certifications, onSave, onCancel, editing }) {
+export function ResourceForm({ form, setForm, certifications, onSave, onCancel, onDelete, editing }) {
   const [ptoDraft, setPtoDraft] = useState({ ptoId: "", start: "", end: "" });
   const [certDraft, setCertDraft] = useState({ name: "", start: "", expiration: "" });
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
@@ -932,9 +962,12 @@ export function ResourceForm({ form, setForm, certifications, onSave, onCancel, 
           </div>
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-slate-200 p-5">
-          <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-          <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Resource</button>
+        <div className="flex justify-between gap-3 border-t border-slate-200 p-5">
+          <div>{editing && <button onClick={onDelete} className="rounded-xl border border-red-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-50">Delete Resource</button>}</div>
+          <div className="flex gap-3">
+            <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+            <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Resource</button>
+          </div>
         </div>
       </div>
     </div>
@@ -943,7 +976,7 @@ export function ResourceForm({ form, setForm, certifications, onSave, onCancel, 
 
 // ─── CrewForm ─────────────────────────────────────────────────────────────────
 
-export function CrewForm({ form, setForm, certifications, onSave, onCancel, editing }) {
+export function CrewForm({ form, setForm, certifications, onSave, onCancel, onDelete, editing }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
 
   return (
@@ -988,9 +1021,12 @@ export function CrewForm({ form, setForm, certifications, onSave, onCancel, edit
           </label>
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-slate-200 p-5">
-          <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-          <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Crew</button>
+        <div className="flex justify-between gap-3 border-t border-slate-200 p-5">
+          <div>{editing && <button onClick={onDelete} className="rounded-xl border border-red-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-50">Delete Crew</button>}</div>
+          <div className="flex gap-3">
+            <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+            <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Crew</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1379,6 +1415,14 @@ export default function App() {
   const [resources, setResources] = useState([]);
   const [crews, setCrews] = useState([]);
   const [certifications, setCertifications] = useState(startingCertifications);
+  const [projectTypes, setProjectTypes] = useState(() => {
+    try {
+      const saved = localStorage.getItem("ggc_project_types");
+      return saved ? JSON.parse(saved) : ["Multifamily", "Post-Tension", "Parking Deck"];
+    } catch { return ["Multifamily", "Post-Tension", "Parking Deck"]; }
+  });
+  const [showProjectTypeSettings, setShowProjectTypeSettings] = useState(false);
+  const [newProjectType, setNewProjectType] = useState("");
 
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [showAssignmentForm, setShowAssignmentForm] = useState(false);
@@ -1481,7 +1525,7 @@ export default function App() {
       if (mobilizationsRes.error) console.error("Mobilizations load error:", mobilizationsRes.error);
       if (certsRes.error) console.error("Certifications load error:", certsRes.error);
 
-      setProjects((projectsRes.data || []).map(mapProjectFromDb));
+      setProjects((projectsRes.data || []).map(mapProjectFromDbLocal));
       setResources((resourcesRes.data || []).map(mapResourceFromDbLocal));
       const mappedCrews = (crewsRes.data || []).map(mapCrewFromDbLocal);
       setCrews(mappedCrews);
@@ -1517,7 +1561,11 @@ export default function App() {
   useSupabaseRealtime({ setProjects, setResources, setCrews, setAssignments, setCertifications });
 
   // ── Load app users after login ─────────────────────────────────────────────
-  useEffect(() => { if (currentUser) loadAppUsers(); }, [currentUser]);
+  useEffect(() => { if (currentUser) { loadAppUsers(); loadProjectTypes(); } }, [currentUser]);
+
+  useEffect(() => {
+    localStorage.setItem("ggc_project_types", JSON.stringify(projectTypes));
+  }, [projectTypes]);
 
   useEffect(() => {
     function handleExpandDemand() { setExpandedView("demand"); }
@@ -1648,7 +1696,7 @@ export default function App() {
     if (!projectTabDivisionFilter.includes(p.division)) return false;
     if (!projectSearch) return true;
     const q = projectSearch.toLowerCase();
-    return (p.projectNumber || "").toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || (p.client || "").toLowerCase().includes(q);
+    return (p.projectNumber || "").toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || (p.client || "").toLowerCase().includes(q) || (p.projectType || "").toLowerCase().includes(q) || (p.owner || "").toLowerCase().includes(q) || (p.architect || "").toLowerCase().includes(q) || (p.engineer || "").toLowerCase().includes(q);
   });
   const sortedProjectsForTab = [...filteredProjectsForTab].sort((a, b) => compareValues(a[projectSort.key], b[projectSort.key], projectSort.direction));
 
@@ -1802,6 +1850,7 @@ export default function App() {
     if (error) { console.error(error); alert("Could not delete project."); return; }
     setProjects((current) => current.filter((p) => p.id !== id));
     setAssignments((current) => current.filter((a) => a.projectId !== id));
+    setShowProjectForm(false); setEditingProjectId(null); setProjectForm(blankProject);
   }
 
   // ── CRUD: Assignments ──────────────────────────────────────────────────────
@@ -1922,6 +1971,7 @@ export default function App() {
     const { error } = await supabase.from("resources").delete().eq("id", id);
     if (error) { console.error(error); alert("Could not delete resource."); return; }
     setResources((current) => current.filter((r) => r.id !== id));
+    setShowResourceForm(false); setEditingResourceId(null); setResourceForm(blankResource);
   }
 
   // ── CRUD: Crews ────────────────────────────────────────────────────────────
@@ -1961,6 +2011,7 @@ export default function App() {
     const { error } = await supabase.from("crews").delete().eq("id", id);
     if (error) { console.error(error); alert("Could not delete crew."); return; }
     setCrews((current) => current.filter((c) => c.id !== id));
+    setShowCrewForm(false); setEditingCrewId(null); setCrewForm(blankCrew);
   }
 
   // ── CRUD: Certifications (now Supabase, not localStorage) ──────────────────
@@ -1980,8 +2031,29 @@ export default function App() {
     const { error } = await supabase.from("certifications").delete().eq("name", cert);
     if (error) { console.error(error); alert("Could not delete certification."); return; }
     setCertifications((current) => current.filter((c) => c !== cert));
-    setResources((current) => current.map((r) => ({ ...r, certifications: (r.certifications || []).filter((c) => c !== cert) })));
+    setResources((current) => current.map((r) => ({ ...r, certifications: normalizeResourceCertifications(r.certifications).filter((c) => c.name !== cert) })));
     setProjects((current) => current.map((p) => ({ ...p, specificRequirements: (p.specificRequirements || []).filter((c) => c !== cert) })));
+  }
+
+  async function addProjectType() {
+    const type = newProjectType.trim();
+    if (!type) return;
+    if (projectTypes.includes(type)) { setNewProjectType(""); return; }
+    if (supabase) {
+      const { error } = await supabase.from("project_types").insert({ name: type });
+      if (error) { console.error(error); alert("Could not add project type. Run the project_types SQL block first."); return; }
+    }
+    setProjectTypes((current) => current.includes(type) ? current : [...current, type]);
+    setNewProjectType("");
+  }
+
+  async function deleteProjectType(type) {
+    if (!confirm(`Delete project type ${type}? Existing projects will keep their saved value.`)) return;
+    if (supabase) {
+      const { error } = await supabase.from("project_types").delete().eq("name", type);
+      if (error) { console.error(error); alert("Could not delete project type."); return; }
+    }
+    setProjectTypes((current) => current.filter((item) => item !== type));
   }
 
   // ── Forecast helpers ───────────────────────────────────────────────────────
@@ -2296,6 +2368,13 @@ export default function App() {
     setAppUsers(data || []);
   }
 
+  async function loadProjectTypes() {
+    if (!supabase) return;
+    const { data, error } = await supabase.from("project_types").select("name").order("name", { ascending: true });
+    if (error) { console.warn("Project type settings table is not set up yet:", error); return; }
+    if (data?.length) setProjectTypes(data.map((row) => row.name));
+  }
+
   async function addAppUser() {
     if (!newUserForm.username.trim() || !newUserForm.password.trim()) { alert("Username and password are required."); return; }
     if (!supabase) { alert("Supabase is not connected."); return; }
@@ -2326,7 +2405,7 @@ export default function App() {
   }
 
   function exportProjectsExcel() {
-    const rows = [["Project Number", "Project Name", "Client", "Address", "Division", "Specific Requirements", "Status"], ...projects.map((p) => [p.projectNumber, p.name, p.client, p.address, p.division, (p.specificRequirements || []).join("; "), p.status])];
+    const rows = [["Project Number", "Project Name", "Client", "Address", "Division", "Project Type", "Owner", "Architect", "Engineer", "Specific Requirements", "Status"], ...projects.map((p) => [p.projectNumber, p.name, p.client, p.address, p.division, p.projectType || "", p.owner || "", p.architect || "", p.engineer || "", (p.specificRequirements || []).join("; "), p.status])];
     downloadTextFile("ggc-projects.csv", rows.map((r) => r.map(csvEscape).join(",")).join("\n"));
   }
 
@@ -2391,11 +2470,11 @@ export default function App() {
   function importProjectsCsv(event) {
     readCsvFile(event, async (rows) => {
       if (!supabase) { alert("Supabase is not connected."); return; }
-      const imported = rows.map((row) => ({ project_number: row.projectnumber || row.project || "", name: row.projectname || row.name || "", client: row.client || "", address: row.address || "", division: divisions.includes(row.division) ? row.division : "Hardscape", specific_requirements: splitList(row.specificrequirements || row.requirements || row.certifications), status: statuses.includes(row.status) ? row.status : "Scheduled" })).filter((p) => p.project_number || p.name);
+      const imported = rows.map((row) => ({ project_number: row.projectnumber || row.project || "", name: row.projectname || row.name || "", client: row.client || "", address: row.address || "", division: divisions.includes(row.division) ? row.division : "Hardscape", project_type: row.projecttype || row.type || "", owner: row.owner || row.projectowner || "", architect: row.architect || "", engineer: row.engineer || "", specific_requirements: splitList(row.specificrequirements || row.requirements || row.certifications), status: statuses.includes(row.status) ? row.status : "Scheduled" })).filter((p) => p.project_number || p.name);
       if (!imported.length) { alert("No valid projects found in CSV."); return; }
       const { data, error } = await supabase.from("projects").insert(imported).select();
       if (error) { console.error(error); alert("Could not import projects."); return; }
-      setProjects((current) => [...(data || []).map(mapProjectFromDb), ...current]);
+      setProjects((current) => [...(data || []).map(mapProjectFromDbLocal), ...current]);
     });
   }
 
@@ -2526,12 +2605,11 @@ export default function App() {
                     <th className="p-3 text-center">Status</th>
                     <th className="p-3">Specialty</th>
                     <th className="p-3">Current Assignments</th>
-                    <th className="p-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedCrews.map((crew) => (
-                    <tr key={crew.id} className="border-t border-slate-200 align-top">
+                    <tr key={crew.id} onClick={() => openEditCrewForm(crew)} className="cursor-pointer border-t border-slate-200 align-top hover:bg-emerald-50">
                       <td className="p-3 font-medium">{crew.crewName}</td>
                       <td className="p-3">{crew.foremanName}</td>
                       <td className="p-3 text-center font-semibold">{crew.totalMembers || <span className="text-slate-300">—</span>}</td>
@@ -2542,10 +2620,6 @@ export default function App() {
                       </td>
                       <td className="p-3">{(crew.specialty || []).join(", ")}</td>
                       <td className="p-3">{assignments.filter((a) => getAssignmentCrewIds(a).includes(crew.id)).map((a) => findProject(projects, a.projectId)?.name).filter(Boolean).join(", ")}</td>
-                      <td className="p-3 text-right">
-                        <button onClick={() => openEditCrewForm(crew)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button>
-                        <button onClick={() => deleteCrew(crew.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button>
-                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -2612,12 +2686,12 @@ export default function App() {
                     <th onClick={() => toggleSort(setResourceSort, "homeDivision")} className="cursor-pointer p-3 hover:bg-slate-200">Home Division</th>
                     <th className="p-3">Phone</th><th className="p-3">Email</th>
                     <th className="p-3">Certifications</th><th className="p-3">PTO</th>
-                    <th className="p-3">Assigned Projects</th><th className="p-3 text-right">Actions</th>
+                    <th className="p-3">Assigned Projects</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedResources.map((resource) => (
-                    <tr key={resource.id} className="border-t border-slate-200 align-top">
+                    <tr key={resource.id} onClick={() => openEditResourceForm(resource)} className="cursor-pointer border-t border-slate-200 align-top hover:bg-emerald-50">
                       <td className="p-3 font-medium">{resource.name}</td>
                       <td className="p-3">{resource.resourceType}</td>
                       <td className="p-3">{resource.homeDivision}</td>
@@ -2626,10 +2700,6 @@ export default function App() {
                       <td className="p-3">{normalizeResourceCertifications(resource.certifications).map(formatCertificationRecord).join("; ")}</td>
                       <td className="p-3">{(resource.pto || []).map((p) => `${p.ptoId}: ${formatDate(p.start)} - ${formatDate(p.end)}`).join("; ")}</td>
                       <td className="p-3">{assignments.filter((a) => [a.projectManager, a.superintendent, a.fieldCoordinator, a.fieldEngineer, a.safety].includes(resource.name)).map((a) => findProject(projects, a.projectId)?.name).filter(Boolean).join(", ")}</td>
-                      <td className="p-3 text-right">
-                        <button onClick={() => openEditResourceForm(resource)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button>
-                        <button onClick={() => deleteResource(resource.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button>
-                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -2648,9 +2718,26 @@ export default function App() {
               <div className="flex flex-wrap gap-3">
                 <button onClick={exportProjectsExcel} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button>
                 <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importProjectsCsv} className="hidden" /></label>
+                <button onClick={() => setShowProjectTypeSettings((c) => !c)} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"><Settings size={17} /> Project Type Settings</button>
                 <button onClick={openAddProjectForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><Plus size={17} /> Add Project</button>
               </div>
             </div>
+            {showProjectTypeSettings && (
+              <div className="mb-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                <h3 className="font-bold text-slate-900">Project Type Settings</h3>
+                <div className="mt-3 flex gap-2">
+                  <input value={newProjectType} onChange={(e) => setNewProjectType(e.target.value)} placeholder="Add project type" className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600" />
+                  <button onClick={addProjectType} className="rounded-xl bg-slate-900 px-4 py-2 font-semibold text-white">Add</button>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {projectTypes.map((type) => (
+                    <span key={type} className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm">
+                      {type}<button onClick={() => deleteProjectType(type)} className="text-red-600">×</button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="mb-4 flex flex-wrap gap-3 items-center">
               <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 flex-1 min-w-[200px] max-w-sm">
                 <Search size={15} className="text-slate-400 shrink-0" />
@@ -2659,7 +2746,7 @@ export default function App() {
               <MultiSelectFilter label="Division Filter" options={divisions} selected={projectTabDivisionFilter} setSelected={setProjectTabDivisionFilter} />
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="w-full min-w-[1050px] text-left text-sm">
+              <table className="w-full min-w-[1450px] text-left text-sm">
                 <thead className="bg-slate-100 text-slate-600">
                   <tr>
                     <th onClick={() => toggleSort(setProjectSort, "projectNumber")} className="cursor-pointer p-3 hover:bg-slate-200">Project #</th>
@@ -2667,25 +2754,28 @@ export default function App() {
                     <th onClick={() => toggleSort(setProjectSort, "client")} className="cursor-pointer p-3 hover:bg-slate-200">Client</th>
                     <th className="p-3">Address</th>
                     <th onClick={() => toggleSort(setProjectSort, "division")} className="cursor-pointer p-3 hover:bg-slate-200">Division</th>
+                    <th onClick={() => toggleSort(setProjectSort, "projectType")} className="cursor-pointer p-3 hover:bg-slate-200">Project Type</th>
+                    <th className="p-3">Owner</th>
+                    <th className="p-3">Architect</th>
+                    <th className="p-3">Engineer</th>
                     <th className="p-3">Requirements</th>
                     <th onClick={() => toggleSort(setProjectSort, "status")} className="cursor-pointer p-3 hover:bg-slate-200">Status</th>
-                    <th className="p-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedProjectsForTab.map((project) => (
-                    <tr key={project.id} className="border-t border-slate-200 align-top">
+                    <tr key={project.id} onClick={() => openEditProjectForm(project)} className="cursor-pointer border-t border-slate-200 align-top hover:bg-emerald-50">
                       <td className="p-3 font-medium">{project.projectNumber}</td>
                       <td className="p-3 font-medium">{project.name}</td>
                       <td className="p-3">{project.client}</td>
                       <td className="p-3">{project.address}</td>
                       <td className="p-3">{project.division}</td>
+                      <td className="p-3">{project.projectType || <span className="text-slate-300">—</span>}</td>
+                      <td className="p-3">{project.owner || <span className="text-slate-300">—</span>}</td>
+                      <td className="p-3">{project.architect || <span className="text-slate-300">—</span>}</td>
+                      <td className="p-3">{project.engineer || <span className="text-slate-300">—</span>}</td>
                       <td className="p-3">{(project.specificRequirements || []).join(", ")}</td>
                       <td className="p-3">{project.status}</td>
-                      <td className="p-3 text-right">
-                        <button onClick={() => openEditProjectForm(project)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button>
-                        <button onClick={() => deleteProject(project.id)} className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50"><Trash2 size={14} /> Delete</button>
-                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -3688,10 +3778,10 @@ export default function App() {
       })()}
 
       {/* Forms */}
-      {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} editing={Boolean(editingProjectId)} certifications={certifications} />}
+      {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} onDelete={() => deleteProject(editingProjectId)} editing={Boolean(editingProjectId)} certifications={certifications} projectTypes={projectTypes} />}
       {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={activeCrews} />}
-      {showResourceForm && <ResourceForm form={resourceForm} setForm={setResourceForm} certifications={certifications} onSave={saveResource} onCancel={() => setShowResourceForm(false)} editing={Boolean(editingResourceId)} />}
-      {showCrewForm && <CrewForm form={crewForm} setForm={setCrewForm} certifications={certifications} onSave={saveCrew} onCancel={() => setShowCrewForm(false)} editing={Boolean(editingCrewId)} />}
+      {showResourceForm && <ResourceForm form={resourceForm} setForm={setResourceForm} certifications={certifications} onSave={saveResource} onCancel={() => setShowResourceForm(false)} onDelete={() => deleteResource(editingResourceId)} editing={Boolean(editingResourceId)} />}
+      {showCrewForm && <CrewForm form={crewForm} setForm={setCrewForm} certifications={certifications} onSave={saveCrew} onCancel={() => setShowCrewForm(false)} onDelete={() => deleteCrew(editingCrewId)} editing={Boolean(editingCrewId)} />}
 
       {/* ── Forecast Settings Modal ── */}
       {showForecastSettings && (
