@@ -1221,6 +1221,7 @@ export default function App() {
   const [utilizationStart, setUtilizationStart] = useState(today.toISOString().slice(0, 10));
   const [utilizationEnd, setUtilizationEnd] = useState(new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10));
   const [utilizationSearch, setUtilizationSearch] = useState("");
+  const [selectedUtilizationCrew, setSelectedUtilizationCrew] = useState(null);
 
   // ── Initial Supabase load ──────────────────────────────────────────────────
   useEffect(() => {
@@ -1312,6 +1313,15 @@ export default function App() {
   const timelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, timeline));
   // Demand chart uses its own independent timeline scoped to demandZoom
   const demandTimeline = useMemo(() => buildTimeline(visibleItems, demandZoom), [visibleItems, demandZoom]);
+  const demandFilteredItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, demandTimeline)).map((item) => {
+    const assignedNames = [item.assignment.superintendent, item.assignment.projectManager, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].filter(Boolean);
+    const assignedResource = resources.find((r) => assignedNames.includes(r.name) && demandHomeDivisionFilter.includes(r.homeDivision));
+    const anyAssignedResource = assignedResource || resources.find((r) => assignedNames.includes(r.name));
+    const resourceHomeDivision = anyAssignedResource?.homeDivision || item.project.division;
+    return demandHomeDivisionFilter.includes(resourceHomeDivision)
+      ? { ...item, assignment: { ...item.assignment, _resourceHomeDivision: resourceHomeDivision } }
+      : null;
+  }).filter(Boolean);
 
   function toggleSort(setter, key) {
     setter((current) => ({ key, direction: current.key === key && current.direction === "asc" ? "desc" : "asc" }));
@@ -2383,15 +2393,7 @@ export default function App() {
             </div>
           </div>
           <ResourceDemandChart
-            items={visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, demandTimeline)).map((item) => {
-              const assignedNames = [item.assignment.superintendent, item.assignment.projectManager, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].filter(Boolean);
-              const assignedResource = resources.find((r) => assignedNames.includes(r.name) && demandHomeDivisionFilter.includes(r.homeDivision));
-              const anyAssignedResource = assignedResource || resources.find((r) => assignedNames.includes(r.name));
-              const resourceHomeDivision = anyAssignedResource?.homeDivision || item.project.division;
-              return demandHomeDivisionFilter.includes(resourceHomeDivision)
-                ? { ...item, assignment: { ...item.assignment, _resourceHomeDivision: resourceHomeDivision } }
-                : null;
-            }).filter(Boolean)}
+            items={demandFilteredItems}
             timeline={demandTimeline}
             zoom={demandZoom}
             totalResources={resources.filter((r) => dashboardResourceTypeFilter.includes(r.resourceType) && demandHomeDivisionFilter.includes(r.homeDivision)).length}
@@ -2433,10 +2435,11 @@ export default function App() {
           {(() => {
             const utilStart = toDate(utilizationStart);
             const utilEnd = toDate(utilizationEnd);
-            if (!utilStart || !utilEnd || utilStart > utilEnd) return null;
+            const utilizationDateRangeValid = Boolean(utilStart && utilEnd && utilStart <= utilEnd);
 
             const allUtilizationRows = crews.map((crew) => {
               const activeMobs = ganttItems.filter((item) => {
+                if (!utilizationDateRangeValid) return false;
                 if (!getAssignmentCrewIds(item.assignment).includes(crew.id)) return false;
                 const s = toDate(item.start);
                 const e = toDate(item.end);
@@ -2445,7 +2448,7 @@ export default function App() {
               });
 
               const menMobilized = activeMobs.reduce((sum, item) => {
-                const count = (item.assignment._crewMenCounts || {})[crew.id];
+                const count = (item.assignment._crewMenCounts || item.assignment.crewMenCounts || {})[crew.id];
                 return sum + (count !== undefined ? count : (crew.totalMembers || 0));
               }, 0);
 
@@ -2536,6 +2539,11 @@ export default function App() {
 
                 {/* Date range label shown in PDF */}
                 <p className="mb-3 text-xs text-slate-400">{utilizationStart} → {utilizationEnd}{utilizationSearch ? ` · Filtered: "${utilizationSearch}"` : ""}</p>
+                {!utilizationDateRangeValid && (
+                  <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                    Crew Utilization is visible, but the selected date range is invalid. Choose a valid From and To date to calculate utilization.
+                  </div>
+                )}
 
                 <div className="overflow-x-auto rounded-xl border border-slate-200">
                   <table className="w-full text-left text-sm">
@@ -2558,7 +2566,7 @@ export default function App() {
                         return (
                           <tr key={row.crew.id} className={`border-t border-slate-100 ${rowBg}`}>
                             <td className="p-3">
-                              <p className="font-semibold text-slate-900">{getCrewDisplayName(row.crew)}</p>
+                              <button type="button" onClick={() => setSelectedUtilizationCrew(row.crew)} className="font-semibold text-slate-900 hover:text-emerald-700 hover:underline">{getCrewDisplayName(row.crew)}</button>
                               <p className="text-xs text-slate-400">{(row.crew.specialty || []).join(", ")}</p>
                             </td>
                             <td className="p-3 text-center font-semibold text-slate-700">{row.totalMen || <span className="text-slate-300">—</span>}</td>
@@ -2707,6 +2715,67 @@ export default function App() {
         </div>
       )}
 
+      {/* Crew Utilization Drilldown */}
+      {selectedUtilizationCrew && (() => {
+        const utilStart = toDate(utilizationStart);
+        const utilEnd = toDate(utilizationEnd);
+        const validRange = Boolean(utilStart && utilEnd && utilStart <= utilEnd);
+        const items = validRange ? ganttItems.filter((item) => {
+          if (!getAssignmentCrewIds(item.assignment).includes(selectedUtilizationCrew.id)) return false;
+          const s = toDate(item.start);
+          const e = toDate(item.end);
+          if (!s || !e) return false;
+          return rangesOverlap(s, addDays(e, 1), utilStart, addDays(utilEnd, 1));
+        }) : [];
+        const popupTimeline = {
+          minDate: utilStart || new Date(),
+          maxDate: utilEnd || new Date(),
+          currentDate: new Date(),
+          totalDays: validRange ? Math.max(1, Math.ceil((addDays(utilEnd, 1) - utilStart) / (1000 * 60 * 60 * 24))) : 1,
+          ticks: validRange ? [utilStart, utilEnd] : [new Date()],
+          width: 1160,
+        };
+        return (
+          <div className="fixed inset-0 z-[88] bg-slate-950/70 p-4">
+            <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5">
+                <div>
+                  <h2 className="text-2xl font-bold">{getCrewDisplayName(selectedUtilizationCrew)} — Utilization Assignments</h2>
+                  <p className="text-sm text-slate-500">{utilizationStart} to {utilizationEnd} · {items.length} active assignment{items.length === 1 ? "" : "s"}</p>
+                </div>
+                <button onClick={() => setSelectedUtilizationCrew(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
+              </div>
+              <div className="flex-1 overflow-auto p-5">
+                {!validRange && <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm font-semibold text-amber-800">Choose a valid Crew Utilization date range first.</div>}
+                {validRange && (
+                  <>
+                    <GanttHeader timeline={popupTimeline} zoom="Weeks" />
+                    <div className="mt-3 space-y-3" style={{ minWidth: `${popupTimeline.width + 280}px` }}>
+                      {items.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments found for this crew during the selected period.</div>}
+                      {items.map((item) => {
+                        const crewMenCount = (item.assignment._crewMenCounts || item.assignment.crewMenCounts || {})[selectedUtilizationCrew.id];
+                        return (
+                          <div key={`util-drilldown-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5">
+                            <div className="text-left">
+                              <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
+                              <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
+                              <p className="mt-0.5 text-xs text-slate-400">Men assigned: {crewMenCount !== undefined ? crewMenCount : (selectedUtilizationCrew.totalMembers || 0)}</p>
+                            </div>
+                            <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${popupTimeline.width}px` }}>
+                              <GanttSegmentBar item={item} timeline={popupTimeline} label={item.project.name} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Segment Drilldown — specific division+type for one period */}
       {demandDrilldown && (() => {
         const { period, segment } = demandDrilldown;
@@ -2787,7 +2856,7 @@ export default function App() {
           <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
             <div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5">
               <h2 className="text-2xl font-bold">
-                {expandedView === "project" ? "Project Assignment Gantt View" : expandedView === "resource" ? "Resource Gantt View" : "Resource Demand Graph"}
+                {expandedView === "project" ? "Project Assignment Gantt View" : expandedView === "resource" ? "Resource Gantt View" : expandedView === "crew" ? "Crew Gantt View" : "Resource Demand Graph"}
               </h2>
               <button onClick={() => setExpandedView(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
             </div>
@@ -2808,15 +2877,24 @@ export default function App() {
                   </div>
                 </div>
               )}
+              {expandedView === "crew" && (
+                <div>
+                  <GanttHeader timeline={timeline} zoom={zoom} />
+                  <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
+                    {crewGanttRows.map((row) => <CrewGanttRow key={row.crew.id} crew={row.crew} items={row.items} timeline={timeline} />)}
+                  </div>
+                </div>
+              )}
               {expandedView === "demand" && (
                 <ResourceDemandChart
                   enlarged
-                  items={timelineVisibleItems}
-                  timeline={timeline}
-                  zoom={zoom}
+                  items={demandFilteredItems}
+                  timeline={demandTimeline}
+                  zoom={demandZoom}
                   totalResources={resources.filter((r) => dashboardResourceTypeFilter.includes(r.resourceType) && demandHomeDivisionFilter.includes(r.homeDivision)).length}
                   onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")}
                   onBarClick={setDemandDrilldown}
+                  onPeriodClick={setDemandPeriodDrilldown}
                 />
               )}
             </div>
