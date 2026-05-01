@@ -1521,6 +1521,7 @@ export default function App() {
   const [authUser, setAuthUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [authErrorMessage, setAuthErrorMessage] = useState("");
   const [showUserSettings, setShowUserSettings] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ email: "", fullName: "", role: "viewer" });
   const [appUsers, setAppUsers] = useState([]);
@@ -1640,15 +1641,45 @@ export default function App() {
   // ── Supabase Auth session ─────────────────────────────────────────────────
   useEffect(() => {
     let mounted = true;
+    let safetyTimer = null;
+
+    const withTimeout = (promise, ms, label) => Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),
+    ]);
+
+    async function safeLoadProfile(user) {
+      if (!user) {
+        if (mounted) setUserProfile(null);
+        return;
+      }
+      try {
+        await withTimeout(loadUserProfile(user.id), 8000, "User profile load");
+      } catch (profileError) {
+        console.error("User profile load failed:", profileError);
+        if (mounted) {
+          setUserProfile({ full_name: user.email || "", role: "viewer", active: true, missingProfile: true });
+          setAuthErrorMessage("Your login worked, but the profile/role lookup did not finish. I loaded you as Viewer so the app can continue.");
+        }
+      }
+    }
 
     async function loadAuthSession() {
+      safetyTimer = setTimeout(() => {
+        if (!mounted) return;
+        console.warn("Auth loading safety timeout reached. Releasing loading screen.");
+        setAuthLoading(false);
+        setAuthErrorMessage("Secure session check took too long. Try logging in again, or refresh after clearing site data.");
+      }, 10000);
+
       try {
         if (!supabase?.auth) {
           console.warn("Supabase Auth is not available. Check your Supabase client/environment variables.");
+          if (mounted) setAuthErrorMessage("Supabase Auth is not available. Check your Vercel Supabase environment variables.");
           return;
         }
 
-        const { data, error } = await supabase.auth.getSession();
+        const { data, error } = await withTimeout(supabase.auth.getSession(), 8000, "Supabase session load");
         if (error) console.error("Auth session load error:", error);
 
         const user = data?.session?.user || null;
@@ -1656,41 +1687,39 @@ export default function App() {
 
         setAuthUser(user);
         setCurrentUser(user?.email || "");
-
-        if (user) {
-          try {
-            await loadUserProfile(user.id);
-          } catch (profileError) {
-            console.error("User profile load failed:", profileError);
-            setUserProfile({ full_name: user.email || "", role: "viewer", active: true, missingProfile: true });
-          }
-        } else {
-          setUserProfile(null);
-        }
+        await safeLoadProfile(user);
       } catch (sessionError) {
         console.error("Secure session initialization failed:", sessionError);
         if (mounted) {
           setAuthUser(null);
           setCurrentUser("");
           setUserProfile(null);
+          setAuthErrorMessage(String(sessionError?.message || sessionError || "Secure session initialization failed."));
         }
       } finally {
+        if (safetyTimer) clearTimeout(safetyTimer);
         if (mounted) setAuthLoading(false);
       }
     }
 
     loadAuthSession();
 
-    if (!supabase?.auth?.onAuthStateChange) return () => { mounted = false; };
+    if (!supabase?.auth?.onAuthStateChange) {
+      return () => {
+        mounted = false;
+        if (safetyTimer) clearTimeout(safetyTimer);
+      };
+    }
+
     const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
       try {
         const user = session?.user || null;
         setAuthUser(user);
         setCurrentUser(user?.email || "");
-        if (user) await loadUserProfile(user.id);
-        else setUserProfile(null);
+        await safeLoadProfile(user);
       } catch (authChangeError) {
         console.error("Auth state change failed:", authChangeError);
+        setAuthErrorMessage(String(authChangeError?.message || authChangeError || "Auth state change failed."));
       } finally {
         setAuthLoading(false);
       }
@@ -1698,6 +1727,7 @@ export default function App() {
 
     return () => {
       mounted = false;
+      if (safetyTimer) clearTimeout(safetyTimer);
       listener?.subscription?.unsubscribe?.();
     };
   }, []);
@@ -2916,6 +2946,7 @@ export default function App() {
           <div className="h-1 w-24 rounded-full bg-emerald-700" />
           <h1 className="mt-4 text-2xl font-bold text-slate-900">GGC Resource Planning</h1>
           <p className="mt-1 text-sm text-slate-500">Sign in to access the scheduling system.</p>
+          {authErrorMessage && <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{authErrorMessage}</div>}
           <label className="mt-6 block space-y-1">
             <span className="text-sm font-semibold text-slate-700">Email</span>
             <input type="email" autoComplete="email" value={loginForm.email} onChange={(e) => setLoginForm((c) => ({ ...c, email: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
