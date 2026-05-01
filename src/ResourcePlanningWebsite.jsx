@@ -50,6 +50,27 @@ function projectToDbLocal(project) {
   };
 }
 
+// Local crew mappers include deactivated until db/mappers.js is updated.
+function mapCrewFromDbLocal(c) {
+  return {
+    id: c.id,
+    crewName: c.crew_name || "",
+    foremanName: c.foreman_name || "",
+    totalMembers: c.total_members || 0,
+    specialty: c.specialty || [],
+    deactivated: c.deactivated || false,
+  };
+}
+function crewToDbLocal(crew) {
+  return {
+    crew_name: crew.crewName,
+    foreman_name: crew.foremanName,
+    total_members: crew.totalMembers || 0,
+    specialty: crew.specialty || [],
+    deactivated: crew.deactivated || false,
+  };
+}
+
 import { useSupabaseRealtime } from "./hooks/useSupabaseRealtime";
 
 
@@ -800,6 +821,18 @@ export function CrewForm({ form, setForm, certifications, onSave, onCancel, edit
             <span className="text-sm font-medium text-slate-700">Total Crew Members</span>
             <input type="number" min="0" step="1" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.totalMembers || ""} placeholder="0" onChange={(e) => updateField("totalMembers", Number(e.target.value) || 0)} />
           </label>
+          <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 cursor-pointer hover:bg-slate-100">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded accent-red-600"
+              checked={form.deactivated || false}
+              onChange={(e) => updateField("deactivated", e.target.checked)}
+            />
+            <div>
+              <p className="text-sm font-semibold text-slate-800">Deactivate Crew</p>
+              <p className="text-xs text-slate-500">Hides this crew from new assignments, Crew Gantt, and Crew Utilization.</p>
+            </div>
+          </label>
           <label className="space-y-1 md:col-span-2">
             <span className="text-sm font-medium text-slate-700">Specialty</span>
             <CertificationPicker selected={form.specialty || []} onChange={(v) => updateField("specialty", v)} certifications={certifications} />
@@ -1195,7 +1228,7 @@ export default function App() {
   const [crewSort, setCrewSort] = useState({ key: "crewName", direction: "asc" });
   const [demandDrilldown, setDemandDrilldown] = useState(null);
   const [demandPeriodDrilldown, setDemandPeriodDrilldown] = useState(null);
-  const [showAssignments, setShowAssignments] = useState(true);
+  const [showAssignments, setShowAssignments] = useState(false);
 
   // ── Forecast state ─────────────────────────────────────────────────────────
   const [forecastData, setForecastData] = useState({});
@@ -1248,7 +1281,7 @@ export default function App() {
 
       setProjects((projectsRes.data || []).map(mapProjectFromDb));
       setResources((resourcesRes.data || []).map(mapResourceFromDb));
-      const mappedCrews = (crewsRes.data || []).map(mapCrewFromDb);
+      const mappedCrews = (crewsRes.data || []).map(mapCrewFromDbLocal);
       setCrews(mappedCrews);
       setCrewGanttFilter((current) => current.length ? current : mappedCrews.map((c) => c.id));
       setAssignments((assignmentsRes.data || []).map((a) => mapAssignmentFromDb(a, mobilizationsRes.data || [])));
@@ -1290,6 +1323,11 @@ export default function App() {
     return () => window.removeEventListener("ggc-expand-demand", handleExpandDemand);
   }, []);
 
+  // Keep the bottom Assignments table collapsed whenever the Dashboard is opened.
+  useEffect(() => {
+    if (page === "dashboard") setShowAssignments(false);
+  }, [page]);
+
   // ── Derived data ───────────────────────────────────────────────────────────
   const ganttItems = buildGanttItems(projects, assignments);
 
@@ -1323,6 +1361,8 @@ export default function App() {
       : null;
   }).filter(Boolean);
 
+  const activeCrews = crews.filter((c) => !c.deactivated);
+
   function toggleSort(setter, key) {
     setter((current) => ({ key, direction: current.key === key && current.direction === "asc" ? "desc" : "asc" }));
   }
@@ -1345,7 +1385,8 @@ export default function App() {
   const sortedCrews = [...crews].filter((c) => {
     if (!crewSearch) return true;
     const q = crewSearch.toLowerCase();
-    return c.crewName.toLowerCase().includes(q) || (c.foremanName || "").toLowerCase().includes(q);
+    const statusLabel = c.deactivated ? "deactivated inactive" : "active";
+    return c.crewName.toLowerCase().includes(q) || (c.foremanName || "").toLowerCase().includes(q) || statusLabel.includes(q);
   }).sort((a, b) => compareValues(a[crewSort.key], b[crewSort.key], crewSort.direction));
   const filteredProjectsForTab = projects.filter((p) => {
     if (!projectTabDivisionFilter.includes(p.division)) return false;
@@ -1384,12 +1425,8 @@ export default function App() {
     return { resource, items };
   }).filter(Boolean);
 
-  const crewGanttRows = crews
+  const crewGanttRows = activeCrews
     .filter((c) => {
-      // If filter is empty (no selection made), show all crews
-      // A crew is shown if it's in the filter OR if the filter hasn't been explicitly set
-      const filterIsDefault = crewGanttFilter.length === 0 || crews.every((crew) => crewGanttFilter.includes(crew.id));
-      if (!filterIsDefault && !crewGanttFilter.includes(c.id)) return false;
       if (dashboardCrewSearch) {
         const q = dashboardCrewSearch.toLowerCase();
         return c.crewName.toLowerCase().includes(q) || (c.foremanName || "").toLowerCase().includes(q);
@@ -1562,15 +1599,15 @@ export default function App() {
   async function saveCrew() {
     if (!crewForm.crewName.trim()) { alert("Crew name is required."); return; }
     if (!supabase) { alert("Supabase is not connected."); return; }
-    const payload = crewToDb(crewForm);
+    const payload = crewToDbLocal(crewForm);
     if (editingCrewId) {
       const { data, error } = await supabase.from("crews").update(payload).eq("id", editingCrewId).select().single();
       if (error) { console.error(error); alert("Could not update crew."); return; }
-      setCrews((current) => current.map((c) => (c.id === editingCrewId ? mapCrewFromDb(data) : c)));
+      setCrews((current) => current.map((c) => (c.id === editingCrewId ? mapCrewFromDbLocal(data) : c)));
     } else {
       const { data, error } = await supabase.from("crews").insert(payload).select().single();
       if (error) { console.error(error); alert("Could not save crew."); return; }
-      setCrews((current) => [mapCrewFromDb(data), ...current]);
+      setCrews((current) => [mapCrewFromDbLocal(data), ...current]);
     }
     setShowCrewForm(false); setEditingCrewId(null); setCrewForm(blankCrew);
   }
@@ -2034,11 +2071,17 @@ export default function App() {
   function importCrewsCsv(event) {
     readCsvFile(event, async (rows) => {
       if (!supabase) { alert("Supabase is not connected."); return; }
-      const imported = rows.map((row) => ({ crew_name: row.crewname || row.crew || "", foreman_name: row.foremanname || row.foreman || "", specialty: splitList(row.specialty || row.certifications) })).filter((c) => c.crew_name);
+      const imported = rows.map((row) => ({
+        crew_name: row.crewname || row.crew || "",
+        foreman_name: row.foremanname || row.foreman || "",
+        total_members: Number(row.totalmembers || row.total || row.members || 0) || 0,
+        specialty: splitList(row.specialty || row.certifications),
+        deactivated: ["true", "yes", "1", "deactivated", "inactive"].includes(String(row.deactivated || row.status || "").toLowerCase()),
+      })).filter((c) => c.crew_name);
       if (!imported.length) { alert("No valid crews found in CSV."); return; }
       const { data, error } = await supabase.from("crews").insert(imported).select();
       if (error) { console.error(error); alert("Could not import crews."); return; }
-      setCrews((current) => [...(data || []).map(mapCrewFromDb), ...current]);
+      setCrews((current) => [...(data || []).map(mapCrewFromDbLocal), ...current]);
     });
   }
 
@@ -2138,6 +2181,7 @@ export default function App() {
                     <th onClick={() => toggleSort(setCrewSort, "crewName")} className="cursor-pointer p-3 hover:bg-slate-200">Crew Name</th>
                     <th onClick={() => toggleSort(setCrewSort, "foremanName")} className="cursor-pointer p-3 hover:bg-slate-200">Foreman Name</th>
                     <th className="p-3 text-center">Total Members</th>
+                    <th className="p-3 text-center">Status</th>
                     <th className="p-3">Specialty</th>
                     <th className="p-3">Current Assignments</th>
                     <th className="p-3 text-right">Actions</th>
@@ -2149,6 +2193,11 @@ export default function App() {
                       <td className="p-3 font-medium">{crew.crewName}</td>
                       <td className="p-3">{crew.foremanName}</td>
                       <td className="p-3 text-center font-semibold">{crew.totalMembers || <span className="text-slate-300">—</span>}</td>
+                      <td className="p-3 text-center">
+                        <span className={`rounded-full px-2 py-1 text-xs font-bold ${crew.deactivated ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>
+                          {crew.deactivated ? "Deactivated" : "Active"}
+                        </span>
+                      </td>
                       <td className="p-3">{(crew.specialty || []).join(", ")}</td>
                       <td className="p-3">{assignments.filter((a) => getAssignmentCrewIds(a).includes(crew.id)).map((a) => findProject(projects, a.projectId)?.name).filter(Boolean).join(", ")}</td>
                       <td className="p-3 text-right">
@@ -2419,9 +2468,7 @@ export default function App() {
                 <Search size={15} className="text-slate-400" />
                 <input className="outline-none text-sm w-40" placeholder="Search crews…" value={dashboardCrewSearch} onChange={(e) => setDashboardCrewSearch(e.target.value)} />
               </div>
-              <div className="flex-1">
-                <SearchableMultiSelect label="Crew Name Filter" options={crews.map((c) => ({ value: c.id, label: getCrewDisplayName(c), subLabel: (c.specialty || []).join(", ") }))} selected={crewGanttFilter} setSelected={setCrewGanttFilter} getLabel={(o) => o.label} />
-              </div>
+
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
@@ -2437,7 +2484,7 @@ export default function App() {
             const utilEnd = toDate(utilizationEnd);
             const utilizationDateRangeValid = Boolean(utilStart && utilEnd && utilStart <= utilEnd);
 
-            const allUtilizationRows = crews.map((crew) => {
+            const allUtilizationRows = activeCrews.map((crew) => {
               const activeMobs = ganttItems.filter((item) => {
                 if (!utilizationDateRangeValid) return false;
                 if (!getAssignmentCrewIds(item.assignment).includes(crew.id)) return false;
@@ -3159,7 +3206,7 @@ export default function App() {
 
       {/* Forms */}
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} editing={Boolean(editingProjectId)} certifications={certifications} />}
-      {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={crews} />}
+      {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={activeCrews} />}
       {showResourceForm && <ResourceForm form={resourceForm} setForm={setResourceForm} certifications={certifications} onSave={saveResource} onCancel={() => setShowResourceForm(false)} editing={Boolean(editingResourceId)} />}
       {showCrewForm && <CrewForm form={crewForm} setForm={setCrewForm} certifications={certifications} onSave={saveCrew} onCancel={() => setShowCrewForm(false)} editing={Boolean(editingCrewId)} />}
 
