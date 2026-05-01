@@ -1516,16 +1516,11 @@ export default function App() {
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
   const [demandZoom, setDemandZoom] = useState("Weeks");
   const [expandedView, setExpandedView] = useState(null);
-  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
-  const [currentUser, setCurrentUser] = useState("");
-  const [authUser, setAuthUser] = useState(null);
-  const [userProfile, setUserProfile] = useState(null);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [authErrorMessage, setAuthErrorMessage] = useState("");
+  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
+  const [currentUser, setCurrentUser] = useState(() => sessionStorage.getItem("ggc_current_user") || "");
   const [showUserSettings, setShowUserSettings] = useState(false);
-  const [newUserForm, setNewUserForm] = useState({ email: "", password: "", fullName: "", role: "viewer" });
+  const [newUserForm, setNewUserForm] = useState({ username: "", password: "" });
   const [appUsers, setAppUsers] = useState([]);
-  const [userManagementLoading, setUserManagementLoading] = useState(false);
   const [crewGanttFilter, setCrewGanttFilter] = useState([]);
   const [focusedResource, setFocusedResource] = useState(null);
   const [projectSort, setProjectSort] = useState({ key: "projectNumber", direction: "asc" });
@@ -1634,103 +1629,8 @@ export default function App() {
   // ── Realtime subscriptions (#5) ────────────────────────────────────────────
   useSupabaseRealtime({ setProjects, setResources, setCrews, setAssignments, setCertifications });
 
-  // ── Load project type settings after login ────────────────────────────────
-  useEffect(() => { if (currentUser) { loadProjectTypes(); } }, [currentUser]);
-  useEffect(() => { if (currentUser && showUserSettings) { loadAppUsers(); } }, [currentUser, showUserSettings]);
-
-  // ── Supabase Auth session ─────────────────────────────────────────────────
-  useEffect(() => {
-    let mounted = true;
-    let safetyTimer = null;
-
-    const withTimeout = (promise, ms, label) => Promise.race([
-      promise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),
-    ]);
-
-    async function safeLoadProfile(user) {
-      if (!user) {
-        if (mounted) setUserProfile(null);
-        return;
-      }
-      try {
-        await withTimeout(loadUserProfile(user.id), 8000, "User profile load");
-      } catch (profileError) {
-        console.error("User profile load failed:", profileError);
-        if (mounted) {
-          setUserProfile({ full_name: user.email || "", role: "viewer", active: true, missingProfile: true });
-          setAuthErrorMessage("Your login worked, but the profile/role lookup did not finish. I loaded you as Viewer so the app can continue.");
-        }
-      }
-    }
-
-    async function loadAuthSession() {
-      safetyTimer = setTimeout(() => {
-        if (!mounted) return;
-        console.warn("Auth loading safety timeout reached. Releasing loading screen.");
-        setAuthLoading(false);
-        setAuthErrorMessage("Secure session check took too long. Try logging in again, or refresh after clearing site data.");
-      }, 10000);
-
-      try {
-        if (!supabase?.auth) {
-          console.warn("Supabase Auth is not available. Check your Supabase client/environment variables.");
-          if (mounted) setAuthErrorMessage("Supabase Auth is not available. Check your Vercel Supabase environment variables.");
-          return;
-        }
-
-        const { data, error } = await withTimeout(supabase.auth.getSession(), 8000, "Supabase session load");
-        if (error) console.error("Auth session load error:", error);
-
-        const user = data?.session?.user || null;
-        if (!mounted) return;
-
-        setAuthUser(user);
-        setCurrentUser(user?.email || "");
-        await safeLoadProfile(user);
-      } catch (sessionError) {
-        console.error("Secure session initialization failed:", sessionError);
-        if (mounted) {
-          setAuthUser(null);
-          setCurrentUser("");
-          setUserProfile(null);
-          setAuthErrorMessage(String(sessionError?.message || sessionError || "Secure session initialization failed."));
-        }
-      } finally {
-        if (safetyTimer) clearTimeout(safetyTimer);
-        if (mounted) setAuthLoading(false);
-      }
-    }
-
-    loadAuthSession();
-
-    if (!supabase?.auth?.onAuthStateChange) {
-      return () => {
-        mounted = false;
-        if (safetyTimer) clearTimeout(safetyTimer);
-      };
-    }
-
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      try {
-        const user = session?.user || null;
-        setAuthUser(user);
-        setCurrentUser(user?.email || "");
-        await safeLoadProfile(user);
-      } catch (authChangeError) {
-        console.error("Auth state change failed:", authChangeError);
-        setAuthErrorMessage(String(authChangeError?.message || authChangeError || "Auth state change failed."));
-      } finally {
-        setAuthLoading(false);
-      }
-    });
-
-    return () => {
-      mounted = false;
-      if (safetyTimer) clearTimeout(safetyTimer);
-      listener?.subscription?.unsubscribe?.();
-    };
-  }, []);
+  // ── Load app users after login ─────────────────────────────────────────────
+  useEffect(() => { if (currentUser) { loadAppUsers(); loadProjectTypes(); } }, [currentUser]);
 
   useEffect(() => {
     localStorage.setItem("ggc_project_types", JSON.stringify(projectTypes));
@@ -2649,60 +2549,22 @@ export default function App() {
   }
 
   // ── Auth ───────────────────────────────────────────────────────────────────
-  async function loadUserProfile(userId) {
-    if (!supabase || !userId) return null;
-    const { data, error } = await supabase
-      .from("user_profiles")
-      .select("full_name, email, role, active")
-      .eq("id", userId)
-      .single();
-
-    if (error) {
-      console.warn("User profile not found yet. Add this user to user_profiles:", error);
-      setUserProfile({ full_name: "", role: "viewer", active: true, missingProfile: true });
-      return null;
-    }
-
-    if (data && data.active === false) {
-      alert("Your user profile is inactive. Contact an administrator.");
-      await supabase.auth.signOut();
-      setAuthUser(null);
-      setCurrentUser("");
-      setUserProfile(null);
-      return null;
-    }
-
-    setUserProfile(data || null);
-    return data;
-  }
-
   async function handleLogin(event) {
     event.preventDefault();
-    if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
-    const email = loginForm.email.trim();
-    if (!email || !loginForm.password) { alert("Email and password are required."); return; }
-
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password: loginForm.password,
-    });
-
-    if (error) { alert(error.message || "Could not log in."); return; }
-
-    const user = data?.user || null;
-    setAuthUser(user);
-    setCurrentUser(user?.email || email);
-    if (user) await loadUserProfile(user.id);
-    setLoginForm({ email: "", password: "" });
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    const { data, error } = await supabase.rpc("authenticate_app_user", { input_username: loginForm.username, input_password: loginForm.password });
+    if (error) { console.error(error); alert("Login setup is missing. Run the user SQL block in Supabase."); return; }
+    if (!data) { alert("Invalid username or password."); return; }
+    sessionStorage.setItem("ggc_current_user", loginForm.username);
+    setCurrentUser(loginForm.username);
+    setLoginForm({ username: "", password: "" });
+    await loadAppUsers();
   }
 
   async function loadAppUsers() {
     if (!supabase) return;
-    const { data, error } = await supabase
-      .from("user_profiles")
-      .select("id, email, full_name, role, active, created_at")
-      .order("created_at", { ascending: false });
-    if (error) { console.warn("Could not load user profiles. RLS may need an admin policy:", error); return; }
+    const { data, error } = await supabase.rpc("list_app_users");
+    if (error) { console.error("Could not load app users:", error); return; }
     setAppUsers(data || []);
   }
 
@@ -2714,57 +2576,24 @@ export default function App() {
   }
 
   async function addAppUser() {
+    if (!newUserForm.username.trim() || !newUserForm.password.trim()) { alert("Username and password are required."); return; }
     if (!supabase) { alert("Supabase is not connected."); return; }
-    if ((userProfile?.role || "viewer") !== "admin") { alert("Only admins can add users."); return; }
-
-    const email = newUserForm.email.trim().toLowerCase();
-    const password = newUserForm.password;
-    const fullName = newUserForm.fullName.trim();
-    const role = newUserForm.role || "viewer";
-
-    if (!email || !password) { alert("Email and password are required."); return; }
-    if (password.length < 8) { alert("Password must be at least 8 characters."); return; }
-
-    setUserManagementLoading(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("create-app-user", {
-        body: { email, password, fullName, role },
-      });
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
-
-      setNewUserForm({ email: "", password: "", fullName: "", role: "viewer" });
-      await loadAppUsers();
-      alert("User created. They can now log in with the email and password you set.");
-    } catch (error) {
-      console.error(error);
-      alert(error.message || "Could not create user. Confirm the create-app-user Edge Function is deployed.");
-    } finally {
-      setUserManagementLoading(false);
-    }
-  }
-
-  async function updateAppUserProfile(userId, patch) {
-    if (!supabase) return;
-    if ((userProfile?.role || "viewer") !== "admin") { alert("Only admins can manage users."); return; }
-    setUserManagementLoading(true);
-    const { error } = await supabase.from("user_profiles").update(patch).eq("id", userId);
-    if (error) { console.error(error); alert("Could not update user profile."); }
+    const { error } = await supabase.rpc("create_app_user", { input_username: newUserForm.username, input_password: newUserForm.password });
+    if (error) { console.error(error); alert("Could not create user."); return; }
+    setNewUserForm({ username: "", password: "" });
     await loadAppUsers();
-    setUserManagementLoading(false);
   }
 
-  async function deleteAppUser(userId, fullName) {
-    if (!confirm(`Deactivate ${fullName || "this user"}? They will no longer be allowed into the app once RLS/policies are enforced.`)) return;
-    await updateAppUserProfile(userId, { active: false });
+  async function deleteAppUser(username) {
+    if (username === currentUser) { alert("You cannot delete the user currently signed in."); return; }
+    if (!confirm(`Delete login user ${username}?`)) return;
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    const { error } = await supabase.rpc("delete_app_user", { input_username: username });
+    if (error) { console.error(error); alert("Could not delete user."); return; }
+    await loadAppUsers();
   }
 
-  async function logout() {
-    if (supabase?.auth) await supabase.auth.signOut();
-    setAuthUser(null);
-    setCurrentUser("");
-    setUserProfile(null);
-  }
+  function logout() { sessionStorage.removeItem("ggc_current_user"); setCurrentUser(""); }
 
   function parseYesNo(value) {
     const text = String(value ?? "").trim().toLowerCase();
@@ -2936,14 +2765,6 @@ export default function App() {
   }
 
   // ── Login Screen ───────────────────────────────────────────────────────────
-  if (authLoading) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-600 shadow-xl">Loading secure session…</div>
-      </main>
-    );
-  }
-
   if (!currentUser) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
@@ -2951,14 +2772,13 @@ export default function App() {
           <div className="h-1 w-24 rounded-full bg-emerald-700" />
           <h1 className="mt-4 text-2xl font-bold text-slate-900">GGC Resource Planning</h1>
           <p className="mt-1 text-sm text-slate-500">Sign in to access the scheduling system.</p>
-          {authErrorMessage && <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{authErrorMessage}</div>}
           <label className="mt-6 block space-y-1">
-            <span className="text-sm font-semibold text-slate-700">Email</span>
-            <input type="email" autoComplete="email" value={loginForm.email} onChange={(e) => setLoginForm((c) => ({ ...c, email: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
+            <span className="text-sm font-semibold text-slate-700">Username</span>
+            <input value={loginForm.username} onChange={(e) => setLoginForm((c) => ({ ...c, username: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
           </label>
           <label className="mt-4 block space-y-1">
             <span className="text-sm font-semibold text-slate-700">Password</span>
-            <input type="password" autoComplete="current-password" value={loginForm.password} onChange={(e) => setLoginForm((c) => ({ ...c, password: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
+            <input type="password" value={loginForm.password} onChange={(e) => setLoginForm((c) => ({ ...c, password: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
           </label>
           <button type="submit" className="mt-6 w-full rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800">Log In</button>
         </form>
@@ -2981,8 +2801,7 @@ export default function App() {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-            <span className="max-w-[180px] truncate">{userProfile?.full_name || currentUser}</span>
-            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-600">{userProfile?.role || "viewer"}</span>
+            <span className="max-w-[180px] truncate">{currentUser}</span>
             <button onClick={() => setShowUserSettings(true)} className="rounded-lg p-1 hover:bg-slate-200" title="User settings"><Settings size={16} /></button>
             <button onClick={logout} className="rounded-lg px-2 py-1 text-xs text-red-700 hover:bg-red-50">Logout</button>
           </div>
@@ -4017,126 +3836,30 @@ export default function App() {
       {/* User Settings */}
       {showUserSettings && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold">User Settings</h2>
-                <p className="text-sm text-slate-500">Add users and manage app roles.</p>
-              </div>
+              <div><h2 className="text-xl font-bold">User Settings</h2><p className="text-sm text-slate-500">Add users who can log in to this system.</p></div>
               <button onClick={() => setShowUserSettings(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
             </div>
-
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-              <p><strong>Signed in as:</strong> {userProfile?.full_name || currentUser}</p>
-              <p><strong>Email:</strong> {authUser?.email || currentUser}</p>
-              <p><strong>Role:</strong> {userProfile?.role || "viewer"}</p>
-              {userProfile?.missingProfile && (
-                <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
-                  This Auth user does not have a matching row in <strong>user_profiles</strong> yet. Add one before enabling Row Level Security.
-                </p>
-              )}
+            <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+              <input placeholder="Username" value={newUserForm.username} onChange={(e) => setNewUserForm((c) => ({ ...c, username: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
+              <input placeholder="Password" type="password" value={newUserForm.password} onChange={(e) => setNewUserForm((c) => ({ ...c, password: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
+              <button onClick={addAppUser} className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800">Add User</button>
             </div>
-
-            {(userProfile?.role || "viewer") === "admin" ? (
-              <>
-                <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-                  <h3 className="font-bold text-slate-900">Add User</h3>
-                  <p className="mt-1 text-sm text-slate-600">Create the login here, set the temporary password, and assign the app role.</p>
-                  <div className="mt-4 grid gap-3 md:grid-cols-[1.2fr_1fr_1fr_.7fr_auto]">
-                    <input
-                      type="email"
-                      placeholder="Email"
-                      value={newUserForm.email}
-                      onChange={(e) => setNewUserForm((c) => ({ ...c, email: e.target.value }))}
-                      className="rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600"
-                    />
-                    <input
-                      type="password"
-                      placeholder="Temporary password"
-                      value={newUserForm.password}
-                      onChange={(e) => setNewUserForm((c) => ({ ...c, password: e.target.value }))}
-                      className="rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600"
-                    />
-                    <input
-                      placeholder="Full name"
-                      value={newUserForm.fullName}
-                      onChange={(e) => setNewUserForm((c) => ({ ...c, fullName: e.target.value }))}
-                      className="rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600"
-                    />
-                    <select
-                      value={newUserForm.role}
-                      onChange={(e) => setNewUserForm((c) => ({ ...c, role: e.target.value }))}
-                      className="rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600"
-                    >
-                      <option value="viewer">Viewer</option>
-                      <option value="manager">Manager</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                    <button
-                      onClick={addAppUser}
-                      disabled={userManagementLoading}
-                      className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
-                    >
-                      {userManagementLoading ? "Creating..." : "Add User"}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-5 overflow-hidden rounded-xl border border-slate-200">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-100 text-slate-600">
-                      <tr>
-                        <th className="p-3">Name</th>
-                        <th className="p-3">Role</th>
-                        <th className="p-3">Status</th>
-                        <th className="p-3">Created</th>
-                        <th className="p-3 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {appUsers.map((user) => (
-                        <tr key={user.id} className="border-t border-slate-200">
-                          <td className="p-3">
-                            <p className="font-semibold text-slate-900">{user.full_name || "Unnamed user"}</p>
-                            <p className="text-xs text-slate-500">{user.email || user.id}</p>
-                          </td>
-                          <td className="p-3">
-                            <select
-                              value={user.role || "viewer"}
-                              onChange={(e) => updateAppUserProfile(user.id, { role: e.target.value })}
-                              className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600"
-                            >
-                              <option value="viewer">Viewer</option>
-                              <option value="manager">Manager</option>
-                              <option value="admin">Admin</option>
-                            </select>
-                          </td>
-                          <td className="p-3">
-                            <button
-                              onClick={() => updateAppUserProfile(user.id, { active: !user.active })}
-                              className={`rounded-full px-3 py-1 text-xs font-bold ${user.active ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}
-                            >
-                              {user.active ? "Active" : "Inactive"}
-                            </button>
-                          </td>
-                          <td className="p-3">{user.created_at ? formatDate(user.created_at) : ""}</td>
-                          <td className="p-3 text-right">
-                            <button onClick={() => deleteAppUser(user.id, user.full_name)} className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50">Deactivate</button>
-                          </td>
-                        </tr>
-                      ))}
-                      {appUsers.length === 0 && (
-                        <tr><td colSpan={5} className="p-6 text-center text-slate-400">No user profiles found.</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            ) : (
-              <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-                Only admins can add users or change roles.
-              </div>
-            )}
+            <div className="mt-5 rounded-xl border border-slate-200">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Username</th><th className="p-3">Created</th><th className="p-3 text-right">Action</th></tr></thead>
+                <tbody>
+                  {appUsers.map((user) => (
+                    <tr key={user.username} className="border-t border-slate-200">
+                      <td className="p-3 font-semibold">{user.username}</td>
+                      <td className="p-3">{user.created_at ? formatDate(user.created_at) : ""}</td>
+                      <td className="p-3 text-right"><button onClick={() => deleteAppUser(user.username)} className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50">Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
