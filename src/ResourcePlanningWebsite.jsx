@@ -1523,7 +1523,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authErrorMessage, setAuthErrorMessage] = useState("");
   const [showUserSettings, setShowUserSettings] = useState(false);
-  const [newUserForm, setNewUserForm] = useState({ email: "", fullName: "", role: "viewer" });
+  const [newUserForm, setNewUserForm] = useState({ userId: "", fullName: "", role: "viewer" });
   const [appUsers, setAppUsers] = useState([]);
   const [userManagementLoading, setUserManagementLoading] = useState(false);
   const [crewGanttFilter, setCrewGanttFilter] = useState([]);
@@ -2715,25 +2715,24 @@ export default function App() {
 
   async function addAppUser() {
     if (!supabase) { alert("Supabase is not connected."); return; }
-    if ((userProfile?.role || "viewer") !== "admin") { alert("Only admins can invite users."); return; }
-    const email = newUserForm.email.trim().toLowerCase();
+    if ((userProfile?.role || "viewer") !== "admin") { alert("Only admins can add users."); return; }
+    const userId = newUserForm.userId.trim();
     const fullName = newUserForm.fullName.trim();
     const role = newUserForm.role || "viewer";
-    if (!email) { alert("Email is required."); return; }
+    if (!userId) { alert("Auth User ID is required. Create the user in Supabase Authentication first, then paste their user ID here."); return; }
 
     setUserManagementLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke("invite-user", {
-        body: { email, fullName, role },
-      });
+      const { error } = await supabase
+        .from("user_profiles")
+        .upsert({ id: userId, full_name: fullName, role, active: true }, { onConflict: "id" });
       if (error) { throw error; }
-      if (data?.error) { throw new Error(data.error); }
-      setNewUserForm({ email: "", fullName: "", role: "viewer" });
+      setNewUserForm({ userId: "", fullName: "", role: "viewer" });
       await loadAppUsers();
-      alert(`Invitation sent to ${email}.`);
+      alert("User profile added. They can now log in with their Supabase Auth email/password.");
     } catch (error) {
       console.error(error);
-      alert(error.message || "Could not send invitation. Confirm the invite-user Edge Function is deployed and configured.");
+      alert(error.message || "Could not add user profile. Confirm the Auth User ID exists in Supabase Authentication.");
     } finally {
       setUserManagementLoading(false);
     }
@@ -4009,7 +4008,7 @@ export default function App() {
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold">User Settings</h2>
-                <p className="text-sm text-slate-500">Invite users and manage app roles.</p>
+                <p className="text-sm text-slate-500">Add users and manage app roles.</p>
               </div>
               <button onClick={() => setShowUserSettings(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
             </div>
@@ -4028,14 +4027,13 @@ export default function App() {
             {(userProfile?.role || "viewer") === "admin" ? (
               <>
                 <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-                  <h3 className="font-bold text-slate-900">Invite User</h3>
-                  <p className="mt-1 text-sm text-slate-600">This sends a Supabase Auth invitation email and creates/updates the matching role profile.</p>
-                  <div className="mt-4 grid gap-3 md:grid-cols-[1.2fr_1fr_.7fr_auto]">
+                  <h3 className="font-bold text-slate-900">Add User Profile</h3>
+                  <p className="mt-1 text-sm text-slate-600">Create the user in Supabase Authentication first, then paste their Auth User ID here to assign app access and role.</p>
+                  <div className="mt-4 grid gap-3 md:grid-cols-[1.3fr_1fr_.7fr_auto]">
                     <input
-                      type="email"
-                      placeholder="Email"
-                      value={newUserForm.email}
-                      onChange={(e) => setNewUserForm((c) => ({ ...c, email: e.target.value }))}
+                      placeholder="Auth User ID"
+                      value={newUserForm.userId}
+                      onChange={(e) => setNewUserForm((c) => ({ ...c, userId: e.target.value }))}
                       className="rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600"
                     />
                     <input
@@ -4058,7 +4056,7 @@ export default function App() {
                       disabled={userManagementLoading}
                       className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
                     >
-                      {userManagementLoading ? "Sending..." : "Send Invite"}
+                      {userManagementLoading ? "Saving..." : "Add User"}
                     </button>
                   </div>
                 </div>
@@ -4115,7 +4113,7 @@ export default function App() {
               </>
             ) : (
               <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-                Only admins can invite users or change roles.
+                Only admins can add users or change roles.
               </div>
             )}
           </div>
