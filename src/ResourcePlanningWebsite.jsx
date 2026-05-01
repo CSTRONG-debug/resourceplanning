@@ -825,7 +825,7 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
 
 // ─── ResourceForm ─────────────────────────────────────────────────────────────
 
-export function ResourceForm({ form, setForm, certifications, onSave, onCancel, onDelete, editing }) {
+export function ResourceForm({ form, setForm, certifications, onSave, onCancel, onDelete, onExportResume, resourceStats, editing }) {
   const [ptoDraft, setPtoDraft] = useState({ ptoId: "", start: "", end: "" });
   const [certDraft, setCertDraft] = useState({ name: "", start: "", expiration: "" });
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
@@ -962,9 +962,42 @@ export function ResourceForm({ form, setForm, certifications, onSave, onCancel, 
           </div>
         </div>
 
+        {editing && resourceStats && (
+          <div className="border-t border-slate-200 p-5">
+            <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h3 className="font-bold text-slate-900">Resource Experience Stats</h3>
+                <p className="text-sm text-slate-500">Top five categories based on completed/current project assignments.</p>
+              </div>
+              <button type="button" onClick={onExportResume} className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-bold text-emerald-800 hover:bg-emerald-100">Export Resume</button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-4">
+              {[
+                ["Owners", resourceStats.owners],
+                ["Architects", resourceStats.architects],
+                ["Engineers", resourceStats.engineers],
+                ["Project Types", resourceStats.projectTypes],
+              ].map(([title, rows]) => (
+                <div key={title} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="mb-2 text-sm font-bold text-slate-800">{title}</p>
+                  <div className="space-y-1">
+                    {rows.length ? rows.map((row) => (
+                      <div key={`${title}-${row.name}`} className="flex items-center justify-between gap-2 rounded-lg bg-white px-2 py-1 text-xs">
+                        <span className="truncate font-semibold text-slate-700">{row.name}</span>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 font-bold text-slate-600">{row.count}</span>
+                      </div>
+                    )) : <p className="text-xs text-slate-400">No history yet.</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex justify-between gap-3 border-t border-slate-200 p-5">
           <div>{editing && <button onClick={onDelete} className="rounded-xl border border-red-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-50">Delete Resource</button>}</div>
           <div className="flex gap-3">
+            {editing && <button type="button" onClick={onExportResume} className="rounded-xl border border-emerald-300 px-4 py-2 font-semibold text-emerald-800 hover:bg-emerald-50">Export Resume</button>}
             <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
             <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Resource</button>
           </div>
@@ -1821,6 +1854,90 @@ export default function App() {
         [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].includes(focusedResource.name)
       )
     : [];
+
+  function getResourceHistoricalItems(resource) {
+    if (!resource?.name) return [];
+    const today = new Date();
+    const fiveYearsAgo = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
+    const byProject = new Map();
+
+    ganttItems.forEach((item) => {
+      const names = [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].filter(Boolean);
+      if (!names.includes(resource.name)) return;
+      const start = toDate(item.start);
+      const end = toDate(item.end);
+      if (!start || !end) return;
+      if (start > today) return; // no future projects
+      if (end < fiveYearsAgo) return;
+
+      const existing = byProject.get(item.project.id);
+      if (!existing) {
+        byProject.set(item.project.id, { ...item, firstStart: start, lastEnd: end });
+      } else {
+        byProject.set(item.project.id, {
+          ...existing,
+          firstStart: start < existing.firstStart ? start : existing.firstStart,
+          lastEnd: end > existing.lastEnd ? end : existing.lastEnd,
+        });
+      }
+    });
+
+    return Array.from(byProject.values()).sort((a, b) => b.lastEnd - a.lastEnd);
+  }
+
+  function topCountsFromItems(items, getValue) {
+    const counts = new Map();
+    items.forEach((item) => {
+      const value = String(getValue(item.project) || "").trim();
+      if (!value) return;
+      counts.set(value, (counts.get(value) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+      .slice(0, 5);
+  }
+
+  function getResourceStats(resource) {
+    const items = getResourceHistoricalItems(resource);
+    return {
+      owners: topCountsFromItems(items, (p) => p.owner),
+      architects: topCountsFromItems(items, (p) => p.architect),
+      engineers: topCountsFromItems(items, (p) => p.engineer),
+      projectTypes: topCountsFromItems(items, (p) => p.projectType),
+      items,
+    };
+  }
+
+  function exportResourceResume(resource) {
+    if (!resource?.name) return;
+    const stats = getResourceStats(resource);
+    const currentCerts = normalizeResourceCertifications(resource.certifications).filter((cert) => getCertificationStatus(cert) !== "expired");
+    const fmt = (value) => value ? formatDate(value) : "";
+    const escapeHtml = (value) => String(value || "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[ch] || ch));
+    const statList = (title, rows) => `<div class="stat"><h3>${title}</h3>${rows.length ? `<ol>${rows.map((r) => `<li><span>${escapeHtml(r.name)}</span><strong>${r.count}</strong></li>`).join("")}</ol>` : `<p class="muted">No history</p>`}</div>`;
+    const projectRows = stats.items.map((item) => `<tr>
+      <td><strong>${escapeHtml(item.project.projectNumber ? `${item.project.projectNumber} - ${item.project.name}` : item.project.name)}</strong><br><span>${escapeHtml(item.project.status)}</span></td>
+      <td>${escapeHtml(item.project.projectType || "")}</td>
+      <td>${escapeHtml(item.project.owner || "")}</td>
+      <td>${escapeHtml(item.project.architect || "")}</td>
+      <td>${escapeHtml(item.project.engineer || "")}</td>
+      <td>${fmt(item.firstStart)} - ${fmt(item.lastEnd)}</td>
+    </tr>`).join("");
+    const certRows = currentCerts.map((cert) => `<tr><td>${escapeHtml(cert.name)}</td><td>${fmt(cert.start)}</td><td>${fmt(cert.expiration)}</td></tr>`).join("");
+    const html = `<!doctype html><html><head><title>${escapeHtml(resource.name)} Resume</title><style>
+      @page{size:letter;margin:.45in} body{font-family:Arial,sans-serif;color:#0f172a;font-size:11px} h1{font-size:24px;margin:0} h2{font-size:14px;margin:18px 0 6px;border-bottom:2px solid #047857;padding-bottom:4px} h3{font-size:12px;margin:0 0 6px;color:#065f46}.header{display:flex;justify-content:space-between;gap:18px;border-bottom:4px solid #047857;padding-bottom:12px}.muted{color:#64748b}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:#f8fafc}.stat ol{margin:0;padding-left:18px}.stat li{margin:4px 0}.stat li strong{float:right} table{width:100%;border-collapse:collapse} th{background:#f1f5f9;text-align:left;padding:6px;border-bottom:2px solid #cbd5e1}td{padding:6px;border-bottom:1px solid #e2e8f0;vertical-align:top}span{color:#64748b}.small{font-size:10px;color:#64748b}
+    </style></head><body>
+      <div class="header"><div><h1>${escapeHtml(resource.name)}</h1><p class="muted">${escapeHtml(resource.resourceType)} • ${escapeHtml(resource.homeDivision)}</p></div><div class="small">${escapeHtml(resource.phone)}<br>${escapeHtml(resource.email)}<br>Generated ${new Date().toLocaleDateString()}</div></div>
+      <h2>Top Experience Stats</h2><div class="grid">${statList("Owners", stats.owners)}${statList("Architects", stats.architects)}${statList("Engineers", stats.engineers)}${statList("Project Types", stats.projectTypes)}</div>
+      <h2>Current Certifications</h2><table><thead><tr><th>Certification</th><th>Start Date</th><th>Expiration Date</th></tr></thead><tbody>${certRows || `<tr><td colspan="3" class="muted">No current certifications listed.</td></tr>`}</tbody></table>
+      <h2>Project Experience — Past 5 Years</h2><p class="small">Completed and current projects only; future projects are excluded.</p><table><thead><tr><th>Project</th><th>Type</th><th>Owner</th><th>Architect</th><th>Engineer</th><th>Dates</th></tr></thead><tbody>${projectRows || `<tr><td colspan="6" class="muted">No qualifying project history found.</td></tr>`}</tbody></table>
+      <script>window.onload=function(){setTimeout(function(){window.print()},400)}<\/script>
+    </body></html>`;
+    const w = window.open("", "_blank", "width=950,height=1100");
+    if (!w) { alert("Please allow pop-ups to export the resume."); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+  }
 
   // ── CRUD: Projects ─────────────────────────────────────────────────────────
   function openAddProjectForm() { setEditingProjectId(null); setProjectForm(blankProject); setShowProjectForm(true); }
@@ -3780,7 +3897,7 @@ export default function App() {
       {/* Forms */}
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} onDelete={() => deleteProject(editingProjectId)} editing={Boolean(editingProjectId)} certifications={certifications} projectTypes={projectTypes} />}
       {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={activeCrews} />}
-      {showResourceForm && <ResourceForm form={resourceForm} setForm={setResourceForm} certifications={certifications} onSave={saveResource} onCancel={() => setShowResourceForm(false)} onDelete={() => deleteResource(editingResourceId)} editing={Boolean(editingResourceId)} />}
+      {showResourceForm && <ResourceForm form={resourceForm} setForm={setResourceForm} certifications={certifications} onSave={saveResource} onCancel={() => setShowResourceForm(false)} onDelete={() => deleteResource(editingResourceId)} onExportResume={() => exportResourceResume(resourceForm)} resourceStats={editingResourceId ? getResourceStats(resourceForm) : null} editing={Boolean(editingResourceId)} />}
       {showCrewForm && <CrewForm form={crewForm} setForm={setCrewForm} certifications={certifications} onSave={saveCrew} onCancel={() => setShowCrewForm(false)} onDelete={() => deleteCrew(editingCrewId)} editing={Boolean(editingCrewId)} />}
 
       {/* ── Forecast Settings Modal ── */}
