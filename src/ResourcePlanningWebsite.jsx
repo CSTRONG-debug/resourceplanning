@@ -1524,6 +1524,7 @@ export default function App() {
   const [showUserSettings, setShowUserSettings] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ email: "", fullName: "", role: "viewer" });
   const [appUsers, setAppUsers] = useState([]);
+  const [userManagementLoading, setUserManagementLoading] = useState(false);
   const [crewGanttFilter, setCrewGanttFilter] = useState([]);
   const [focusedResource, setFocusedResource] = useState(null);
   const [projectSort, setProjectSort] = useState({ key: "projectNumber", direction: "asc" });
@@ -1634,6 +1635,7 @@ export default function App() {
 
   // ── Load project type settings after login ────────────────────────────────
   useEffect(() => { if (currentUser) { loadProjectTypes(); } }, [currentUser]);
+  useEffect(() => { if (currentUser && showUserSettings) { loadAppUsers(); } }, [currentUser, showUserSettings]);
 
   // ── Supabase Auth session ─────────────────────────────────────────────────
   useEffect(() => {
@@ -2649,11 +2651,44 @@ export default function App() {
   }
 
   async function addAppUser() {
-    alert("Create the user in Supabase Authentication > Users first. Then insert/update their role in the user_profiles table. Browser apps cannot safely create Auth users directly.");
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    if ((userProfile?.role || "viewer") !== "admin") { alert("Only admins can invite users."); return; }
+    const email = newUserForm.email.trim().toLowerCase();
+    const fullName = newUserForm.fullName.trim();
+    const role = newUserForm.role || "viewer";
+    if (!email) { alert("Email is required."); return; }
+
+    setUserManagementLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("invite-user", {
+        body: { email, fullName, role },
+      });
+      if (error) { throw error; }
+      if (data?.error) { throw new Error(data.error); }
+      setNewUserForm({ email: "", fullName: "", role: "viewer" });
+      await loadAppUsers();
+      alert(`Invitation sent to ${email}.`);
+    } catch (error) {
+      console.error(error);
+      alert(error.message || "Could not send invitation. Confirm the invite-user Edge Function is deployed and configured.");
+    } finally {
+      setUserManagementLoading(false);
+    }
   }
 
-  async function deleteAppUser() {
-    alert("For security, deactivate users in Supabase by setting user_profiles.active = false, or remove them from Authentication > Users.");
+  async function updateAppUserProfile(userId, patch) {
+    if (!supabase) return;
+    if ((userProfile?.role || "viewer") !== "admin") { alert("Only admins can manage users."); return; }
+    setUserManagementLoading(true);
+    const { error } = await supabase.from("user_profiles").update(patch).eq("id", userId);
+    if (error) { console.error(error); alert("Could not update user profile."); }
+    await loadAppUsers();
+    setUserManagementLoading(false);
+  }
+
+  async function deleteAppUser(userId, fullName) {
+    if (!confirm(`Deactivate ${fullName || "this user"}? They will no longer be allowed into the app once RLS/policies are enforced.`)) return;
+    await updateAppUserProfile(userId, { active: false });
   }
 
   async function logout() {
@@ -3906,11 +3941,11 @@ export default function App() {
       {/* User Settings */}
       {showUserSettings && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl">
+          <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold">User Settings</h2>
-                <p className="text-sm text-slate-500">Supabase Auth is now handling login security.</p>
+                <p className="text-sm text-slate-500">Invite users and manage app roles.</p>
               </div>
               <button onClick={() => setShowUserSettings(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
             </div>
@@ -3926,14 +3961,99 @@ export default function App() {
               )}
             </div>
 
-            <div className="mt-5 rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-900">
-              <p className="font-bold">To add users now:</p>
-              <ol className="mt-2 list-decimal space-y-1 pl-5">
-                <li>Create the user in Supabase → Authentication → Users.</li>
-                <li>Add that user ID to the <code className="rounded bg-white px-1">user_profiles</code> table with role <code className="rounded bg-white px-1">admin</code>, <code className="rounded bg-white px-1">manager</code>, or <code className="rounded bg-white px-1">viewer</code>.</li>
-                <li>Keep RLS off until this login is tested successfully.</li>
-              </ol>
-            </div>
+            {(userProfile?.role || "viewer") === "admin" ? (
+              <>
+                <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                  <h3 className="font-bold text-slate-900">Invite User</h3>
+                  <p className="mt-1 text-sm text-slate-600">This sends a Supabase Auth invitation email and creates/updates the matching role profile.</p>
+                  <div className="mt-4 grid gap-3 md:grid-cols-[1.2fr_1fr_.7fr_auto]">
+                    <input
+                      type="email"
+                      placeholder="Email"
+                      value={newUserForm.email}
+                      onChange={(e) => setNewUserForm((c) => ({ ...c, email: e.target.value }))}
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600"
+                    />
+                    <input
+                      placeholder="Full name"
+                      value={newUserForm.fullName}
+                      onChange={(e) => setNewUserForm((c) => ({ ...c, fullName: e.target.value }))}
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600"
+                    />
+                    <select
+                      value={newUserForm.role}
+                      onChange={(e) => setNewUserForm((c) => ({ ...c, role: e.target.value }))}
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600"
+                    >
+                      <option value="viewer">Viewer</option>
+                      <option value="manager">Manager</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button
+                      onClick={addAppUser}
+                      disabled={userManagementLoading}
+                      className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
+                    >
+                      {userManagementLoading ? "Sending..." : "Send Invite"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-5 overflow-hidden rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-100 text-slate-600">
+                      <tr>
+                        <th className="p-3">Name</th>
+                        <th className="p-3">Role</th>
+                        <th className="p-3">Status</th>
+                        <th className="p-3">Created</th>
+                        <th className="p-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {appUsers.map((user) => (
+                        <tr key={user.id} className="border-t border-slate-200">
+                          <td className="p-3">
+                            <p className="font-semibold text-slate-900">{user.full_name || "Unnamed user"}</p>
+                            <p className="text-xs text-slate-500">{user.id}</p>
+                          </td>
+                          <td className="p-3">
+                            <select
+                              value={user.role || "viewer"}
+                              onChange={(e) => updateAppUserProfile(user.id, { role: e.target.value })}
+                              className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600"
+                            >
+                              <option value="viewer">Viewer</option>
+                              <option value="manager">Manager</option>
+                              <option value="admin">Admin</option>
+                            </select>
+                          </td>
+                          <td className="p-3">
+                            <button
+                              onClick={() => updateAppUserProfile(user.id, { active: !user.active })}
+                              className={`rounded-full px-3 py-1 text-xs font-bold ${user.active ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}
+                            >
+                              {user.active ? "Active" : "Inactive"}
+                            </button>
+                          </td>
+                          <td className="p-3">{user.created_at ? formatDate(user.created_at) : ""}</td>
+                          <td className="p-3 text-right">
+                            <button onClick={() => deleteAppUser(user.id, user.full_name)} className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50">Deactivate</button>
+                          </td>
+                        </tr>
+                      ))}
+                      {appUsers.length === 0 && (
+                        <tr><td colSpan={5} className="p-6 text-center text-slate-400">No user profiles found.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                Only admins can invite users or change roles.
+              </div>
+            )}
           </div>
         </div>
       )}
