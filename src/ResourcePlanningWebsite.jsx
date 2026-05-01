@@ -72,6 +72,43 @@ function crewToDbLocal(crew) {
 }
 
 
+// Resource certifications now support start and expiration dates while preserving older string-only records.
+function normalizeResourceCertifications(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter(Boolean).map((cert) => {
+    if (typeof cert === "string") return { id: `legacy-${cert}`, name: cert, start: "", expiration: "" };
+    return {
+      id: cert.id || crypto.randomUUID(),
+      name: cert.name || cert.certification || cert.label || "",
+      start: cert.start || cert.startDate || cert.start_date || "",
+      expiration: cert.expiration || cert.expirationDate || cert.expiration_date || cert.expires || "",
+    };
+  }).filter((cert) => cert.name);
+}
+function mapResourceFromDbLocal(r) {
+  const mapped = mapResourceFromDb(r);
+  return { ...mapped, certifications: normalizeResourceCertifications(mapped.certifications || r.certifications) };
+}
+function resourceToDbLocal(resource) {
+  return { ...resourceToDb({ ...resource, certifications: normalizeResourceCertifications(resource.certifications) }), certifications: normalizeResourceCertifications(resource.certifications) };
+}
+function formatCertificationRecord(cert) {
+  const c = typeof cert === "string" ? { name: cert } : cert || {};
+  const dates = [c.start ? `Start: ${formatDate(c.start)}` : "", c.expiration ? `Expires: ${formatDate(c.expiration)}` : ""].filter(Boolean).join(" • ");
+  return dates ? `${c.name} (${dates})` : c.name;
+}
+function getCertificationStatus(cert) {
+  const exp = toDate(cert?.expiration);
+  if (!exp) return "current";
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const warningDate = addDays(startOfToday, 30);
+  if (exp < startOfToday) return "expired";
+  if (exp <= warningDate) return "expiring";
+  return "current";
+}
+
+
 // Division abbreviations used for explicit unassigned needs on mobilizations.
 function getDivisionAbbreviation(division) {
   const text = String(division || "").toLowerCase();
@@ -760,7 +797,21 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
 
 export function ResourceForm({ form, setForm, certifications, onSave, onCancel, editing }) {
   const [ptoDraft, setPtoDraft] = useState({ ptoId: "", start: "", end: "" });
+  const [certDraft, setCertDraft] = useState({ name: "", start: "", expiration: "" });
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
+
+  function addCertificationToResource() {
+    if (!certDraft.name) { alert("Select a certification before adding it."); return; }
+    setForm((c) => ({
+      ...c,
+      certifications: [...normalizeResourceCertifications(c.certifications), { ...certDraft, id: crypto.randomUUID() }],
+    }));
+    setCertDraft({ name: "", start: "", expiration: "" });
+  }
+
+  function deleteResourceCertification(id) {
+    setForm((c) => ({ ...c, certifications: normalizeResourceCertifications(c.certifications).filter((cert) => cert.id !== id) }));
+  }
 
   function addPto() {
     if (!ptoDraft.ptoId || !ptoDraft.start || !ptoDraft.end) { alert("PTO ID, start date, and end date are required."); return; }
@@ -817,9 +868,40 @@ export function ResourceForm({ form, setForm, certifications, onSave, onCancel, 
         </div>
 
         <div className="border-t border-slate-200 p-5">
-          <h3 className="font-bold text-slate-900">Certifications</h3>
-          <div className="mt-3">
-            <CertificationPicker selected={form.certifications || []} onChange={(v) => updateField("certifications", v)} certifications={certifications} />
+          <div>
+            <h3 className="font-bold text-slate-900">Certifications</h3>
+            <p className="text-sm text-slate-500">Add certifications from the saved front-page list, then track start and expiration dates.</p>
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-[1.2fr_1fr_1fr_auto]">
+            <select className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={certDraft.name} onChange={(e) => setCertDraft((c) => ({ ...c, name: e.target.value }))}>
+              <option value="">Select certification...</option>
+              {certifications.map((cert) => <option key={cert} value={cert}>{cert}</option>)}
+            </select>
+            <input type="date" className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={certDraft.start} onChange={(e) => setCertDraft((c) => ({ ...c, start: e.target.value }))} />
+            <input type="date" className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={certDraft.expiration} onChange={(e) => setCertDraft((c) => ({ ...c, expiration: e.target.value }))} />
+            <button type="button" onClick={addCertificationToResource} className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2 font-semibold text-white"><Plus size={16} /> Add</button>
+          </div>
+          <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-100 text-slate-600">
+                <tr><th className="p-3">Certification</th><th className="p-3">Start Date</th><th className="p-3">Expiration Date</th><th className="p-3">Status</th><th className="p-3 text-right">Action</th></tr>
+              </thead>
+              <tbody>
+                {normalizeResourceCertifications(form.certifications).map((cert) => {
+                  const status = getCertificationStatus(cert);
+                  return (
+                    <tr key={cert.id} className="border-t border-slate-200">
+                      <td className="p-3 font-semibold">{cert.name}</td>
+                      <td className="p-3">{cert.start ? formatDate(cert.start) : <span className="text-slate-300">—</span>}</td>
+                      <td className="p-3">{cert.expiration ? formatDate(cert.expiration) : <span className="text-slate-300">—</span>}</td>
+                      <td className="p-3"><span className={`rounded-full px-2 py-1 text-xs font-bold ${status === "expired" ? "bg-red-100 text-red-700" : status === "expiring" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>{status === "expired" ? "Past Due" : status === "expiring" ? "Expiring Soon" : "Current"}</span></td>
+                      <td className="p-3 text-right"><button type="button" onClick={() => deleteResourceCertification(cert.id)} className="text-red-700">Delete</button></td>
+                    </tr>
+                  );
+                })}
+                {normalizeResourceCertifications(form.certifications).length === 0 && <tr><td colSpan={5} className="p-4 text-center text-slate-400">No certifications added.</td></tr>}
+              </tbody>
+            </table>
           </div>
         </div>
 
@@ -1321,7 +1403,7 @@ export default function App() {
   const [dashboardResourceTypeFilter, setDashboardResourceTypeFilter] = useState([...defaultDashboardResourceTypes]);
   const [projectTabDivisionFilter, setProjectTabDivisionFilter] = useState([...divisions]);
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
-  const [demandZoom, setDemandZoom] = useState("Months");
+  const [demandZoom, setDemandZoom] = useState("Weeks");
   const [expandedView, setExpandedView] = useState(null);
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [currentUser, setCurrentUser] = useState(() => sessionStorage.getItem("ggc_current_user") || "");
@@ -1338,6 +1420,7 @@ export default function App() {
   const [demandPeriodDrilldown, setDemandPeriodDrilldown] = useState(null);
   const [showAssignments, setShowAssignments] = useState(false);
   const [showUnassignedNeedRows, setShowUnassignedNeedRows] = useState(false);
+  const [certAlertModal, setCertAlertModal] = useState(null);
 
   // ── Forecast state ─────────────────────────────────────────────────────────
   const [forecastData, setForecastData] = useState({});
@@ -1399,7 +1482,7 @@ export default function App() {
       if (certsRes.error) console.error("Certifications load error:", certsRes.error);
 
       setProjects((projectsRes.data || []).map(mapProjectFromDb));
-      setResources((resourcesRes.data || []).map(mapResourceFromDb));
+      setResources((resourcesRes.data || []).map(mapResourceFromDbLocal));
       const mappedCrews = (crewsRes.data || []).map(mapCrewFromDbLocal);
       setCrews(mappedCrews);
       setCrewGanttFilter((current) => current.length ? current : mappedCrews.map((c) => c.id));
@@ -1550,6 +1633,11 @@ export default function App() {
     return r.name.toLowerCase().includes(q) || r.resourceType.toLowerCase().includes(q) || (r.homeDivision || "").toLowerCase().includes(q) || (r.email || "").toLowerCase().includes(q);
   });
   const sortedResources = [...filteredResources].sort((a, b) => compareValues(a[resourceSort.key], b[resourceSort.key], resourceSort.direction));
+  const certificationAlertRows = resources.flatMap((resource) =>
+    normalizeResourceCertifications(resource.certifications).map((cert) => ({ resource, cert, status: getCertificationStatus(cert) }))
+  );
+  const expiringCertificationRows = certificationAlertRows.filter((row) => row.status === "expiring").sort((a, b) => new Date(a.cert.expiration) - new Date(b.cert.expiration));
+  const expiredCertificationRows = certificationAlertRows.filter((row) => row.status === "expired").sort((a, b) => new Date(a.cert.expiration) - new Date(b.cert.expiration));
   const sortedCrews = [...crews].filter((c) => {
     if (!crewSearch) return true;
     const q = crewSearch.toLowerCase();
@@ -1628,29 +1716,33 @@ export default function App() {
   }).filter(Boolean);
 
   const unassignedNeedResourceRows = showUnassignedNeedRows
-    ? unassignedNeedItems
-        .sort((a, b) => {
-          const divCompare = String(a.unassignedDivision || "").localeCompare(String(b.unassignedDivision || ""));
-          if (divCompare !== 0) return divCompare;
-          return new Date(a.start) - new Date(b.start);
-        })
-        .map((item) => {
-          const abbr = item.unassignedAbbreviation || getDivisionAbbreviation(item.unassignedDivision);
-          const searchText = `${abbr} unassigned ${item.unassignedDivision} ${item.project?.projectNumber || ""} ${item.project?.name || ""}`.toLowerCase();
-          if (dashboardResourceSearch && !searchText.includes(dashboardResourceSearch.toLowerCase())) return null;
-          return {
+    ? Object.values(unassignedNeedItems.reduce((groups, item) => {
+        const abbr = item.unassignedAbbreviation || getDivisionAbbreviation(item.unassignedDivision);
+        const key = `${abbr}-${item.project?.id || "missing-project"}`;
+        const searchText = `${abbr} unassigned ${item.unassignedDivision} ${item.project?.projectNumber || ""} ${item.project?.name || ""}`.toLowerCase();
+        if (dashboardResourceSearch && !searchText.includes(dashboardResourceSearch.toLowerCase())) return groups;
+        if (!groups[key]) {
+          groups[key] = {
             isUnassignedNeedRow: true,
             resource: {
-              id: `unassigned-${abbr}-${item.id}`,
+              id: `unassigned-${key}`,
               name: `${abbr} - Unassigned`,
               resourceType: "Unassigned Need",
               homeDivision: item.unassignedDivision,
               projectLabel: `${item.project?.projectNumber ? item.project.projectNumber + " - " : ""}${item.project?.name || ""}`,
             },
-            items: [item],
+            items: [],
+            sortDivision: item.unassignedDivision || "",
+            sortProject: `${item.project?.projectNumber || ""} ${item.project?.name || ""}`,
           };
-        })
-        .filter(Boolean)
+        }
+        groups[key].items.push(item);
+        return groups;
+      }, {})).sort((a, b) => {
+        const divCompare = String(a.sortDivision || "").localeCompare(String(b.sortDivision || ""));
+        if (divCompare !== 0) return divCompare;
+        return String(a.sortProject || "").localeCompare(String(b.sortProject || ""), undefined, { numeric: true });
+      })
     : [];
 
   const resourceGanttRowsWithUnassigned = [...resourceGanttRows, ...unassignedNeedResourceRows];
@@ -1810,15 +1902,15 @@ export default function App() {
   async function saveResource() {
     if (!resourceForm.name.trim()) { alert("Resource name is required."); return; }
     if (!supabase) { alert("Supabase is not connected."); return; }
-    const payload = resourceToDb(resourceForm);
+    const payload = resourceToDbLocal(resourceForm);
     if (editingResourceId) {
       const { data, error } = await supabase.from("resources").update(payload).eq("id", editingResourceId).select().single();
       if (error) { console.error(error); alert("Could not update resource."); return; }
-      setResources((current) => current.map((r) => (r.id === editingResourceId ? mapResourceFromDb(data) : r)));
+      setResources((current) => current.map((r) => (r.id === editingResourceId ? mapResourceFromDbLocal(data) : r)));
     } else {
       const { data, error } = await supabase.from("resources").insert(payload).select().single();
       if (error) { console.error(error); alert("Could not save resource."); return; }
-      setResources((current) => [mapResourceFromDb(data), ...current]);
+      setResources((current) => [mapResourceFromDbLocal(data), ...current]);
     }
     setShowResourceForm(false); setEditingResourceId(null); setResourceForm(blankResource);
   }
@@ -2239,7 +2331,7 @@ export default function App() {
   }
 
   function exportResourcesExcel() {
-    const rows = [["Name", "Resource Type", "Home Division", "Phone", "Email", "Certifications", "PTO"], ...resources.map((r) => [r.name, r.resourceType, r.homeDivision, r.phone, r.email, (r.certifications || []).join("; "), (r.pto || []).map((p) => `${p.ptoId}|${p.start}|${p.end}`).join("; ")])];
+    const rows = [["Name", "Resource Type", "Home Division", "Phone", "Email", "Certifications", "PTO"], ...resources.map((r) => [r.name, r.resourceType, r.homeDivision, r.phone, r.email, normalizeResourceCertifications(r.certifications).map(formatCertificationRecord).join("; "), (r.pto || []).map((p) => `${p.ptoId}|${p.start}|${p.end}`).join("; ")])];
     downloadTextFile("ggc-resources.csv", rows.map((r) => r.map(csvEscape).join(",")).join("\n"));
   }
 
@@ -2314,7 +2406,7 @@ export default function App() {
       if (!imported.length) { alert("No valid resources found in CSV."); return; }
       const { data, error } = await supabase.from("resources").insert(imported).select();
       if (error) { console.error(error); alert("Could not import resources."); return; }
-      setResources((current) => [...(data || []).map(mapResourceFromDb), ...current]);
+      setResources((current) => [...(data || []).map(mapResourceFromDbLocal), ...current]);
     });
   }
 
@@ -2492,6 +2584,18 @@ export default function App() {
                 </div>
               </div>
             )}
+            <div className="mb-5 grid gap-4 md:grid-cols-2">
+              <button type="button" onClick={() => setCertAlertModal("expiring")} className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-left shadow-sm hover:bg-amber-100">
+                <p className="text-sm font-semibold text-amber-800">Certifications Expiring Within 30 Days</p>
+                <p className="mt-1 text-3xl font-bold text-amber-900">{expiringCertificationRows.length}</p>
+                <p className="mt-1 text-xs text-amber-700">Click to review upcoming expirations.</p>
+              </button>
+              <button type="button" onClick={() => setCertAlertModal("expired")} className="rounded-2xl border border-red-200 bg-red-50 p-5 text-left shadow-sm hover:bg-red-100">
+                <p className="text-sm font-semibold text-red-800">Past Due Certifications</p>
+                <p className="mt-1 text-3xl font-bold text-red-900">{expiredCertificationRows.length}</p>
+                <p className="mt-1 text-xs text-red-700">Click to review expired certifications.</p>
+              </button>
+            </div>
             <div className="mb-4 flex flex-wrap gap-3 items-center">
               <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 flex-1 min-w-[200px] max-w-sm">
                 <Search size={15} className="text-slate-400 shrink-0" />
@@ -2519,7 +2623,7 @@ export default function App() {
                       <td className="p-3">{resource.homeDivision}</td>
                       <td className="p-3">{resource.phone}</td>
                       <td className="p-3">{resource.email}</td>
-                      <td className="p-3">{(resource.certifications || []).join(", ")}</td>
+                      <td className="p-3">{normalizeResourceCertifications(resource.certifications).map(formatCertificationRecord).join("; ")}</td>
                       <td className="p-3">{(resource.pto || []).map((p) => `${p.ptoId}: ${formatDate(p.start)} - ${formatDate(p.end)}`).join("; ")}</td>
                       <td className="p-3">{assignments.filter((a) => [a.projectManager, a.superintendent, a.fieldCoordinator, a.fieldEngineer, a.safety].includes(resource.name)).map((a) => findProject(projects, a.projectId)?.name).filter(Boolean).join(", ")}</td>
                       <td className="p-3 text-right">
@@ -3541,6 +3645,45 @@ export default function App() {
               <span className="text-slate-400">· Changing spread rule or clicking ↻ Recalculate redistributes remaining value instantly.</span>
             </div>
           </section>
+        );
+      })()}
+
+      {/* Certification Alert Modal */}
+      {certAlertModal && (() => {
+        const rows = certAlertModal === "expired" ? expiredCertificationRows : expiringCertificationRows;
+        const title = certAlertModal === "expired" ? "Past Due Certifications" : "Certifications Expiring Within 30 Days";
+        return (
+          <div className="fixed inset-0 z-[88] flex items-center justify-center bg-slate-950/60 p-4">
+            <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="flex items-center justify-between border-b border-slate-200 p-5">
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900">{title}</h2>
+                  <p className="text-sm text-slate-500">{rows.length} certification{rows.length === 1 ? "" : "s"} found.</p>
+                </div>
+                <button onClick={() => setCertAlertModal(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
+              </div>
+              <div className="overflow-auto p-5">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-100 text-slate-600">
+                    <tr><th className="p-3">Resource</th><th className="p-3">Resource Type</th><th className="p-3">Certification</th><th className="p-3">Start</th><th className="p-3">Expiration</th><th className="p-3">Status</th></tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(({ resource, cert, status }) => (
+                      <tr key={`${resource.id}-${cert.id}`} className="border-t border-slate-200">
+                        <td className="p-3 font-semibold text-slate-900">{resource.name}</td>
+                        <td className="p-3">{resource.resourceType}</td>
+                        <td className="p-3">{cert.name}</td>
+                        <td className="p-3">{cert.start ? formatDate(cert.start) : <span className="text-slate-300">—</span>}</td>
+                        <td className="p-3 font-semibold">{cert.expiration ? formatDate(cert.expiration) : <span className="text-slate-300">—</span>}</td>
+                        <td className="p-3"><span className={`rounded-full px-2 py-1 text-xs font-bold ${status === "expired" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>{status === "expired" ? "Past Due" : "Expiring Soon"}</span></td>
+                      </tr>
+                    ))}
+                    {rows.length === 0 && <tr><td colSpan={6} className="p-8 text-center text-slate-400">No certifications in this category.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         );
       })()}
 
