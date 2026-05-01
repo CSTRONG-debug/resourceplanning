@@ -105,6 +105,19 @@ function formatCertificationRecord(cert) {
   const dates = [c.start ? `Start: ${formatDate(c.start)}` : "", c.expiration ? `Expires: ${formatDate(c.expiration)}` : ""].filter(Boolean).join(" • ");
   return dates ? `${c.name} (${dates})` : c.name;
 }
+function parseResourceCertificationsCsv(value) {
+  return splitList(value).map((item) => {
+    const parts = item.split("|").map((part) => part.trim());
+    if (parts.length >= 2) {
+      return { id: crypto.randomUUID(), name: parts[0] || "", start: parts[1] || "", expiration: parts[2] || "" };
+    }
+    return { id: crypto.randomUUID(), name: item.trim(), start: "", expiration: "" };
+  }).filter((cert) => cert.name);
+}
+function certificationCsvValue(cert) {
+  const c = typeof cert === "string" ? { name: cert, start: "", expiration: "" } : cert || {};
+  return [c.name || "", c.start || "", c.expiration || ""].join("|");
+}
 function getCertificationStatus(cert) {
   const exp = toDate(cert?.expiration);
   if (!exp) return "current";
@@ -2527,12 +2540,12 @@ export default function App() {
   }
 
   function exportResourcesExcel() {
-    const rows = [["Name", "Resource Type", "Home Division", "Phone", "Email", "Certifications", "PTO"], ...resources.map((r) => [r.name, r.resourceType, r.homeDivision, r.phone, r.email, normalizeResourceCertifications(r.certifications).map(formatCertificationRecord).join("; "), (r.pto || []).map((p) => `${p.ptoId}|${p.start}|${p.end}`).join("; ")])];
+    const rows = [["Name", "Resource Type", "Home Division", "Status", "Phone", "Email", "Certifications (name|start|expiration)", "PTO (id|start|end)"], ...resources.map((r) => [r.name, r.resourceType, r.homeDivision, r.status || "Active", r.phone, r.email, normalizeResourceCertifications(r.certifications).map(certificationCsvValue).join("; "), (r.pto || []).map((p) => `${p.ptoId}|${p.start}|${p.end}`).join("; ")])];
     downloadTextFile("ggc-resources.csv", rows.map((r) => r.map(csvEscape).join(",")).join("\n"));
   }
 
   function exportCrewsExcel() {
-    const rows = [["Crew Name", "Foreman Name", "Specialty"], ...crews.map((c) => [c.crewName, c.foremanName, (c.specialty || []).join("; ")])];
+    const rows = [["Crew Name", "Foreman Name", "Total Members", "Status", "Deactivated", "Specialty"], ...crews.map((c) => [c.crewName, c.foremanName, c.totalMembers || 0, isCrewDeactivated(c) ? "Deactivated" : "Active", isCrewDeactivated(c) ? "TRUE" : "FALSE", (c.specialty || []).join("; ")])];
     downloadTextFile("ggc-crews.csv", rows.map((r) => r.map(csvEscape).join(",")).join("\n"));
   }
 
@@ -2598,7 +2611,7 @@ export default function App() {
   function importResourcesCsv(event) {
     readCsvFile(event, async (rows) => {
       if (!supabase) { alert("Supabase is not connected."); return; }
-      const imported = rows.map((row) => ({ name: row.name || "", resource_type: resourceTypes.includes(row.resourcetype) ? row.resourcetype : "Superintendent", home_division: divisions.includes(row.homedivision || row.division) ? (row.homedivision || row.division) : "Hardscape", phone: row.phone || "", email: row.email || "", certifications: splitList(row.certifications), pto: splitList(row.pto).map((item) => { const [ptoId, start, end] = item.split("|"); return { id: crypto.randomUUID(), ptoId: ptoId || "", start: start || "", end: end || "" }; }).filter((p) => p.ptoId || p.start || p.end), status: row.status || "Active" })).filter((r) => r.name);
+      const imported = rows.map((row) => ({ name: row.name || "", resource_type: resourceTypes.includes(row.resourcetype) ? row.resourcetype : "Superintendent", home_division: divisions.includes(row.homedivision || row.division) ? (row.homedivision || row.division) : "Hardscape", phone: row.phone || "", email: row.email || "", certifications: parseResourceCertificationsCsv(row.certifications || row.certificationsnamestartexpiration || row.certificationsname_start_expiration), pto: splitList(row.pto || row.ptoidstartend || row.ptoid_start_end).map((item) => { const [ptoId, start, end] = item.split("|"); return { id: crypto.randomUUID(), ptoId: ptoId || "", start: start || "", end: end || "" }; }).filter((p) => p.ptoId || p.start || p.end), status: row.status || "Active" })).filter((r) => r.name);
       if (!imported.length) { alert("No valid resources found in CSV."); return; }
       const { data, error } = await supabase.from("resources").insert(imported).select();
       if (error) { console.error(error); alert("Could not import resources."); return; }
@@ -2721,7 +2734,6 @@ export default function App() {
                     <th className="p-3 text-center">Total Members</th>
                     <th className="p-3 text-center">Status</th>
                     <th className="p-3">Specialty</th>
-                    <th className="p-3">Current Assignments</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2736,7 +2748,6 @@ export default function App() {
                         </span>
                       </td>
                       <td className="p-3">{(crew.specialty || []).join(", ")}</td>
-                      <td className="p-3">{assignments.filter((a) => getAssignmentCrewIds(a).includes(crew.id)).map((a) => findProject(projects, a.projectId)?.name).filter(Boolean).join(", ")}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -2802,8 +2813,7 @@ export default function App() {
                     <th onClick={() => toggleSort(setResourceSort, "resourceType")} className="cursor-pointer p-3 hover:bg-slate-200">Resource Type</th>
                     <th onClick={() => toggleSort(setResourceSort, "homeDivision")} className="cursor-pointer p-3 hover:bg-slate-200">Home Division</th>
                     <th className="p-3">Phone</th><th className="p-3">Email</th>
-                    <th className="p-3">Certifications</th><th className="p-3">PTO</th>
-                    <th className="p-3">Assigned Projects</th>
+                    <th className="p-3">Certifications</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2815,8 +2825,6 @@ export default function App() {
                       <td className="p-3">{resource.phone}</td>
                       <td className="p-3">{resource.email}</td>
                       <td className="p-3">{normalizeResourceCertifications(resource.certifications).map(formatCertificationRecord).join("; ")}</td>
-                      <td className="p-3">{(resource.pto || []).map((p) => `${p.ptoId}: ${formatDate(p.start)} - ${formatDate(p.end)}`).join("; ")}</td>
-                      <td className="p-3">{assignments.filter((a) => [a.projectManager, a.superintendent, a.fieldCoordinator, a.fieldEngineer, a.safety].includes(resource.name)).map((a) => findProject(projects, a.projectId)?.name).filter(Boolean).join(", ")}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -2863,7 +2871,7 @@ export default function App() {
               <MultiSelectFilter label="Division Filter" options={divisions} selected={projectTabDivisionFilter} setSelected={setProjectTabDivisionFilter} />
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="w-full min-w-[1450px] text-left text-sm">
+              <table className="w-full min-w-[1150px] text-left text-sm">
                 <thead className="bg-slate-100 text-slate-600">
                   <tr>
                     <th onClick={() => toggleSort(setProjectSort, "projectNumber")} className="cursor-pointer p-3 hover:bg-slate-200">Project #</th>
@@ -2872,9 +2880,6 @@ export default function App() {
                     <th className="p-3">Address</th>
                     <th onClick={() => toggleSort(setProjectSort, "division")} className="cursor-pointer p-3 hover:bg-slate-200">Division</th>
                     <th onClick={() => toggleSort(setProjectSort, "projectType")} className="cursor-pointer p-3 hover:bg-slate-200">Project Type</th>
-                    <th className="p-3">Owner</th>
-                    <th className="p-3">Architect</th>
-                    <th className="p-3">Engineer</th>
                     <th className="p-3">Requirements</th>
                     <th onClick={() => toggleSort(setProjectSort, "status")} className="cursor-pointer p-3 hover:bg-slate-200">Status</th>
                   </tr>
@@ -2888,9 +2893,6 @@ export default function App() {
                       <td className="p-3">{project.address}</td>
                       <td className="p-3">{project.division}</td>
                       <td className="p-3">{project.projectType || <span className="text-slate-300">—</span>}</td>
-                      <td className="p-3">{project.owner || <span className="text-slate-300">—</span>}</td>
-                      <td className="p-3">{project.architect || <span className="text-slate-300">—</span>}</td>
-                      <td className="p-3">{project.engineer || <span className="text-slate-300">—</span>}</td>
                       <td className="p-3">{(project.specificRequirements || []).join(", ")}</td>
                       <td className="p-3">{project.status}</td>
                     </tr>
