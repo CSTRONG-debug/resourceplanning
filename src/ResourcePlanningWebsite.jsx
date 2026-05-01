@@ -71,6 +71,40 @@ function crewToDbLocal(crew) {
   };
 }
 
+
+// Division abbreviations used for explicit unassigned needs on mobilizations.
+function getDivisionAbbreviation(division) {
+  const text = String(division || "").toLowerCase();
+  if (text.includes("hard")) return "HS";
+  if (text.includes("concrete") || text.includes("masonry") || text === "cm") return "CM";
+  if (text.includes("interior") || text === "in") return "IN";
+  if (text.includes("tilt") || text === "tl") return "TL";
+  return String(division || "").slice(0, 2).toUpperCase();
+}
+function normalizeUnassignedNeeds(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (value && typeof value === "object") return Object.entries(value).filter(([, checked]) => !!checked).map(([division]) => division);
+  return [];
+}
+function mapAssignmentFromDbLocal(assignment, mobilizations) {
+  const mapped = mapAssignmentFromDb(assignment, mobilizations);
+  const rawMobs = (mobilizations || []).filter((m) => m.assignment_id === assignment.id);
+  const byId = new Map(rawMobs.map((m) => [m.id, m]));
+  return {
+    ...mapped,
+    mobilizations: (mapped.mobilizations || []).map((mob) => {
+      const raw = byId.get(mob.id) || rawMobs.find((m) => m.start_date === mob.start && m.end_date === mob.end) || {};
+      return { ...mob, unassignedNeeds: normalizeUnassignedNeeds(raw.unassigned_needs || mob.unassignedNeeds) };
+    }),
+  };
+}
+function mobilizationToDbLocal(mobilization, assignmentId) {
+  return {
+    ...mobilizationToDb(mobilization, assignmentId),
+    unassigned_needs: normalizeUnassignedNeeds(mobilization.unassignedNeeds),
+  };
+}
+
 import { useSupabaseRealtime } from "./hooks/useSupabaseRealtime";
 
 
@@ -489,12 +523,23 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
     }));
   }
 
+
+  function toggleMobilizationUnassignedNeed(mobId, division) {
+    setForm((c) => ({
+      ...c,
+      mobilizations: (c.mobilizations || []).map((mob) => {
+        if (mob.id !== mobId) return mob;
+        return { ...mob, unassignedNeeds: toggleListValue(normalizeUnassignedNeeds(mob.unassignedNeeds), division) };
+      }),
+    }));
+  }
+
   function addMobilization() {
     setForm((c) => ({
       ...c,
       mobilizations: [...(c.mobilizations || []), {
         id: crypto.randomUUID(), start: "", durationWeeks: "", end: "",
-        superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false,
+        superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [],
       }],
     }));
   }
@@ -602,6 +647,28 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
                     {(form.mobilizations || []).length > 1 && (
                       <button type="button" onClick={() => removeMobilization(mob.id)} className="rounded-lg border border-red-200 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-50">Remove</button>
                     )}
+                  </div>
+
+                  {/* Explicit unassigned needs by division */}
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                    <p className="mb-2 text-xs font-bold uppercase tracking-wide text-amber-800">Unassigned Need</p>
+                    <div className="flex flex-wrap gap-3">
+                      {divisions.map((division) => {
+                        const active = normalizeUnassignedNeeds(mob.unassignedNeeds).includes(division);
+                        return (
+                          <label key={`${mob.id}-${division}-unassigned`} className={`flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1 text-xs font-bold ${active ? "border-amber-500 bg-white text-amber-900" : "border-amber-200 bg-amber-100/60 text-amber-700"}`}>
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-amber-600"
+                              checked={active}
+                              onChange={() => toggleMobilizationUnassignedNeed(mob.id, division)}
+                            />
+                            {getDivisionAbbreviation(division)}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-2 text-xs text-amber-700">Checked divisions create labeled Gantt placeholders like “HS - Unassigned”.</p>
                   </div>
 
                   {/* Dates row */}
@@ -879,7 +946,7 @@ export function GanttHeader({ timeline, zoom }) {
 
 export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
   const project = item.project;
-  const isUnassigned = !item.assignment?.superintendent;
+  const isUnassigned = !!item.isUnassignedNeed;
   const colorClass = isUnassigned || project.status === "Pending Award"
     ? pendingDivisionStyles[project.division] || "bg-slate-300"
     : divisionStyles[project.division] || "bg-slate-700";
@@ -898,7 +965,7 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
     project.projectNumber ? `${project.projectNumber} - ${project.name}` : project.name,
     `${project.division} • ${project.status}`,
     `${formatDate(item.start)} - ${formatDate(item.end)}`,
-    label ? `Assignment: ${label}` : "Unassigned",
+    label ? `Assignment: ${label}` : item.isUnassignedNeed ? `${item.unassignedAbbreviation} - Unassigned` : "Unassigned",
     conflict ? "Conflict detected" : "",
   ].filter(Boolean).join("\n");
 
@@ -949,7 +1016,7 @@ export function ProjectGanttRow({ assignment, project, items, timeline, crews })
       </button>
       <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
         {items.map((item) => (
-          <GanttSegmentBar key={item.id} item={item} timeline={timeline} label={getAssignmentPeopleLabel(item.assignment, crews)} />
+          <GanttSegmentBar key={item.id} item={item} timeline={timeline} label={item.isUnassignedNeed ? `${item.unassignedAbbreviation} - Unassigned` : getAssignmentPeopleLabel(item.assignment, crews)} />
         ))}
       </div>
     </div>
@@ -990,6 +1057,44 @@ export function ResourceGanttRow({ resource, items, timeline, onResourceClick })
         {ptoItems.map((pto) => (
           <PtoOverlayBar key={`${resource.id}-${pto.id || pto.ptoId}`} pto={pto} timeline={timeline} />
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── UnassignedNeedGanttRow ─────────────────────────────────────────────────
+
+export function UnassignedNeedGanttRow({ resource, items, timeline }) {
+  const sortedItems = [...items].sort((a, b) => new Date(a.start) - new Date(b.start));
+  const lanes = [];
+
+  sortedItems.forEach((item) => {
+    const start = toDate(item.start);
+    const end = toDate(item.end);
+    let laneIndex = lanes.findIndex(
+      (lane) => !lane.some((placed) => rangesOverlap(start, addDays(end, 1), toDate(placed.start), addDays(toDate(placed.end), 1)))
+    );
+    if (laneIndex === -1) { laneIndex = lanes.length; lanes.push([]); }
+    lanes[laneIndex].push(item);
+  });
+
+  return (
+    <div className="grid grid-cols-[260px_1fr] items-start gap-5">
+      <div className="sticky left-0 z-20 bg-white pr-3 text-left">
+        <p className="font-semibold text-amber-800">{resource.name}</p>
+        <p className="mt-1 text-xs text-slate-500">{resource.homeDivision} • {items.length} unassigned need{items.length === 1 ? "" : "s"}</p>
+      </div>
+      <div className="relative rounded-xl bg-amber-50" style={{ width: `${timeline.width}px`, height: `${Math.max(48, lanes.length * 48)}px` }}>
+        {lanes.map((lane, laneIndex) =>
+          lane.map((item) => (
+            <GanttSegmentBar
+              key={`${resource.id}-${item.id}`}
+              item={item}
+              timeline={timeline}
+              label={`${item.unassignedAbbreviation} - Unassigned`}
+            />
+          ))
+        )}
       </div>
     </div>
   );
@@ -1229,6 +1334,7 @@ export default function App() {
   const [demandDrilldown, setDemandDrilldown] = useState(null);
   const [demandPeriodDrilldown, setDemandPeriodDrilldown] = useState(null);
   const [showAssignments, setShowAssignments] = useState(false);
+  const [showUnassignedNeedRows, setShowUnassignedNeedRows] = useState(false);
 
   // ── Forecast state ─────────────────────────────────────────────────────────
   const [forecastData, setForecastData] = useState({});
@@ -1286,7 +1392,7 @@ export default function App() {
       const mappedCrews = (crewsRes.data || []).map(mapCrewFromDbLocal);
       setCrews(mappedCrews);
       setCrewGanttFilter((current) => current.length ? current : mappedCrews.map((c) => c.id));
-      setAssignments((assignmentsRes.data || []).map((a) => mapAssignmentFromDb(a, mobilizationsRes.data || [])));
+      setAssignments((assignmentsRes.data || []).map((a) => mapAssignmentFromDbLocal(a, mobilizationsRes.data || [])));
       if (certsRes.data?.length) setCertifications(certsRes.data.map(mapCertificationFromDb));
 
       // Load forecast rows into a map keyed by project_id
@@ -1377,6 +1483,29 @@ export default function App() {
   const activeProjects = projects.filter((p) => p.status !== "Complete");
   const timeline = useMemo(() => buildTimeline(visibleItems, zoom), [visibleItems, zoom]);
   const timelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, timeline));
+  function getUnassignedNeedsForItem(item) {
+    const direct = normalizeUnassignedNeeds(item.assignment?.unassignedNeeds || item.assignment?._unassignedNeeds);
+    if (direct.length) return direct;
+    const sourceAssignment = assignments.find((a) => a.id === item.assignment?.id || a.projectId === item.project?.id);
+    const sourceMob = (sourceAssignment?.mobilizations || []).find((mob) =>
+      mob.id === item.mobilizationId ||
+      (String(mob.start || "") === String(item.start || "") && String(mob.end || "") === String(item.end || ""))
+    );
+    return normalizeUnassignedNeeds(sourceMob?.unassignedNeeds);
+  }
+  const unassignedNeedItems = timelineVisibleItems.flatMap((item) =>
+    getUnassignedNeedsForItem(item).map((division) => {
+      const abbr = getDivisionAbbreviation(division);
+      return {
+        ...item,
+        id: `${item.id}-unassigned-${abbr}`,
+        isUnassignedNeed: true,
+        unassignedDivision: division,
+        unassignedAbbreviation: abbr,
+        assignment: { ...item.assignment, superintendent: `${abbr} - Unassigned` },
+      };
+    })
+  );
   // Demand chart uses its own independent timeline scoped to demandZoom
   const demandTimeline = useMemo(() => buildTimeline(visibleItems, demandZoom), [visibleItems, demandZoom]);
   const demandFilteredItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, demandTimeline)).map((item) => {
@@ -1435,7 +1564,7 @@ export default function App() {
     })
     .map((project) => {
       const projectAssignments = visibleAssignments.filter((a) => a.projectId === project.id);
-      const items = timelineVisibleItems.filter((item) => item.project.id === project.id);
+      const items = [...timelineVisibleItems, ...unassignedNeedItems].filter((item) => item.project.id === project.id);
       if (!items.length) return null;
       return { project, assignments: projectAssignments, assignment: projectAssignments[0] || {}, items };
     }).filter(Boolean);
@@ -1450,8 +1579,27 @@ export default function App() {
       [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].includes(resource.name)
     );
     if (!items.length) return null;
-    return { resource, items };
+    return { resource, items, isUnassignedNeedRow: false };
   }).filter(Boolean);
+
+  const unassignedNeedResourceRows = showUnassignedNeedRows
+    ? divisions.map((division) => {
+        const abbr = getDivisionAbbreviation(division);
+        if (dashboardResourceSearch) {
+          const q = dashboardResourceSearch.toLowerCase();
+          if (!`${abbr} unassigned ${division}`.toLowerCase().includes(q)) return null;
+        }
+        const items = unassignedNeedItems.filter((item) => item.unassignedDivision === division);
+        if (!items.length) return null;
+        return {
+          isUnassignedNeedRow: true,
+          resource: { id: `unassigned-${abbr}`, name: `${abbr} - Unassigned`, resourceType: "Unassigned Need", homeDivision: division },
+          items,
+        };
+      }).filter(Boolean)
+    : [];
+
+  const resourceGanttRowsWithUnassigned = [...resourceGanttRows, ...unassignedNeedResourceRows];
 
   const crewGanttRows = activeCrews
     .filter((c) => {
@@ -1515,7 +1663,7 @@ export default function App() {
     setEditingAssignmentId(null);
     setAssignmentForm({
       ...blankAssignment,
-      mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false }],
+      mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }],
     });
     setShowAssignmentForm(true);
   }
@@ -1523,7 +1671,7 @@ export default function App() {
   function openEditAssignmentForm(assignment) {
     setEditingAssignmentId(assignment.id);
     const mobs = (assignment.mobilizations?.length ? assignment.mobilizations : [
-      { id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false }
+      { id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }
     ]).map((mob, i) => {
       const isFirst = i === 0;
       return {
@@ -1538,6 +1686,7 @@ export default function App() {
           : (isFirst ? [assignment.crew1Id, assignment.crew2Id, assignment.crew3Id, assignment.crew4Id].filter(Boolean) : []),
         crewMenCounts: mob.crewMenCounts || {},
         crewOnly: mob.crewOnly || false,
+        unassignedNeeds: normalizeUnassignedNeeds(mob.unassignedNeeds),
       };
     });
     setAssignmentForm({
@@ -1567,18 +1716,18 @@ export default function App() {
       if (error) { console.error(error); alert("Could not save assignment."); return; }
       savedAssignment = data;
     }
-    const validMobs = (assignmentForm.mobilizations || []).filter((m) => m.start && m.end).map((m) => mobilizationToDb(m, savedAssignment.id));
+    const validMobs = (assignmentForm.mobilizations || []).filter((m) => m.start && m.end).map((m) => mobilizationToDbLocal(m, savedAssignment.id));
     let savedMobs = [];
     if (validMobs.length) {
       const { data, error } = await supabase.from("mobilizations").insert(validMobs).select();
       if (error) { console.error(error); alert("Could not save mobilizations."); return; }
       savedMobs = data || [];
     }
-    const mapped = mapAssignmentFromDb(savedAssignment, savedMobs);
+    const mapped = mapAssignmentFromDbLocal(savedAssignment, savedMobs);
     if (editingAssignmentId) setAssignments((current) => current.map((a) => (a.id === editingAssignmentId ? mapped : a)));
     else setAssignments((current) => [mapped, ...current]);
     setShowAssignmentForm(false); setEditingAssignmentId(null);
-    setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false }] });
+    setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }] });
   }
 
   async function deleteAssignment(id) {
@@ -2134,10 +2283,10 @@ export default function App() {
       for (const assignment of imported) {
         const { data, error } = await supabase.from("assignments").insert(assignmentToDb(assignment)).select().single();
         if (error) { console.error(error); continue; }
-        const validMobs = (assignment.mobilizations || []).filter((m) => m.start && m.end).map((m) => mobilizationToDb(m, data.id));
+        const validMobs = (assignment.mobilizations || []).filter((m) => m.start && m.end).map((m) => mobilizationToDbLocal(m, data.id));
         let savedMobs = [];
         if (validMobs.length) { const mobRes = await supabase.from("mobilizations").insert(validMobs).select(); savedMobs = mobRes.data || []; }
-        savedAssignments.push(mapAssignmentFromDb(data, savedMobs));
+        savedAssignments.push(mapAssignmentFromDbLocal(data, savedMobs));
       }
       if (savedAssignments.length) setAssignments((current) => [...savedAssignments, ...current]);
     });
@@ -2447,14 +2596,20 @@ export default function App() {
                   <Search size={15} className="text-slate-400" />
                   <input className="outline-none text-sm w-40" placeholder="Search resources…" value={dashboardResourceSearch} onChange={(e) => setDashboardResourceSearch(e.target.value)} />
                 </div>
+                <label className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
+                  <input type="checkbox" className="h-4 w-4 accent-amber-600" checked={showUnassignedNeedRows} onChange={(e) => setShowUnassignedNeedRows(e.target.checked)} />
+                  Show unassigned needs
+                </label>
                 <button onClick={() => exportSectionPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
               </div>
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
               <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                {resourceGanttRows.map((row) => (
-                  <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />
+                {resourceGanttRowsWithUnassigned.map((row) => (
+                  row.isUnassignedNeedRow
+                    ? <UnassignedNeedGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />
+                    : <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />
                 ))}
               </div>
             </div>
@@ -3025,7 +3180,7 @@ export default function App() {
                 <div>
                   <GanttHeader timeline={timeline} zoom={zoom} />
                   <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                    {resourceGanttRows.map((row) => <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}
+                    {resourceGanttRowsWithUnassigned.map((row) => row.isUnassignedNeedRow ? <UnassignedNeedGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} /> : <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}
                   </div>
                 </div>
               )}
