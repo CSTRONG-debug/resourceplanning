@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from "react";
-import { Plus, Trash2, Users, BriefcaseBusiness, X, ZoomIn, Settings, FolderKanban, ClipboardCheck, Search } from "lucide-react";
+import { Plus, Trash2, Users, BriefcaseBusiness, X, ZoomIn, Settings, FolderKanban, ClipboardCheck, Search, Sparkles } from "lucide-react";
 import { supabase } from "./lib/supabase";
+import ClaudeAssistant from "./components/ClaudeAssistant";
 
 import {
   divisions, statuses, resourceTypes, defaultDashboardResourceTypes, zoomModes,
@@ -1517,6 +1518,7 @@ export default function App() {
   const [demandZoom, setDemandZoom] = useState("Weeks");
   const [expandedView, setExpandedView] = useState(null);
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
+  const [showClaude, setShowClaude] = useState(false);
   const [currentUser, setCurrentUser] = useState(() => sessionStorage.getItem("ggc_current_user") || "");
   const [showUserSettings, setShowUserSettings] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ username: "", password: "" });
@@ -2768,20 +2770,36 @@ export default function App() {
   if (!currentUser) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
-        <form onSubmit={handleLogin} className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
-          <div className="h-1 w-24 rounded-full bg-emerald-700" />
-          <h1 className="mt-4 text-2xl font-bold text-slate-900">GGC Resource Planning</h1>
-          <p className="mt-1 text-sm text-slate-500">Sign in to access the scheduling system.</p>
-          <label className="mt-6 block space-y-1">
-            <span className="text-sm font-semibold text-slate-700">Username</span>
-            <input value={loginForm.username} onChange={(e) => setLoginForm((c) => ({ ...c, username: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
-          </label>
-          <label className="mt-4 block space-y-1">
-            <span className="text-sm font-semibold text-slate-700">Password</span>
-            <input type="password" value={loginForm.password} onChange={(e) => setLoginForm((c) => ({ ...c, password: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
-          </label>
-          <button type="submit" className="mt-6 w-full rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800">Log In</button>
-        </form>
+        <div className="w-full max-w-md">
+          <form onSubmit={handleLogin} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="h-1 w-24 rounded-full bg-emerald-700" />
+            <h1 className="mt-4 text-2xl font-bold text-slate-900">GGC Resource Planning</h1>
+            <p className="mt-1 text-sm text-slate-500">Sign in to access the scheduling system.</p>
+            <label className="mt-6 block space-y-1">
+              <span className="text-sm font-semibold text-slate-700">Username</span>
+              <input value={loginForm.username} onChange={(e) => setLoginForm((c) => ({ ...c, username: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
+            </label>
+            <label className="mt-4 block space-y-1">
+              <span className="text-sm font-semibold text-slate-700">Password</span>
+              <input type="password" value={loginForm.password} onChange={(e) => setLoginForm((c) => ({ ...c, password: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
+            </label>
+            <div className="mt-6 flex gap-2">
+              <button type="submit" className="flex-1 rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800">Log In</button>
+              <button
+                type="button"
+                onClick={() => setShowClaude(true)}
+                title="Connect Claude (optional)"
+                className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 font-semibold text-emerald-800 hover:bg-emerald-100"
+              >
+                <Sparkles size={16} /> Claude
+              </button>
+            </div>
+            <p className="mt-3 text-center text-xs text-slate-400">
+              Claude is optional. Requires your own paid Anthropic API key.
+            </p>
+          </form>
+        </div>
+        <ClaudeAssistant open={showClaude} onClose={() => setShowClaude(false)} appData={null} />
       </main>
     );
   }
@@ -2800,10 +2818,19 @@ export default function App() {
               <p className="mt-1 truncate text-sm text-slate-500">Project master list, resource assignments, and mobilization scheduling.</p>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-            <span className="max-w-[180px] truncate">{currentUser}</span>
-            <button onClick={() => setShowUserSettings(true)} className="rounded-lg p-1 hover:bg-slate-200" title="User settings"><Settings size={16} /></button>
-            <button onClick={logout} className="rounded-lg px-2 py-1 text-xs text-red-700 hover:bg-red-50">Logout</button>
+          <div className="flex shrink-0 items-center gap-3">
+            <button
+              onClick={() => setShowClaude(true)}
+              title="Ask Claude"
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+            >
+              <Sparkles size={18} />
+            </button>
+            <div className="flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+              <span className="max-w-[180px] truncate">{currentUser}</span>
+              <button onClick={() => setShowUserSettings(true)} className="rounded-lg p-1 hover:bg-slate-200" title="User settings"><Settings size={16} /></button>
+              <button onClick={logout} className="rounded-lg px-2 py-1 text-xs text-red-700 hover:bg-red-50">Logout</button>
+            </div>
           </div>
         </div>
         <div className="border-t border-slate-100 bg-white">
@@ -4159,6 +4186,13 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ── Claude Assistant ── */}
+      <ClaudeAssistant
+        open={showClaude}
+        onClose={() => setShowClaude(false)}
+        appData={{ projects, resources, crews, assignments, certifications }}
+      />
     </main>
   );
 }
