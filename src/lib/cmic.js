@@ -79,6 +79,16 @@ export async function fetchCmicJobs({ status = "active" } = {}) {
   return { raw: items, mapped, count: data.count };
 }
 
+// Convert raw CMiC dollar amount to thousands (the unit your forecast uses).
+// CMiC sends $1,500,000 as 1500000.00; your forecast stores 1500. Round to
+// the nearest whole thousand to avoid noise from cents in the diff.
+function toThousands(rawAmount) {
+  if (rawAmount == null || rawAmount === "") return null;
+  const n = Number(rawAmount);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n / 1000);
+}
+
 // Refresh contract values for the projects that originated from CMiC.
 // Strategy: ONE bulk call to fetch all CMiC jobs, then match locally by
 // JobCode === projectNumber. This is much faster than per-project calls
@@ -122,7 +132,7 @@ export async function fetchContractValueUpdates(localProjects) {
       continue;
     }
 
-    const cmicValue = pickField(job, CMIC_FIELDS.contractValue);
+    const cmicValue = toThousands(pickField(job, CMIC_FIELDS.contractValue));
     const currentValue = p.contractValue ?? null;
     // Compare as numbers to avoid 1000 vs "1000" false positives.
     const a = currentValue == null ? null : Number(currentValue);
@@ -176,8 +186,10 @@ export function mapCmicJobToProject(job) {
     division:      mapDivision(pickField(job, CMIC_FIELDS.division)),
     status:        mapStatus(pickField(job, CMIC_FIELDS.status)),
     projectType:   pickField(job, CMIC_FIELDS.projectType) || "",
-    contractValue: pickField(job, CMIC_FIELDS.contractValue),
-    includeInForecast: false,
+    contractValue: toThousands(pickField(job, CMIC_FIELDS.contractValue)),
+    // Default to true so newly-imported projects show up in the Forecast
+    // tab automatically — this is what GGC wants per the user request.
+    includeInForecast: true,
     // Mark provenance so we can show a CMiC badge in the UI.
     source: "cmic",
   };
