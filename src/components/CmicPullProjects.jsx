@@ -60,6 +60,7 @@ export default function CmicPullProjects({ projects, onApplied }) {
           status: p.status,
           project_type: p.projectType,
           include_in_forecast: false,
+          source: "cmic", // mark provenance for the CMiC badge
         }));
         const { error: insErr } = await supabase.from("projects").insert(rows);
         if (insErr) throw insErr;
@@ -139,9 +140,23 @@ function PreviewModal({
   const numCreate = Object.values(includeCreate).filter(Boolean).length;
   const numUpdate = Object.values(includeUpdate).filter(Boolean).length;
 
+  // Lock body scroll while the modal is open so it can't drift off-screen
+  // behind a scrolled page.
+  React.useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/40 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-2xl bg-white shadow-2xl">
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center overflow-y-auto bg-slate-950/40 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="my-auto flex max-h-[85vh] w-full max-w-3xl flex-col rounded-2xl bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <h2 className="text-lg font-bold text-slate-900">CMiC Sync Preview</h2>
