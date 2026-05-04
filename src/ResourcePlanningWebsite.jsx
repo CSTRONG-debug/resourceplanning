@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState, useRef } from "react";
 import { Plus, Trash2, Users, BriefcaseBusiness, X, ZoomIn, Settings, FolderKanban, ClipboardCheck, Search, Sparkles } from "lucide-react";
 import { supabase } from "./lib/supabase";
 import ClaudeAssistant from "./components/ClaudeAssistant";
+import CmicPullProjects from "./components/CmicPullProjects";
+import CmicRefreshContracts from "./components/CmicRefreshContracts";
 
 import {
   divisions, statuses, resourceTypes, defaultDashboardResourceTypes, zoomModes,
@@ -1574,59 +1576,60 @@ export default function App() {
   const [crewDeactivationOverrides, setCrewDeactivationOverrides] = useState({});
 
   // ── Initial Supabase load ──────────────────────────────────────────────────
-  useEffect(() => {
-    async function loadSupabaseData() {
-      if (!supabase) { console.warn("Supabase not connected. Check Vercel environment variables."); return; }
+  const loadSupabaseData = React.useCallback(async () => {
+    if (!supabase) { console.warn("Supabase not connected. Check Vercel environment variables."); return; }
 
-      const [projectsRes, resourcesRes, crewsRes, assignmentsRes, mobilizationsRes, certsRes, forecastRes, settingsRes] = await Promise.all([
-        supabase.from("projects").select("*").order("created_at", { ascending: false }),
-        supabase.from("resources").select("*").order("created_at", { ascending: false }),
-        supabase.from("crews").select("*").order("created_at", { ascending: false }),
-        supabase.from("assignments").select("*").order("created_at", { ascending: false }),
-        supabase.from("mobilizations").select("*"),
-        supabase.from("certifications").select("*").order("name", { ascending: true }),
-        supabase.from("forecast").select("*"),
-        supabase.from("forecast_settings").select("*").limit(1),
-      ]);
+    const [projectsRes, resourcesRes, crewsRes, assignmentsRes, mobilizationsRes, certsRes, forecastRes, settingsRes] = await Promise.all([
+      supabase.from("projects").select("*").order("created_at", { ascending: false }),
+      supabase.from("resources").select("*").order("created_at", { ascending: false }),
+      supabase.from("crews").select("*").order("created_at", { ascending: false }),
+      supabase.from("assignments").select("*").order("created_at", { ascending: false }),
+      supabase.from("mobilizations").select("*"),
+      supabase.from("certifications").select("*").order("name", { ascending: true }),
+      supabase.from("forecast").select("*"),
+      supabase.from("forecast_settings").select("*").limit(1),
+    ]);
 
-      if (projectsRes.error) console.error("Projects load error:", projectsRes.error);
-      if (resourcesRes.error) console.error("Resources load error:", resourcesRes.error);
-      if (crewsRes.error) console.error("Crews load error:", crewsRes.error);
-      if (assignmentsRes.error) console.error("Assignments load error:", assignmentsRes.error);
-      if (mobilizationsRes.error) console.error("Mobilizations load error:", mobilizationsRes.error);
-      if (certsRes.error) console.error("Certifications load error:", certsRes.error);
+    if (projectsRes.error) console.error("Projects load error:", projectsRes.error);
+    if (resourcesRes.error) console.error("Resources load error:", resourcesRes.error);
+    if (crewsRes.error) console.error("Crews load error:", crewsRes.error);
+    if (assignmentsRes.error) console.error("Assignments load error:", assignmentsRes.error);
+    if (mobilizationsRes.error) console.error("Mobilizations load error:", mobilizationsRes.error);
+    if (certsRes.error) console.error("Certifications load error:", certsRes.error);
 
-      setProjects((projectsRes.data || []).map(mapProjectFromDbLocal));
-      setResources((resourcesRes.data || []).map(mapResourceFromDbLocal));
-      const mappedCrews = (crewsRes.data || []).map(mapCrewFromDbLocal);
-      setCrews(mappedCrews);
-      setCrewGanttFilter((current) => current.length ? current : mappedCrews.map((c) => c.id));
-      setAssignments((assignmentsRes.data || []).map((a) => mapAssignmentFromDbLocal(a, mobilizationsRes.data || [])));
-      if (certsRes.data?.length) setCertifications(certsRes.data.map(mapCertificationFromDb));
+    setProjects((projectsRes.data || []).map(mapProjectFromDbLocal));
+    setResources((resourcesRes.data || []).map(mapResourceFromDbLocal));
+    const mappedCrews = (crewsRes.data || []).map(mapCrewFromDbLocal);
+    setCrews(mappedCrews);
+    setCrewGanttFilter((current) => current.length ? current : mappedCrews.map((c) => c.id));
+    setAssignments((assignmentsRes.data || []).map((a) => mapAssignmentFromDbLocal(a, mobilizationsRes.data || [])));
+    if (certsRes.data?.length) setCertifications(certsRes.data.map(mapCertificationFromDb));
 
-      // Load forecast rows into a map keyed by project_id
-      if (forecastRes.data && !forecastRes.error) {
-        const fMap = {};
-        forecastRes.data.forEach((row) => {
-          fMap[row.project_id] = {
-            id: row.id,
-            contractValue: row.contract_value || 0,
-            spreadRule: row.spread_rule || "even",
-            actuals: row.actuals || {},
-            redistributedSpread: row.redistributed_spread || {},
-            perProjectLockThrough: row.per_project_lock_through || null,
-          };
-        });
-        setForecastData(fMap);
-      }
-      if (settingsRes.data?.length && !settingsRes.error) {
-        const s = settingsRes.data[0];
-        setForecastSettingsId(s.id);
-        setGlobalLockThrough(s.global_lock_through || null);
-      }
+    // Load forecast rows into a map keyed by project_id
+    if (forecastRes.data && !forecastRes.error) {
+      const fMap = {};
+      forecastRes.data.forEach((row) => {
+        fMap[row.project_id] = {
+          id: row.id,
+          contractValue: row.contract_value || 0,
+          spreadRule: row.spread_rule || "even",
+          actuals: row.actuals || {},
+          redistributedSpread: row.redistributed_spread || {},
+          perProjectLockThrough: row.per_project_lock_through || null,
+        };
+      });
+      setForecastData(fMap);
     }
-    loadSupabaseData();
+    if (settingsRes.data?.length && !settingsRes.error) {
+      const s = settingsRes.data[0];
+      setForecastSettingsId(s.id);
+      setGlobalLockThrough(s.global_lock_through || null);
+    }
   }, []);
+
+  useEffect(() => {
+    loadSupabaseData();
+  }, [loadSupabaseData]);
 
   // ── Realtime subscriptions (#5) ────────────────────────────────────────────
   useSupabaseRealtime({ setProjects, setResources, setCrews, setAssignments, setCertifications });
@@ -2842,7 +2845,12 @@ export default function App() {
             </nav>
             <div className="flex shrink-0 items-center gap-2">
               {page === "dashboard" && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><ClipboardCheck size={18} /> Assign</button>}
-              {page === "projects" && <button onClick={openAddProjectForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Project</button>}
+              {page === "projects" && (
+                <>
+                  <CmicPullProjects projects={projects} onApplied={() => loadSupabaseData()} />
+                  <button onClick={openAddProjectForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Project</button>
+                </>
+              )}
               {page === "resources" && <button onClick={openAddResourceForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Resource</button>}
               {page === "crews" && <button onClick={openAddCrewForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Crew</button>}
             </div>
@@ -3978,6 +3986,7 @@ export default function App() {
               </div>
               <button onClick={exportForecastCsv} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">Export CSV</button>
               <button onClick={exportForecastPdf} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">Export PDF</button>
+              <CmicRefreshContracts projects={projects} forecastData={forecastData} onApplied={() => loadSupabaseData()} />
               <button onClick={recalculateAll} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 shadow-sm">↻ Recalculate</button>
               <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm cursor-pointer">
                 Import CSV<input type="file" accept=".csv" onChange={importForecastCsv} className="hidden" />
