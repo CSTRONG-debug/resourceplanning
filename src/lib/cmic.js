@@ -31,15 +31,15 @@ export const CMIC_FIELDS = {
 };
 
 // Map CMiC's single-letter JobStatusCode to your app's status strings.
-// Update these to whatever your app uses for status (you have "Complete"
-// in your code, plus presumably "Active" / "In Progress" / etc).
+// GGC's app does not use "In Progress" as a status — both CMiC's "I" and
+// "P" (the active/in-progress codes) collapse to "Active" here.
 const STATUS_MAP = {
   A: "Active",
-  I: "In Progress",
+  I: "Active",     // CMiC "In Progress" → GGC "Active"
   O: "Open",
   C: "Complete",
   H: "On Hold",
-  P: "Active", // CMiC uses "P" (Posted) for active jobs in some tenants
+  P: "Active",     // CMiC "Posted" (also active in some tenants)
 };
 
 // Map CMiC's short division/department codes to your app's full names.
