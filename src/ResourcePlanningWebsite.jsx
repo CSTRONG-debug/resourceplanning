@@ -1951,6 +1951,7 @@ export default function App() {
     if (!resource?.name) return [];
     const today = new Date();
     const fiveYearsAgo = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
+    const MIN_DAYS_CONTINUOUS = 28; // 4 weeks of continuous on-site time
     const byProject = new Map();
 
     ganttItems.forEach((item) => {
@@ -1961,6 +1962,13 @@ export default function App() {
       if (!start || !end) return;
       if (start > today) return; // no future projects
       if (end < fiveYearsAgo) return;
+
+      // Only count this mobilization if it is at least MIN_DAYS_CONTINUOUS
+      // long ON ITS OWN. This is a per-mobilization filter — short hits are
+      // dropped even if the resource visited the same project repeatedly.
+      // The aggregate for a project is the union of qualifying mobilizations.
+      const durationDays = Math.round((end - start) / (1000 * 60 * 60 * 24));
+      if (durationDays < MIN_DAYS_CONTINUOUS) return;
 
       const existing = byProject.get(item.project.id);
       if (!existing) {
@@ -2018,12 +2026,12 @@ export default function App() {
     </tr>`).join("");
     const certRows = currentCerts.map((cert) => `<tr><td>${escapeHtml(cert.name)}</td><td>${fmt(cert.start)}</td><td>${fmt(cert.expiration)}</td></tr>`).join("");
     const html = `<!doctype html><html><head><title>${escapeHtml(resource.name)} Resume</title><style>
-      @page{size:letter;margin:.45in} body{font-family:Arial,sans-serif;color:#0f172a;font-size:11px} h1{font-size:24px;margin:0} h2{font-size:14px;margin:18px 0 6px;border-bottom:2px solid #047857;padding-bottom:4px} h3{font-size:12px;margin:0 0 6px;color:#065f46}.header{display:flex;justify-content:space-between;gap:18px;border-bottom:4px solid #047857;padding-bottom:12px}.muted{color:#64748b}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:#f8fafc}.stat ol{margin:0;padding-left:18px}.stat li{margin:4px 0}.stat li strong{float:right} table{width:100%;border-collapse:collapse} th{background:#f1f5f9;text-align:left;padding:6px;border-bottom:2px solid #cbd5e1}td{padding:6px;border-bottom:1px solid #e2e8f0;vertical-align:top}span{color:#64748b}.small{font-size:10px;color:#64748b}
+      @page{size:letter;margin:.45in} body{font-family:Arial,sans-serif;color:#0f172a;font-size:11px} h1{font-size:24px;margin:0} h2{font-size:14px;margin:18px 0 6px;border-bottom:2px solid #047857;padding-bottom:4px} h3{font-size:12px;margin:0 0 6px;color:#065f46}.header{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;border-bottom:4px solid #047857;padding-bottom:12px}.header-left{display:flex;align-items:center;gap:14px}.logo{height:54px;width:auto;flex-shrink:0}.muted{color:#64748b}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:#f8fafc}.stat ol{margin:0;padding-left:18px}.stat li{margin:4px 0}.stat li strong{float:right} table{width:100%;border-collapse:collapse} th{background:#f1f5f9;text-align:left;padding:6px;border-bottom:2px solid #cbd5e1}td{padding:6px;border-bottom:1px solid #e2e8f0;vertical-align:top}span{color:#64748b}.small{font-size:10px;color:#64748b}.criteria{font-size:9px;color:#64748b;font-style:italic;margin:0 0 6px}
     </style></head><body>
-      <div class="header"><div><h1>${escapeHtml(resource.name)}</h1><p class="muted">${escapeHtml(resource.resourceType)} • ${escapeHtml(resource.homeDivision)}</p></div><div class="small">${escapeHtml(resource.phone)}<br>${escapeHtml(resource.email)}<br>Generated ${new Date().toLocaleDateString()}</div></div>
+      <div class="header"><div class="header-left"><img class="logo" src="${window.location.origin}/logo.png" alt="GGC" onerror="this.style.display='none'"/><div><h1>${escapeHtml(resource.name)}</h1><p class="muted">${escapeHtml(resource.resourceType)} • ${escapeHtml(resource.homeDivision)}</p></div></div><div class="small">${escapeHtml(resource.phone)}<br>${escapeHtml(resource.email)}<br>Generated ${new Date().toLocaleDateString()}</div></div>
       <h2>Top Experience Stats</h2><div class="grid">${statList("Owners", stats.owners)}${statList("Architects", stats.architects)}${statList("Engineers", stats.engineers)}${statList("Project Types", stats.projectTypes)}</div>
       <h2>Current Certifications</h2><table><thead><tr><th>Certification</th><th>Start Date</th><th>Expiration Date</th></tr></thead><tbody>${certRows || `<tr><td colspan="3" class="muted">No current certifications listed.</td></tr>`}</tbody></table>
-      <h2>Project Experience — Past 5 Years</h2><p class="small">Completed and current projects only; future projects are excluded.</p><table><thead><tr><th>Project</th><th>Type</th><th>Owner</th><th>Architect</th><th>Engineer</th><th>Dates</th></tr></thead><tbody>${projectRows || `<tr><td colspan="6" class="muted">No qualifying project history found.</td></tr>`}</tbody></table>
+      <h2>Project Experience — Past 5 Years</h2><p class="criteria">Includes only continuous on-site assignments of 4 weeks or longer. Future projects are excluded.</p><table><thead><tr><th>Project</th><th>Type</th><th>Owner</th><th>Architect</th><th>Engineer</th><th>Dates</th></tr></thead><tbody>${projectRows || `<tr><td colspan="6" class="muted">No qualifying project history found.</td></tr>`}</tbody></table>
       <script>window.onload=function(){setTimeout(function(){window.print()},400)}<\/script>
     </body></html>`;
     const w = window.open("", "_blank", "width=950,height=1100");
@@ -2653,6 +2661,122 @@ export default function App() {
     downloadTextFile("ggc-crews.csv", rows.map((r) => r.map(csvEscape).join(",")).join("\n"));
   }
 
+  // Lazy-load html2canvas and jsPDF the first time a screenshot export is
+  // triggered. We append <script> tags to the document and resolve once each
+  // library has populated its global. After the first load they stay cached
+  // for the session, so subsequent exports are instant.
+  function loadScreenshotLibs() {
+    return new Promise((resolve, reject) => {
+      const needHtml2Canvas = typeof window.html2canvas === "undefined";
+      const needJsPdf = typeof window.jspdf === "undefined";
+      if (!needHtml2Canvas && !needJsPdf) return resolve();
+
+      const loadScript = (src) => new Promise((res, rej) => {
+        const s = document.createElement("script");
+        s.src = src;
+        s.async = true;
+        s.onload = res;
+        s.onerror = () => rej(new Error(`Failed to load ${src}`));
+        document.head.appendChild(s);
+      });
+
+      Promise.all([
+        needHtml2Canvas ? loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js") : Promise.resolve(),
+        needJsPdf ? loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js") : Promise.resolve(),
+      ]).then(resolve).catch(reject);
+    });
+  }
+
+  // Screenshot-based PDF export. Captures whatever is currently visible of
+  // the named element and embeds it into a single landscape PDF page,
+  // scaled to fit while preserving aspect ratio. Used for the three Gantt
+  // charts where the user wanted a "true screenshot of what I see."
+  //
+  // Caveat: the resulting PDF is a rasterized image — text inside is not
+  // selectable or searchable. That's fine for visualizations.
+  async function exportSectionScreenshotPdf(sectionId, title) {
+    const section = document.getElementById(sectionId);
+    if (!section) { alert(`Could not find "${title}" to export.`); return; }
+
+    try {
+      await loadScreenshotLibs();
+    } catch (err) {
+      alert("Could not load PDF libraries. Check your internet connection and try again.");
+      console.error(err);
+      return;
+    }
+
+    // Capture at 2× device pixel ratio so the rasterized image looks crisp,
+    // not pixelated, when the user zooms in on the PDF.
+    let canvas;
+    try {
+      canvas = await window.html2canvas(section, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        logging: false,
+        // Capture only what's visible inside the element's scroll viewport,
+        // matching the user's "screenshot of what I see" expectation.
+        windowWidth: section.clientWidth,
+        windowHeight: section.clientHeight,
+      });
+    } catch (err) {
+      alert("Could not capture the chart. Try scrolling so the chart is fully visible, then export again.");
+      console.error(err);
+      return;
+    }
+
+    const imgData = canvas.toDataURL("image/png");
+    const { jsPDF } = window.jspdf;
+
+    // Landscape page sized to the captured image's aspect ratio so we don't
+    // end up with awkward whitespace bands.
+    const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+
+    // Reserve a strip for the title and footer.
+    const titleStripHeight = 28;
+    const footerStripHeight = 16;
+    const horizontalMargin = 24;
+    const availableWidth = pageWidth - horizontalMargin * 2;
+    const availableHeight = pageHeight - titleStripHeight - footerStripHeight;
+
+    // Scale image to fit available area while preserving aspect ratio.
+    const imgRatio = canvas.width / canvas.height;
+    let drawWidth = availableWidth;
+    let drawHeight = drawWidth / imgRatio;
+    if (drawHeight > availableHeight) {
+      drawHeight = availableHeight;
+      drawWidth = drawHeight * imgRatio;
+    }
+    const drawX = (pageWidth - drawWidth) / 2;
+    const drawY = titleStripHeight + (availableHeight - drawHeight) / 2;
+
+    // Title strip
+    pdf.setFontSize(13);
+    pdf.setFont("helvetica", "bold");
+    pdf.text(title || "GGC Export", horizontalMargin, 20);
+
+    // Image
+    pdf.addImage(imgData, "PNG", drawX, drawY, drawWidth, drawHeight, undefined, "FAST");
+
+    // Footer
+    pdf.setFontSize(8);
+    pdf.setFont("helvetica", "normal");
+    pdf.setTextColor(100);
+    pdf.text(
+      `Generated ${new Date().toLocaleString()} • GGC Resource Planning`,
+      horizontalMargin,
+      pageHeight - 8
+    );
+
+    // Build a sensible filename from the title.
+    const safeTitle = (title || "GGC Export").replace(/[^a-z0-9]+/gi, "_").toLowerCase();
+    const datestamp = new Date().toISOString().slice(0, 10);
+    pdf.save(`${safeTitle}_${datestamp}.pdf`);
+  }
+
   function exportSectionPdf(sectionId, title) {
     const section = document.getElementById(sectionId);
     if (!section) { alert(`Could not find section "${title}" to export.`); return; }
@@ -3095,7 +3219,7 @@ export default function App() {
                   <input className="outline-none text-sm w-40" placeholder="Search projects…" value={dashboardProjectSearch} onChange={(e) => setDashboardProjectSearch(e.target.value)} />
                 </div>
                 <button onClick={exportDashboardExcel} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button>
-                <button onClick={() => exportSectionPdf("project-assignment-gantt", "Project Assignment Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
+                <button onClick={() => exportSectionScreenshotPdf("project-assignment-gantt", "Project Assignment Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
                 <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                   <ZoomIn size={16} className="text-slate-500" />
                   <span className="text-sm font-medium text-slate-700">Zoom</span>
@@ -3158,7 +3282,7 @@ export default function App() {
                   <input type="checkbox" className="h-4 w-4 accent-amber-600" checked={showUnassignedNeedRows} onChange={(e) => setShowUnassignedNeedRows(e.target.checked)} />
                   Show unassigned needs
                 </label>
-                <button onClick={() => exportSectionPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
+                <button onClick={() => exportSectionScreenshotPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
               </div>
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
@@ -3212,7 +3336,7 @@ export default function App() {
                 </div>
                 <p className="text-sm text-slate-500">Rows are crews. Overlapping projects stack below each other within the same crew row.</p>
               </div>
-              <button onClick={() => exportSectionPdf("crew-gantt", "Crew Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
+              <button onClick={() => exportSectionScreenshotPdf("crew-gantt", "Crew Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
             </div>
             <div className="mb-4 flex flex-wrap gap-3 items-start">
               <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
