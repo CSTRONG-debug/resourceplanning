@@ -95,18 +95,33 @@ export default function CmicPullProjects({ projects, onApplied }) {
         }
       }
 
-      // Updates — apply only the changed fields, not the whole row.
-      // Skip contractValue here for the same reason as above.
+      // Updates — apply only the changed fields, plus always stamp
+      // source='cmic' so the CMiC badge is applied/preserved on every
+      // CMiC-matched project. We also re-stamp source on rows that have
+      // NO field changes so projects manually created with a matching
+      // project number get tagged retroactively.
       for (const u of updates) {
-        const patch = {};
+        const patch = { source: "cmic" };
         for (const [k, v] of Object.entries(u.changes)) {
           if (k === "contractValue") continue; // forecast table, not projects
           patch[snake(k)] = v.to;
         }
-        if (Object.keys(patch).length === 0) continue;
         const { error: upErr } = await supabase
           .from("projects")
           .update(patch)
+          .eq("id", u.existing.id);
+        if (upErr) throw upErr;
+      }
+
+      // Same treatment for the "unchanged" bucket — these are projects that
+      // already match CMiC field-for-field. They might still be missing the
+      // source='cmic' tag (e.g. created manually before the integration was
+      // installed). Stamp them so the badge appears.
+      for (const u of preview.unchanged) {
+        if (u.existing.source === "cmic") continue; // already tagged
+        const { error: upErr } = await supabase
+          .from("projects")
+          .update({ source: "cmic" })
           .eq("id", u.existing.id);
         if (upErr) throw upErr;
       }
