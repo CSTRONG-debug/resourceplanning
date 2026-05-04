@@ -79,27 +79,37 @@ export async function fetchCmicJobs({ status = "active" } = {}) {
   return { raw: items, mapped, count: data.count };
 }
 
-// Refresh just the contract values for the projects that originated from
-// CMiC. Returns an array of { projectNumber, currentValue, cmicValue, changed }.
+// Refresh contract values for the projects that originated from CMiC.
+// Strategy: ONE bulk call to fetch all CMiC jobs, then match locally by
+// JobCode === projectNumber. This is much faster than per-project calls
+// and avoids the path-format problem (CMiC's single-record GET expects
+// JobVUuid, not JobCode).
+//
+// Returns an array of { projectId, projectNumber, name, currentValue,
+// cmicValue, changed, error } — one entry per local project.
 export async function fetchContractValueUpdates(localProjects) {
+  // Single bulk call — same one the Pull Projects button uses, just with
+  // status=all so we don't lose visibility on jobs that may have moved
+  // status since the last pull (we still want to refresh those values).
+  let cmicJobsByCode;
+  try {
+    const data = await callProxy(`/jobs?status=all`);
+    const items = data.items || [];
+    cmicJobsByCode = new Map(
+      items.map((j) => [String(pickField(j, CMIC_FIELDS.projectNumber)), j])
+    );
+  } catch (err) {
+    // If the bulk call itself fails, propagate as a single error so the
+    // UI can surface it once instead of 91 times.
+    throw new Error(`Could not fetch jobs from CMiC: ${err.message}`);
+  }
+
   const updates = [];
   for (const p of localProjects) {
     if (!p.projectNumber) continue;
-    try {
-      const job = await callProxy(`/jobs/${encodeURIComponent(p.projectNumber)}`);
-      const cmicValue = pickField(job, CMIC_FIELDS.contractValue);
-      const currentValue = p.contractValue ?? null;
-      const changed = Number(cmicValue) !== Number(currentValue);
-      updates.push({
-        projectId: p.id,
-        projectNumber: p.projectNumber,
-        name: p.name,
-        currentValue,
-        cmicValue,
-        changed,
-        error: null,
-      });
-    } catch (err) {
+
+    const job = cmicJobsByCode.get(String(p.projectNumber));
+    if (!job) {
       updates.push({
         projectId: p.id,
         projectNumber: p.projectNumber,
@@ -107,10 +117,29 @@ export async function fetchContractValueUpdates(localProjects) {
         currentValue: p.contractValue ?? null,
         cmicValue: null,
         changed: false,
-        error: err.message,
+        error: "Not found in CMiC",
       });
+      continue;
     }
+
+    const cmicValue = pickField(job, CMIC_FIELDS.contractValue);
+    const currentValue = p.contractValue ?? null;
+    // Compare as numbers to avoid 1000 vs "1000" false positives.
+    const a = currentValue == null ? null : Number(currentValue);
+    const b = cmicValue == null ? null : Number(cmicValue);
+    const changed = a !== b;
+
+    updates.push({
+      projectId: p.id,
+      projectNumber: p.projectNumber,
+      name: p.name,
+      currentValue,
+      cmicValue,
+      changed,
+      error: null,
+    });
   }
+
   return updates;
 }
 
