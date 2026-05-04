@@ -3965,6 +3965,7 @@ export default function App() {
         const monthTotals = months.map((_, i) => projectRows.reduce((s, r) => s + r.monthValues[i].value, 0));
         const yearGrandTotal = monthTotals.reduce((s, v) => s + v, 0);
         const thereafterTotal = projectRows.reduce((s, r) => s + r.thereafter, 0);
+        const contractValueTotal = projectRows.reduce((s, r) => s + (Number(r.row.contractValue) || 0), 0);
         const cumulativeTotals = monthTotals.map((_, i) => monthTotals.slice(0, i + 1).reduce((s, v) => s + v, 0));
 
         const fmt = (v) => v == null ? "" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
@@ -4107,7 +4108,10 @@ export default function App() {
                   {/* Monthly totals */}
                   <tr className="border-t-2 border-slate-300 bg-slate-100 font-semibold text-slate-800">
                     <td className="sticky left-0 z-10 bg-slate-100 p-3">Monthly Total</td>
-                    <td className="p-3" /><td className="p-3" /><td className="p-3 bg-slate-200" /><td className="p-3" />
+                    <td className="p-3" />
+                    <td className="p-3 text-right">{fmt(contractValueTotal)}</td>
+                    <td className="p-3 bg-slate-200" />
+                    <td className="p-3" />
                     {monthTotals.map((total, i) => (
                       <td key={months[i].key} className={`p-3 text-right ${globalLockThrough && months[i].key <= globalLockThrough ? "bg-amber-100" : ""}`}>{fmt(total)}</td>
                     ))}
