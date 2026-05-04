@@ -24,7 +24,10 @@ export const CMIC_FIELDS = {
   division:      "JobBillDeptCode", // GGC may use a custom field — confirm
   status:        "JobStatusCode",   // single letter code: A/I/O/C/etc
   projectType:   "JobTypeCode",     // may not exist; can be left null
-  contractValue: "JobBillAmt",      // contract / billing amount
+  contractValue: "JobContractAmt", // current contract incl. approved change orders
+                                   // (NOT JobBillAmt — that's billed-to-date,
+                                   // and NOT JobOriginalContractAmt — that's
+                                   // frozen at job creation)
 };
 
 // Map CMiC's single-letter JobStatusCode to your app's status strings.
