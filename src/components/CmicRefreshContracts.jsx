@@ -7,6 +7,7 @@
 // projects table itself).
 
 import React, { useState } from "react";
+import { createPortal } from "react-dom";
 import { RefreshCw, X, Check, Loader2, AlertCircle } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { fetchContractValueUpdates } from "../lib/cmic";
@@ -103,10 +104,16 @@ export default function CmicRefreshContracts({ projects, forecastData, onApplied
         </div>
       )}
 
-      {updates && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/40 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-2xl bg-white shadow-2xl">
-            <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+      {updates && createPortal(
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/40 p-4"
+          onClick={() => { setUpdates(null); setError(""); }}
+        >
+          <div
+            className="flex h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="flex shrink-0 items-center justify-between border-b border-slate-200 px-5 py-4">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">Contract Value Updates</h2>
                 <p className="text-xs text-slate-500">
@@ -170,12 +177,12 @@ export default function CmicRefreshContracts({ projects, forecastData, onApplied
             </div>
 
             {error && (
-              <div className="border-t border-red-200 bg-red-50 px-5 py-3 text-sm text-red-700">
+              <div className="shrink-0 border-t border-red-200 bg-red-50 px-5 py-3 text-sm text-red-700">
                 {error}
               </div>
             )}
 
-            <footer className="flex items-center justify-between border-t border-slate-200 px-5 py-4">
+            <footer className="flex shrink-0 items-center justify-between border-t border-slate-200 px-5 py-4">
               <div className="text-xs text-slate-500">
                 Will update <strong>{includedCount}</strong> projects
               </div>
@@ -198,7 +205,8 @@ export default function CmicRefreshContracts({ projects, forecastData, onApplied
               </div>
             </footer>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );

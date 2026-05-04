@@ -6,6 +6,7 @@
 // written to the database until the user confirms.
 
 import React, { useState } from "react";
+import { createPortal } from "react-dom";
 import { Download, X, Plus, Edit3, Check, AlertCircle, Loader2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { fetchCmicJobs, diffCmicAgainstLocal } from "../lib/cmic";
@@ -148,16 +149,18 @@ function PreviewModal({
     return () => { document.body.style.overflow = prev; };
   }, []);
 
-  return (
+  // Render via a portal directly under <body> so the modal can't be clipped
+  // by any parent's `overflow: hidden`, transform, or stacking context.
+  return createPortal(
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center overflow-y-auto bg-slate-950/40 p-4"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/40 p-4"
       onClick={onCancel}
     >
       <div
-        className="my-auto flex max-h-[85vh] w-full max-w-3xl flex-col rounded-2xl bg-white shadow-2xl"
+        className="flex h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+        <header className="flex shrink-0 items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <h2 className="text-lg font-bold text-slate-900">CMiC Sync Preview</h2>
             <p className="text-xs text-slate-500">
@@ -257,12 +260,12 @@ function PreviewModal({
         </div>
 
         {error && (
-          <div className="border-t border-red-200 bg-red-50 px-5 py-3 text-sm text-red-700">
+          <div className="shrink-0 border-t border-red-200 bg-red-50 px-5 py-3 text-sm text-red-700">
             {error}
           </div>
         )}
 
-        <footer className="flex items-center justify-between border-t border-slate-200 px-5 py-4">
+        <footer className="flex shrink-0 items-center justify-between border-t border-slate-200 px-5 py-4">
           <div className="text-xs text-slate-500">
             Will create <strong>{numCreate}</strong> · Will update <strong>{numUpdate}</strong>
           </div>
@@ -285,6 +288,7 @@ function PreviewModal({
           </div>
         </footer>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
