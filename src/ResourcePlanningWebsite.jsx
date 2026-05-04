@@ -2026,13 +2026,22 @@ export default function App() {
     </tr>`).join("");
     const certRows = currentCerts.map((cert) => `<tr><td>${escapeHtml(cert.name)}</td><td>${fmt(cert.start)}</td><td>${fmt(cert.expiration)}</td></tr>`).join("");
     const html = `<!doctype html><html><head><title>${escapeHtml(resource.name)} Resume</title><style>
-      @page{size:letter;margin:.45in} body{font-family:Arial,sans-serif;color:#0f172a;font-size:11px} h1{font-size:24px;margin:0} h2{font-size:14px;margin:18px 0 6px;border-bottom:2px solid #047857;padding-bottom:4px} h3{font-size:12px;margin:0 0 6px;color:#065f46}.header{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;border-bottom:4px solid #047857;padding-bottom:12px}.header-left{display:flex;align-items:center;gap:14px}.logo{height:54px;width:auto;flex-shrink:0}.muted{color:#64748b}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:#f8fafc}.stat ol{margin:0;padding-left:18px}.stat li{margin:4px 0}.stat li strong{float:right} table{width:100%;border-collapse:collapse} th{background:#f1f5f9;text-align:left;padding:6px;border-bottom:2px solid #cbd5e1}td{padding:6px;border-bottom:1px solid #e2e8f0;vertical-align:top}span{color:#64748b}.small{font-size:10px;color:#64748b}.criteria{font-size:9px;color:#64748b;font-style:italic;margin:0 0 6px}
+      @page{size:letter;margin:.45in} body{font-family:Arial,sans-serif;color:#0f172a;font-size:11px} h1{font-size:24px;margin:0} h2{font-size:14px;margin:18px 0 6px;border-bottom:2px solid #047857;padding-bottom:4px} h3{font-size:12px;margin:0 0 6px;color:#065f46}.header{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;border-bottom:4px solid #047857;padding-bottom:12px}.header-left{display:flex;align-items:center;gap:14px}.logo{height:54px;width:auto;flex-shrink:0;display:block}.muted{color:#64748b}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:#f8fafc}.stat ol{margin:0;padding-left:18px}.stat li{margin:4px 0}.stat li strong{float:right} table{width:100%;border-collapse:collapse} th{background:#f1f5f9;text-align:left;padding:6px;border-bottom:2px solid #cbd5e1}td{padding:6px;border-bottom:1px solid #e2e8f0;vertical-align:top}span{color:#64748b}.small{font-size:10px;color:#64748b}.criteria{font-size:9px;color:#64748b;font-style:italic;margin:0 0 6px}
     </style></head><body>
-      <div class="header"><div class="header-left"><img class="logo" src="${window.location.origin}/logo.png" alt="GGC" onerror="this.style.display='none'"/><div><h1>${escapeHtml(resource.name)}</h1><p class="muted">${escapeHtml(resource.resourceType)} • ${escapeHtml(resource.homeDivision)}</p></div></div><div class="small">${escapeHtml(resource.phone)}<br>${escapeHtml(resource.email)}<br>Generated ${new Date().toLocaleDateString()}</div></div>
+      <div class="header"><div class="header-left"><img id="ggc-logo" class="logo" src="${window.location.origin}/logo.png" alt="GGC" onerror="this.style.display='none';window.__logoDone&&window.__logoDone();" onload="window.__logoDone&&window.__logoDone();"/><div><h1>${escapeHtml(resource.name)}</h1><p class="muted">${escapeHtml(resource.resourceType)} • ${escapeHtml(resource.homeDivision)}</p></div></div><div class="small">${escapeHtml(resource.phone)}<br>${escapeHtml(resource.email)}<br>Generated ${new Date().toLocaleDateString()}</div></div>
       <h2>Top Experience Stats</h2><div class="grid">${statList("Owners", stats.owners)}${statList("Architects", stats.architects)}${statList("Engineers", stats.engineers)}${statList("Project Types", stats.projectTypes)}</div>
       <h2>Current Certifications</h2><table><thead><tr><th>Certification</th><th>Start Date</th><th>Expiration Date</th></tr></thead><tbody>${certRows || `<tr><td colspan="3" class="muted">No current certifications listed.</td></tr>`}</tbody></table>
       <h2>Project Experience — Past 5 Years</h2><p class="criteria">Includes only continuous on-site assignments of 4 weeks or longer. Future projects are excluded.</p><table><thead><tr><th>Project</th><th>Type</th><th>Owner</th><th>Architect</th><th>Engineer</th><th>Dates</th></tr></thead><tbody>${projectRows || `<tr><td colspan="6" class="muted">No qualifying project history found.</td></tr>`}</tbody></table>
-      <script>window.onload=function(){setTimeout(function(){window.print()},400)}<\/script>
+      <script>
+        // Wait for the logo to finish loading (or fail) before triggering
+        // print, so the logo isn't missing in the printed PDF. Fallback
+        // timeout in case onload/onerror never fires.
+        (function(){
+          var done = false;
+          window.__logoDone = function(){ if (done) return; done = true; setTimeout(function(){window.print();}, 100); };
+          setTimeout(function(){ if (!done) { done = true; window.print(); } }, 2500);
+        })();
+      <\/script>
     </body></html>`;
     const w = window.open("", "_blank", "width=950,height=1100");
     if (!w) { alert("Please allow pop-ups to export the resume."); return; }
@@ -2706,8 +2715,28 @@ export default function App() {
       return;
     }
 
-    // Capture at 2× device pixel ratio so the rasterized image looks crisp,
-    // not pixelated, when the user zooms in on the PDF.
+    // html2canvas can choke on modern CSS color functions like oklch() and
+    // color-mix(). Walk the DOM and temporarily neutralize any computed
+    // styles that include those functions so the capture succeeds, then
+    // restore them after. Tailwind v3+ uses these in some utility classes.
+    const overrides = [];
+    const offendingPattern = /(oklch|color-mix|oklab|lab\(|lch\()/i;
+    section.querySelectorAll("*").forEach((el) => {
+      const cs = window.getComputedStyle(el);
+      ["color", "backgroundColor", "borderColor", "fill", "stroke"].forEach((prop) => {
+        const val = cs[prop];
+        if (val && offendingPattern.test(val)) {
+          overrides.push({ el, prop, original: el.style[prop] });
+          // Replace with a safe fallback. We don't know the visual intent
+          // here so we use neutral defaults that won't crash; the export
+          // may look slightly different from the live page in those spots.
+          if (prop === "color" || prop === "fill") el.style[prop] = "#0f172a";
+          else if (prop === "backgroundColor") el.style[prop] = "#ffffff";
+          else el.style[prop] = "#e2e8f0";
+        }
+      });
+    });
+
     let canvas;
     try {
       canvas = await window.html2canvas(section, {
@@ -2715,15 +2744,23 @@ export default function App() {
         useCORS: true,
         backgroundColor: "#ffffff",
         logging: false,
-        // Capture only what's visible inside the element's scroll viewport,
-        // matching the user's "screenshot of what I see" expectation.
         windowWidth: section.clientWidth,
         windowHeight: section.clientHeight,
       });
     } catch (err) {
-      alert("Could not capture the chart. Try scrolling so the chart is fully visible, then export again.");
-      console.error(err);
+      // Surface the real error so we can debug if the workaround above
+      // wasn't enough. The user sees a useful prefix; the console has the
+      // full stack.
+      console.error("html2canvas error:", err);
+      alert(
+        "Could not capture the chart.\n\n" +
+        "Reason: " + (err && err.message ? err.message : String(err)) + "\n\n" +
+        "Open DevTools (F12) → Console for full details."
+      );
       return;
+    } finally {
+      // Restore the original inline styles regardless of success/failure.
+      overrides.forEach(({ el, prop, original }) => { el.style[prop] = original; });
     }
 
     const imgData = canvas.toDataURL("image/png");
