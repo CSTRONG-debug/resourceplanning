@@ -36,6 +36,17 @@ const STATUS_MAP = {
   O: "Open",
   C: "Complete",
   H: "On Hold",
+  P: "Active", // CMiC uses "P" (Posted) for active jobs in some tenants
+};
+
+// Map CMiC's short division/department codes to your app's full names.
+// CMiC stores divisions as abbreviations like "CM", "HS", "IN" — we expand
+// to full names so they sort/filter correctly with the rest of your app.
+// Add/edit here if you add divisions later.
+const DIVISION_MAP = {
+  CM: "Commercial",
+  HS: "Hardscape",
+  IN: "Industrial",
 };
 
 // ── Edge Function caller ──────────────────────────────────────────────────
@@ -119,6 +130,13 @@ function mapStatus(cmicStatus) {
   return STATUS_MAP[cmicStatus] || cmicStatus || "Active";
 }
 
+function mapDivision(cmicDivision) {
+  if (!cmicDivision) return "";
+  // Try the lookup first; if there's no match, return the original code so
+  // we don't lose info. Add the new code to DIVISION_MAP if this happens.
+  return DIVISION_MAP[cmicDivision] || cmicDivision;
+}
+
 // Convert a CMiC job object to your local project shape. Keep CMiC's raw
 // JobCode in projectNumber so the contract-refresh button can find it later.
 export function mapCmicJobToProject(job) {
@@ -126,13 +144,13 @@ export function mapCmicJobToProject(job) {
     projectNumber: pickField(job, CMIC_FIELDS.projectNumber),
     name:          pickField(job, CMIC_FIELDS.name),
     client:        pickField(job, CMIC_FIELDS.client) || "",
-    division:      pickField(job, CMIC_FIELDS.division) || "",
+    division:      mapDivision(pickField(job, CMIC_FIELDS.division)),
     status:        mapStatus(pickField(job, CMIC_FIELDS.status)),
     projectType:   pickField(job, CMIC_FIELDS.projectType) || "",
     contractValue: pickField(job, CMIC_FIELDS.contractValue),
     includeInForecast: false,
-    // Mark provenance so we can tell CMiC-imported projects apart later.
-    _source: "cmic",
+    // Mark provenance so we can show a CMiC badge in the UI.
+    source: "cmic",
   };
 }
 
