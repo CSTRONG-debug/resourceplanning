@@ -59,6 +59,9 @@ function projectToDbLocal(project) {
     specific_requirements: project.specificRequirements || [],
     status: project.status,
     include_in_forecast: project.includeInForecast || false,
+    // Preserve provenance through edits — once "cmic", stays "cmic" until
+    // explicitly set to null. This way the CMiC badge survives edits.
+    source: project.source ?? null,
   };
 }
 
