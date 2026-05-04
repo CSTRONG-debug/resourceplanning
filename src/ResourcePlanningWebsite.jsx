@@ -42,6 +42,7 @@ function mapProjectFromDbLocal(p) {
     specificRequirements: p.specific_requirements || [],
     status: p.status || "Scheduled",
     includeInForecast: p.include_in_forecast || false,
+    source: p.source || null, // "cmic" if imported from CMiC, null otherwise
   };
 }
 function projectToDbLocal(project) {
@@ -3037,7 +3038,19 @@ export default function App() {
                   {sortedProjectsForTab.map((project) => (
                     <tr key={project.id} onClick={() => openEditProjectForm(project)} className="cursor-pointer border-t border-slate-200 align-top hover:bg-emerald-50">
                       <td className="p-3 font-medium">{project.projectNumber}</td>
-                      <td className="p-3 font-medium">{project.name}</td>
+                      <td className="p-3 font-medium">
+                        <span className="inline-flex items-center gap-2">
+                          {project.name}
+                          {project.source === "cmic" && (
+                            <span
+                              title="Imported from CMiC"
+                              className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700"
+                            >
+                              CMiC
+                            </span>
+                          )}
+                        </span>
+                      </td>
                       <td className="p-3">{project.client}</td>
                       <td className="p-3">{project.address}</td>
                       <td className="p-3">{project.division}</td>
