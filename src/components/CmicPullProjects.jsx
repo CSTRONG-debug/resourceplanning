@@ -45,13 +45,10 @@ export default function CmicPullProjects({ projects, onApplied }) {
     const updates = preview.toUpdate.filter((u) => includeUpdate[u.existing.id]);
 
     try {
-      // Inserts. Map to your snake_case DB columns. NOTE: contract_value
-      // does NOT live on the projects table in this app — it's in the
-      // separate `forecast` table keyed by project_id. The CmicRefreshContracts
-      // button on the Forecast tab is what populates / updates contract values.
-      // So here we only write project metadata and ignore the contractValue
-      // field; users will create the forecast row themselves (or we can run
-      // the contract refresh after the pull completes).
+      // Inserts. Two-step write: first the projects table, then matching
+      // rows in the `forecast` table for any project that has a CMiC
+      // contract value. Contract values do NOT live on projects in this
+      // app — they live in the separate `forecast` table keyed by project_id.
       if (creates.length) {
         const rows = creates.map((p) => ({
           project_number: p.projectNumber,
@@ -60,11 +57,42 @@ export default function CmicPullProjects({ projects, onApplied }) {
           division: p.division,
           status: p.status,
           project_type: p.projectType,
-          include_in_forecast: false,
+          // Default include_in_forecast TRUE for CMiC imports — these are
+          // real revenue-tracked jobs and should land on the Forecast tab
+          // automatically.
+          include_in_forecast: true,
           source: "cmic", // mark provenance for the CMiC badge
         }));
-        const { error: insErr } = await supabase.from("projects").insert(rows);
+        const { data: insertedProjects, error: insErr } = await supabase
+          .from("projects")
+          .insert(rows)
+          .select(); // need IDs back so we can write matching forecast rows
         if (insErr) throw insErr;
+
+        // Now write a forecast row for each newly-inserted project that has
+        // a contract value. Match by project_number since that's stable
+        // across both arrays. Contract value is already in thousands per
+        // the toThousands() conversion in cmic.js mapper.
+        const forecastRows = (insertedProjects || [])
+          .map((dbProject) => {
+            const incoming = creates.find(
+              (c) => String(c.projectNumber) === String(dbProject.project_number)
+            );
+            if (!incoming || incoming.contractValue == null) return null;
+            return {
+              project_id: dbProject.id,
+              contract_value: Number(incoming.contractValue) || 0,
+              spread_rule: "even",
+              actuals: {},
+              redistributed_spread: {},
+            };
+          })
+          .filter(Boolean);
+
+        if (forecastRows.length) {
+          const { error: fcErr } = await supabase.from("forecast").insert(forecastRows);
+          if (fcErr) throw fcErr;
+        }
       }
 
       // Updates — apply only the changed fields, not the whole row.
