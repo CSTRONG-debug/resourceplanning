@@ -2872,13 +2872,82 @@ export default function App() {
       const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
       return s + allMonths.filter((m) => m > `${forecastYear}-12`).reduce((ms, m) => ms + (spread[m] || 0), 0);
     }, 0);
+    // Sum of all visible projects' contract values — shows up in the
+    // Monthly Total row's Contract Value column so the PDF matches what
+    // the on-screen Forecast tab now displays.
+    const contractValueTotal = forecastProjects.reduce((s, p) => {
+      const row = getForecastRow(p.id);
+      return s + (Number(row.contractValue) || 0);
+    }, 0);
     const cumulative = monthTotals.map((_, i) => monthTotals.slice(0, i + 1).reduce((s, v) => s + v, 0));
 
     const headerCells = months.map((m) => `<th style="padding:4px 6px;text-align:right;background:#f1f5f9">${m.label}</th>`).join("");
     const totalCells = monthTotals.map((v) => `<td style="padding:4px 6px;text-align:right;font-weight:700">${fmt(v)}</td>`).join("");
     const cumCells = cumulative.map((v) => `<td style="padding:4px 6px;text-align:right;color:#065f46">${fmt(v)}</td>`).join("");
 
-    const html = `<!doctype html><html><head><title>GGC Forecast ${forecastYear}</title><style>@page{size:landscape;margin:.3in}body{font-family:Arial,sans-serif;font-size:10px;color:#0f172a}table{border-collapse:collapse;width:100%}th{background:#f1f5f9;padding:4px 6px;text-align:left;border-bottom:2px solid #cbd5e1}td{border-bottom:1px solid #e2e8f0}h1{font-size:14px;margin-bottom:8px}</style></head><body><h1>GGC Revenue Forecast — ${forecastYear}</h1><table><thead><tr><th>Project</th><th>Division</th><th style="text-align:right">Contract Value</th>${headerCells}<th style="text-align:right;background:#e2e8f0">Thereafter</th><th style="text-align:right;background:#e2e8f0">Year Total</th></tr></thead><tbody>${rows.join("")}<tr style="background:#f1f5f9;font-weight:700"><td colspan="3" style="padding:4px 6px">Monthly Total</td>${totalCells}<td style="padding:4px 6px;text-align:right">${fmt(thereafterTotal)}</td><td style="padding:4px 6px;text-align:right">${fmt(yearGrandTotal)}</td></tr><tr style="background:#ecfdf5;color:#065f46"><td colspan="3" style="padding:4px 6px;font-weight:700">Cumulative YTD</td>${cumCells}<td></td><td style="padding:4px 6px;text-align:right;font-weight:700">${fmt(yearGrandTotal)}</td></tr></tbody></table><script>window.onload=function(){setTimeout(function(){window.print()},350)}<\/script></body></html>`;
+    // Build the page: branded header (GGC logo + title) + table.
+    // Print is delayed until the logo image has loaded (or fails to load)
+    // so the logo doesn't disappear from the printed PDF — same pattern as
+    // the resume export. 2.5s fallback in case onload/onerror never fires.
+    const html = `<!doctype html><html><head><title>GGC Forecast ${forecastYear}</title><style>
+      @page{size:landscape;margin:.3in}
+      body{font-family:Arial,sans-serif;font-size:10px;color:#0f172a;margin:0}
+      table{border-collapse:collapse;width:100%}
+      th{background:#f1f5f9;padding:4px 6px;text-align:left;border-bottom:2px solid #cbd5e1}
+      td{border-bottom:1px solid #e2e8f0}
+      .header{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;border-bottom:4px solid #047857;padding-bottom:10px;margin-bottom:10px}
+      .header-left{display:flex;align-items:center;gap:14px}
+      .logo{height:48px;width:auto;flex-shrink:0;display:block}
+      h1{font-size:18px;margin:0;color:#0f172a}
+      .subtitle{font-size:11px;color:#64748b;margin-top:2px}
+      .small{font-size:10px;color:#64748b;text-align:right}
+    </style></head><body>
+      <div class="header">
+        <div class="header-left">
+          <img id="ggc-logo" class="logo" src="${window.location.origin}/logo.png" alt="GGC" onerror="this.style.display='none';window.__logoDone&&window.__logoDone();" onload="window.__logoDone&&window.__logoDone();"/>
+          <div>
+            <h1>Revenue Forecast — ${forecastYear}</h1>
+            <p class="subtitle">${forecastProjects.length} projects · ${forecastDivisionFilter.join(", ")}</p>
+          </div>
+        </div>
+        <div class="small">Generated ${new Date().toLocaleDateString()}</div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Project</th>
+            <th>Division</th>
+            <th style="text-align:right">Contract Value</th>
+            ${headerCells}
+            <th style="text-align:right;background:#e2e8f0">Thereafter</th>
+            <th style="text-align:right;background:#e2e8f0">Year Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.join("")}
+          <tr style="background:#f1f5f9;font-weight:700">
+            <td colspan="2" style="padding:4px 6px">Monthly Total</td>
+            <td style="padding:4px 6px;text-align:right">${fmt(contractValueTotal)}</td>
+            ${totalCells}
+            <td style="padding:4px 6px;text-align:right">${fmt(thereafterTotal)}</td>
+            <td style="padding:4px 6px;text-align:right">${fmt(yearGrandTotal)}</td>
+          </tr>
+          <tr style="background:#ecfdf5;color:#065f46">
+            <td colspan="3" style="padding:4px 6px;font-weight:700">Cumulative YTD</td>
+            ${cumCells}
+            <td></td>
+            <td style="padding:4px 6px;text-align:right;font-weight:700">${fmt(yearGrandTotal)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <script>
+        (function(){
+          var done = false;
+          window.__logoDone = function(){ if (done) return; done = true; setTimeout(function(){window.print();}, 100); };
+          setTimeout(function(){ if (!done) { done = true; window.print(); } }, 2500);
+        })();
+      <\/script>
+    </body></html>`;
     const w = window.open("", "_blank", "width=1400,height=900");
     if (!w) { alert("Please allow pop-ups to export PDF."); return; }
     w.document.open(); w.document.write(html); w.document.close();
