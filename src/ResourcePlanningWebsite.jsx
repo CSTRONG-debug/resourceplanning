@@ -2829,7 +2829,10 @@ export default function App() {
   // Get the value to display for a single month.
   //   - Actual entered → return that.
   //   - Month is locked (no actual) → return base-spread amount.
-  //   - Otherwise → return redistributed amount.
+  //   - Otherwise → return redistributed amount, but only flag the cell as
+  //     "isRedistributed" when there's an actual value to show. Months
+  //     with no onsite days return value=0 with no flag, so the cell
+  //     renders blank rather than as a styled "0" placeholder.
   function getMonthValue(projectId, monthKey, _legacySpreadIgnored) {
     const row = getForecastRow(projectId);
     const actuals = row.actuals || {};
@@ -2840,7 +2843,11 @@ export default function App() {
     if (isMonthLocked(monthKey)) {
       return { value: baseSpread[monthKey] || 0, isActual: false };
     }
-    return { value: redistributed[monthKey] || 0, isActual: false, isRedistributed: true };
+    const v = redistributed[monthKey];
+    if (v === undefined || v === 0) {
+      return { value: 0, isActual: false };
+    }
+    return { value: v, isActual: false, isRedistributed: true };
   }
 
   // Save/upsert a forecast row for a project
@@ -4762,6 +4769,13 @@ export default function App() {
                         const mv = getMonthValue(p.id, m, spread);
                         return s + mv.value;
                       }, 0);
+                      // Sanity check: prior year + current year + thereafter
+                      // should equal contract value (within rounding). If they
+                      // don't, something has drifted — flag the contract input
+                      // red so the user notices. Tolerance is $1 for rounding.
+                      const computedTotal = priorYearTotal + yearTotal + thereafter;
+                      const contractDelta = Math.abs((row.contractValue || 0) - computedTotal);
+                      const contractMismatch = contractDelta > 1;
                       return (
                         <tr key={p.id} className={`border-t border-slate-100 ${rowBg} hover:bg-emerald-50 group`}>
                           <td className={`sticky left-0 z-10 p-3 group-hover:bg-emerald-50 ${rowBg}`}>
@@ -4772,7 +4786,10 @@ export default function App() {
                             <span className={`rounded-full px-2 py-0.5 text-xs font-semibold text-white ${divisionStyles[p.division] || "bg-slate-500"}`}>{p.division}</span>
                           </td>
                           <td className="p-3">
-                            <input type="number" className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-right text-sm outline-none focus:border-emerald-500 focus:bg-white" defaultValue={row.contractValue || ""} placeholder="0"
+                            <input type="number"
+                              className={`w-full rounded-lg border px-2 py-1 text-right text-sm outline-none focus:bg-white ${contractMismatch ? "border-red-400 bg-red-50 text-red-700 font-bold focus:border-red-500" : "border-slate-200 bg-transparent focus:border-emerald-500"}`}
+                              defaultValue={row.contractValue || ""} placeholder="0"
+                              title={contractMismatch ? `Contract ${fmt(row.contractValue || 0)} does not match Prior Year + Year Total + Thereafter (${fmt(computedTotal)}). Try clicking ↻ Recalculate.` : ""}
                               onBlur={(e) => saveForecastRow(p.id, { contractValue: parseFloat(e.target.value) || 0 })} />
                           </td>
                           {/* Prior Year column */}
