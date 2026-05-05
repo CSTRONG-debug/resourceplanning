@@ -19,6 +19,7 @@ export function useSupabaseRealtime({
   setCrews,
   setAssignments,
   setCertifications,
+  savingAssignmentIdsRef,
 }) {
   useEffect(() => {
     if (!supabase) return;
