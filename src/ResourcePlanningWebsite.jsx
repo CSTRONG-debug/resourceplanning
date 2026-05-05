@@ -244,7 +244,10 @@ function snapToZoomStart(date, zoom) {
 }
 
 // Build a timeline that:
-//   - starts at today (or earliest item if older), snapped to zoom boundary
+//   - ALWAYS starts at the current period (this week / month / quarter /
+//     year, depending on zoom). Items that started before this point are
+//     not visible at the left edge but can be scrolled to via horizontal
+//     scroll if maxDate has been pushed back far enough.
 //   - extends to cover the latest item + a small buffer
 //   - has at least the visible-window count of ticks
 function buildTimeline(items, zoom) {
@@ -252,19 +255,20 @@ function buildTimeline(items, zoom) {
   const todaySnapped = snapToZoomStart(today, zoom);
   const visibleUnits = ZOOM_VISIBLE_UNITS[zoom] || 15;
 
-  // Find earliest start and latest end across items.
-  let earliestStart = todaySnapped;
+  // Find latest end across items so we know how far to extend the right
+  // side of the chart. We don't track earliest start anymore — the chart
+  // is anchored at TODAY no matter how old the data is.
   let latestEnd = todaySnapped;
   items.forEach((item) => {
-    const s = toDate(item.start);
     const e = toDate(item.end);
-    if (s && s < earliestStart) earliestStart = s;
     if (e && e > latestEnd) latestEnd = e;
   });
 
-  // Anchor minDate at TODAY's snapped value (we want today visible at the
-  // left edge by default), but back up if there are older items to show.
-  const minDate = snapToZoomStart(earliestStart, zoom);
+  // Anchor minDate at the start of the current period (this week, this
+  // month, this quarter, this year). Today's date snapped to the zoom
+  // boundary IS the start of the current period — that's what the user
+  // wanted as the left edge.
+  const minDate = todaySnapped;
 
   // maxDate must extend at least visibleUnits past minDate, but also cover
   // the latest item + at least one extra unit of buffer past it.
