@@ -2715,7 +2715,18 @@ export default function App() {
     const allMonths = getProjectMonths(projectId);
     const actuals = row.actuals || {};
     const totalActuals = Object.values(actuals).reduce((s, v) => s + v, 0);
-    const remaining = (row.contractValue || 0) - totalActuals;
+
+    // Locked months show their original day-weighted spread amount but the
+    // user can't change them. Their value still counts against the contract,
+    // so they MUST be subtracted from remaining before redistributing the
+    // rest. Otherwise the locked months and the redistributed months together
+    // sum to MORE than the contract value (the bug we just fixed).
+    const baseSpread = spreadRevenue(row.contractValue || 0, allMonths, row.spreadRule, projectId);
+    const lockedTotal = allMonths
+      .filter((m) => isMonthLocked(m) && actuals[m] === undefined)
+      .reduce((s, m) => s + (baseSpread[m] || 0), 0);
+
+    const remaining = (row.contractValue || 0) - totalActuals - lockedTotal;
     const remainingMonths = allMonths.filter((m) => actuals[m] === undefined && !isMonthLocked(m));
     if (remainingMonths.length > 0 && remaining >= 0) {
       return spreadRevenue(remaining, remainingMonths, row.spreadRule, projectId);
@@ -2792,7 +2803,15 @@ export default function App() {
 
     const allMonths = getProjectMonths(projectId);
     const totalActuals = Object.values(newActuals).reduce((s, v) => s + v, 0);
-    const remaining = (row.contractValue || 0) - totalActuals;
+
+    // Subtract locked-month spread values from remaining too — see comment
+    // on recalculateProject. Without this, redistribution over-allocates.
+    const baseSpread = spreadRevenue(row.contractValue || 0, allMonths, row.spreadRule, projectId);
+    const lockedTotal = allMonths
+      .filter((m) => isMonthLocked(m) && newActuals[m] === undefined)
+      .reduce((s, m) => s + (baseSpread[m] || 0), 0);
+
+    const remaining = (row.contractValue || 0) - totalActuals - lockedTotal;
     const remainingMonths = allMonths.filter((m) => newActuals[m] === undefined && !isMonthLocked(m));
 
     if (remainingMonths.length > 0 && remaining >= 0) {
@@ -2810,7 +2829,16 @@ export default function App() {
     const allMonths = getProjectMonths(projectId);
     const actuals = row.actuals || {};
     const totalActuals = Object.values(actuals).reduce((s, v) => s + v, 0);
-    const remaining = (row.contractValue || 0) - totalActuals;
+
+    // Use the NEW rule when calculating locked-month base spread, since
+    // changing the rule changes how locked months would have been
+    // distributed in the original spread.
+    const baseSpread = spreadRevenue(row.contractValue || 0, allMonths, newRule, projectId);
+    const lockedTotal = allMonths
+      .filter((m) => isMonthLocked(m) && actuals[m] === undefined)
+      .reduce((s, m) => s + (baseSpread[m] || 0), 0);
+
+    const remaining = (row.contractValue || 0) - totalActuals - lockedTotal;
     const remainingMonths = allMonths.filter((m) => actuals[m] === undefined && !isMonthLocked(m));
     const redistributed = remainingMonths.length > 0 && remaining >= 0
       ? spreadRevenue(remaining, remainingMonths, newRule, projectId)
