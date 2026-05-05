@@ -602,7 +602,7 @@ export function ProjectForm({ form, setForm, onSave, onCancel, onDelete, editing
 
 // ─── AssignmentForm ───────────────────────────────────────────────────────────
 
-export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resources, projects, crews }) {
+export function AssignmentForm({ form, setForm, onSave, onCancel, onDelete, editing, resources, projects, crews }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
 
   // Calculate end date by adding `durationWeeks` work weeks to `startDate`,
@@ -900,9 +900,24 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resou
           </div>
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-slate-200 p-5">
-          <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-          <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Assignment</button>
+        <div className="flex items-center justify-between gap-3 border-t border-slate-200 p-5">
+          {/* Delete sits on its own on the left so it can't be confused with
+              Save/Cancel. Only appears when editing an existing assignment. */}
+          <div>
+            {editing && onDelete && (
+              <button
+                onClick={onDelete}
+                className="rounded-xl border border-red-200 bg-white px-4 py-2 font-semibold text-red-700 hover:bg-red-50"
+                title="Delete this assignment and all its mobilizations"
+              >
+                Delete Assignment
+              </button>
+            )}
+          </div>
+          <div className="flex gap-3">
+            <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+            <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Assignment</button>
+          </div>
         </div>
       </div>
     </div>
@@ -2489,11 +2504,12 @@ export default function App() {
   async function deleteAssignment(id) {
     const assignment = assignments.find((a) => a.id === id);
     const project = assignment ? findProject(projects, assignment.projectId) : null;
-    if (!confirm(`Delete assignment for ${project?.name || "this project"}?`)) return;
-    if (!supabase) { alert("Supabase is not connected."); return; }
+    if (!confirm(`Delete assignment for ${project?.name || "this project"}?`)) return false;
+    if (!supabase) { alert("Supabase is not connected."); return false; }
     const { error } = await supabase.from("assignments").delete().eq("id", id);
-    if (error) { console.error(error); alert("Could not delete assignment."); return; }
+    if (error) { console.error(error); alert("Could not delete assignment."); return false; }
     setAssignments((current) => current.filter((a) => a.id !== id));
+    return true;
   }
 
   // ── CRUD: Resources ────────────────────────────────────────────────────────
@@ -4760,7 +4776,14 @@ export default function App() {
 
       {/* Forms */}
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} onDelete={() => deleteProject(editingProjectId)} editing={Boolean(editingProjectId)} certifications={certifications} projectTypes={projectTypes} />}
-      {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={activeCrews} />}
+      {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} onDelete={async () => {
+        if (!editingAssignmentId) return;
+        const ok = await deleteAssignment(editingAssignmentId);
+        if (ok) {
+          setShowAssignmentForm(false);
+          setEditingAssignmentId(null);
+        }
+      }} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={activeCrews} />}
       {showResourceForm && <ResourceForm form={resourceForm} setForm={setResourceForm} certifications={certifications} onSave={saveResource} onCancel={() => setShowResourceForm(false)} onDelete={() => deleteResource(editingResourceId)} onExportResume={() => exportResourceResume(resourceForm)} resourceStats={editingResourceId ? getResourceStats(resourceForm) : null} editing={Boolean(editingResourceId)} />}
 
       {/* ── Drag-to-adjust confirmation dialog (Project Gantt) ── */}
