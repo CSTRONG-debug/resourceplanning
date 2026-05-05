@@ -1224,13 +1224,13 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
 
   return (
     <div
-      className={`absolute top-1 h-9 overflow-hidden rounded-xl ${colorClass} px-3 text-xs font-semibold leading-9 shadow-sm ${isUnassigned ? "text-slate-900" : "text-white"}`}
+      className={`absolute top-0.5 h-7 overflow-hidden rounded-md ${colorClass} px-2.5 text-[11px] font-semibold leading-7 shadow-sm ${isUnassigned ? "text-slate-900" : "text-white"}`}
       style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, ...patternStyle, ...conflictStyle }}
       title={tooltip}
     >
       <span className={conflict ? "rounded bg-white/90 px-1.5 py-0.5 font-bold text-red-700" : ""}>{label || "Unassigned"}</span>
-      {isUnassigned && <span className="ml-2 rounded bg-white/80 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-900">unassigned</span>}
-      {conflict && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white">conflict</span>}
+      {isUnassigned && <span className="ml-2 rounded bg-white/80 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-900">unassigned</span>}
+      {conflict && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-white">conflict</span>}
     </div>
   );
 }
@@ -1244,7 +1244,7 @@ export function PtoOverlayBar({ pto, timeline }) {
   const { left, width } = timelineSpanPercent(start, end, timeline);
   return (
     <div
-      className="absolute top-0 z-20 h-11 overflow-hidden rounded-xl border-2 border-black bg-white/70 px-3 text-xs font-bold leading-10 text-black shadow"
+      className="absolute top-0 z-20 h-8 overflow-hidden rounded-md border-2 border-black bg-white/70 px-2.5 text-[11px] font-bold leading-7 text-black shadow"
       style={{ left: `${left}%`, width: `${Math.max(0.15, width)}%`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(0,0,0,.95) 8px 10px)", backgroundSize: "14px 14px" }}
       title={`PTO ${pto.ptoId || ""}: ${formatDate(pto.start)} - ${formatDate(pto.end)}`}
     >
@@ -1371,7 +1371,7 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
   return (
     <div
       ref={containerRef}
-      className={`absolute top-1 h-9 overflow-visible rounded-xl ${colorClass} text-xs font-semibold leading-9 shadow-sm text-white ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
+      className={`absolute top-0.5 h-7 overflow-visible rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm text-white ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
       style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none" }}
       onPointerDown={(e) => onPointerDown("middle", e)}
       onPointerMove={onPointerMove}
@@ -1379,23 +1379,24 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
       onPointerCancel={onPointerUp}
       title={`${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nDrag bar to shift • Drag edges to resize`}
     >
-      {/* Left edge handle */}
+      {/* Left edge handle — narrower so the bar's middle has a bigger hit
+          zone. Visible on hover so the user knows it's grabbable. */}
       <div
         onPointerDown={(e) => onPointerDown("left", e)}
-        className="absolute left-0 top-0 z-10 h-full w-2 cursor-ew-resize hover:bg-white/30"
+        className="absolute left-0 top-0 z-10 h-full w-1.5 cursor-ew-resize hover:bg-white/40 hover:w-2 transition-all"
       />
       {/* Right edge handle */}
       <div
         onPointerDown={(e) => onPointerDown("right", e)}
-        className="absolute right-0 top-0 z-10 h-full w-2 cursor-ew-resize hover:bg-white/30"
+        className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-ew-resize hover:bg-white/40 hover:w-2 transition-all"
       />
       {/* Bar label (overflow hidden so long labels don't escape) */}
-      <span className="block overflow-hidden whitespace-nowrap px-3">
+      <span className="block overflow-hidden whitespace-nowrap px-2.5">
         {label || "Unassigned"}
       </span>
       {/* Live tooltip while dragging — positions above the bar */}
       {dragState && (
-        <div className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[11px] font-bold text-white shadow-lg">
+        <div className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-white shadow-lg">
           {formatDate(effectiveStart)} → {formatDate(effectiveEnd)}
         </div>
       )}
@@ -1431,7 +1432,7 @@ export function ProjectGanttRow({ assignment, project, items, timeline, crews, o
         </div>
         <p className="mt-1 text-xs text-slate-500">{project.division} • {project.status} • {items.length} mobilization{items.length === 1 ? "" : "s"}</p>
       </button>
-      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
+      <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
         {items.map((item) => (
           <DraggableGanttBar
             key={item.id}
@@ -1473,7 +1474,7 @@ export function ResourceGanttRow({ resource, items, timeline, onResourceClick })
           {ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}
         </p>
       </div>
-      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
+      <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
         {sortedItems.map((item) => (
           <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} conflict={conflictIds.has(item.id)} />
         ))}
@@ -1508,7 +1509,7 @@ export function UnassignedNeedGanttRow({ resource, items, timeline }) {
         <p className="mt-1 text-xs text-slate-500">{resource.homeDivision} • unassigned need</p>
         {resource.projectLabel && <p className="mt-0.5 text-xs font-medium text-slate-700">{resource.projectLabel}</p>}
       </div>
-      <div className="relative rounded-xl bg-amber-50" style={{ width: `${timeline.width}px`, height: `${Math.max(48, lanes.length * 48)}px` }}>
+      <div className="relative rounded-xl bg-amber-50" style={{ width: `${timeline.width}px`, height: `${Math.max(32, lanes.length * 32)}px` }}>
         {lanes.map((lane, laneIndex) =>
           lane.map((item) => (
             <GanttSegmentBar
@@ -1548,7 +1549,7 @@ export function CrewGanttRow({ crew, items, timeline }) {
           {(crew.specialty || []).join(", ") || "No specialty"} • {items.length} assignment{items.length === 1 ? "" : "s"}
         </p>
       </div>
-      <div className="relative rounded-xl bg-slate-100" style={{ width: `${timeline.width}px`, height: `${Math.max(48, lanes.length * 48)}px` }}>
+      <div className="relative rounded-xl bg-slate-100" style={{ width: `${timeline.width}px`, height: `${Math.max(32, lanes.length * 32)}px` }}>
         {lanes.map((lane, laneIndex) =>
           lane.map((item) => {
             const span = timelineSpanPercent(item.start, item.end, timeline);
@@ -1558,8 +1559,8 @@ export function CrewGanttRow({ crew, items, timeline }) {
             return (
               <div
                 key={`${crew.id}-${item.id}`}
-                className={`absolute h-9 overflow-hidden rounded-xl px-3 text-xs font-semibold leading-9 text-white shadow-sm ${colorClass || "bg-slate-700"}`}
-                style={{ left: `${span.left}%`, width: `${Math.max(2, span.width)}%`, top: `${laneIndex * 48 + 5}px` }}
+                className={`absolute h-7 overflow-hidden rounded-md px-2.5 text-[11px] font-semibold leading-7 text-white shadow-sm ${colorClass || "bg-slate-700"}`}
+                style={{ left: `${span.left}%`, width: `${Math.max(2, span.width)}%`, top: `${laneIndex * 32 + 2}px` }}
               >
                 {item.project.name}
               </div>
@@ -1866,8 +1867,7 @@ export default function App() {
   }, [loadSupabaseData]);
 
   // ── Realtime subscriptions (#5) ────────────────────────────────────────────
-  const savingAssignmentIdsRef = useRef(new Set());
-  useSupabaseRealtime({ setProjects, setResources, setCrews, setAssignments, setCertifications, savingAssignmentIdsRef });
+  useSupabaseRealtime({ setProjects, setResources, setCrews, setAssignments, setCertifications });
 
   // ── Load app users after login ─────────────────────────────────────────────
   useEffect(() => { if (currentUser) { loadAppUsers(); loadProjectTypes(); } }, [currentUser]);
@@ -2429,16 +2429,18 @@ export default function App() {
     setSavingDragChange(true);
     const { mobilizationId, assignmentId, newStart, newEnd } = pendingDragChange;
     try {
-      // Update the mobilization row in place. We do NOT touch the assignment
-      // row — start/end at the assignment level are derived from its first
-      // mobilization for legacy/blank cases only.
+      // Update the mobilization row in place. Note the column names are
+      // `start_date` / `end_date` in Supabase even though we use `start` /
+      // `end` in our local state — see mobilizationToDb mapper for the
+      // canonical mapping. Sending `start`/`end` here would fail with a
+      // generic 400 because those columns don't exist on the table.
       const { error } = await supabase
         .from("mobilizations")
-        .update({ start: newStart, end: newEnd })
+        .update({ start_date: newStart, end_date: newEnd })
         .eq("id", mobilizationId);
       if (error) {
-        console.error(error);
-        alert("Could not save the date change. Please try again.");
+        console.error("Drag save error:", error);
+        alert(`Could not save the date change.\n\nReason: ${error.message || error.hint || "Unknown error"}\n\nOpen DevTools (F12) → Console for details.`);
         setSavingDragChange(false);
         return;
       }
@@ -2475,27 +2477,22 @@ export default function App() {
     if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
     const assignmentPayload = assignmentToDb(assignmentForm);
     let savedAssignment;
-    // Suppress realtime updates for this assignment while we're mid-save
-    // to prevent the delete→insert window from momentarily clearing Gantt bars.
-    if (editingAssignmentId) savingAssignmentIdsRef.current.add(editingAssignmentId);
     if (editingAssignmentId) {
       const { data, error } = await supabase.from("assignments").update(assignmentPayload).eq("id", editingAssignmentId).select().single();
-      if (error) { console.error(error); alert("Could not update assignment."); savingAssignmentIdsRef.current.delete(editingAssignmentId); return; }
+      if (error) { console.error(error); alert("Could not update assignment."); return; }
       savedAssignment = data;
       const del = await supabase.from("mobilizations").delete().eq("assignment_id", editingAssignmentId);
-       if (del.error) { console.error(del.error); alert("Could not update mobilizations."); savingAssignmentIdsRef.current.delete(editingAssignmentId); return; }
+      if (del.error) { console.error(del.error); alert("Could not update mobilizations."); return; }
     } else {
       const { data, error } = await supabase.from("assignments").insert(assignmentPayload).select().single();
       if (error) { console.error(error); alert("Could not save assignment."); return; }
       savedAssignment = data;
-      // Also suppress mob-insert realtime events for the new assignment
-      savingAssignmentIdsRef.current.add(savedAssignment.id);
     }
     const validMobs = (assignmentForm.mobilizations || []).filter((m) => m.start && m.end).map((m) => mobilizationToDbLocal(m, savedAssignment.id));
     let savedMobs = [];
     if (validMobs.length) {
       const { data, error } = await supabase.from("mobilizations").insert(validMobs).select();
-      if (error) { console.error(error); alert("Could not save mobilizations."); savingAssignmentIdsRef.current.delete(savedAssignment.id); return; }
+      if (error) { console.error(error); alert("Could not save mobilizations."); return; }
       savedMobs = data || [];
     }
     let mapped = mapAssignmentFromDbLocal(savedAssignment, savedMobs);
@@ -2512,9 +2509,6 @@ export default function App() {
     else setAssignments((current) => [mapped, ...current]);
     setShowAssignmentForm(false); setEditingAssignmentId(null);
     setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }] });
-    // Clear suppression after a short delay so any in-flight realtime events are ignored
-    const clearedId = savedAssignment.id;
-    setTimeout(() => savingAssignmentIdsRef.current.delete(clearedId), 2000);
   }
 
   async function deleteAssignment(id) {
@@ -3535,7 +3529,7 @@ export default function App() {
     <main className="min-h-screen bg-slate-50 text-slate-900">
       {/* Header */}
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-6 px-6 py-4">
+        <div className="mx-auto flex max-w-[1700px] items-center justify-between gap-6 px-4 py-4">
           <div className="flex min-w-0 items-center gap-4">
             <img src="/logo.png" alt="Greater Georgia Concrete logo" className="h-14 w-auto shrink-0 object-contain" onError={(e) => { e.currentTarget.style.display = "none"; }} />
             <div className="min-w-0">
@@ -3560,7 +3554,7 @@ export default function App() {
           </div>
         </div>
         <div className="border-t border-slate-100 bg-white">
-          <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-6 py-3">
+          <div className="mx-auto flex max-w-[1700px] items-center justify-between gap-3 px-4 py-3">
             <nav className="flex min-w-0 flex-1 flex-nowrap gap-2 overflow-x-auto">
               {["dashboard", "projects", "resources", "crews", "forecast"].map((p) => (
                 <button key={p} onClick={() => setPage(p)} className={`shrink-0 rounded-xl px-4 py-2.5 font-semibold shadow-sm capitalize ${page === p ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>{p}</button>
@@ -3583,7 +3577,7 @@ export default function App() {
 
       {/* ── Crews Page ── */}
       {page === "crews" && (
-        <section className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+        <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div><h2 className="text-2xl font-bold">Crews</h2><p className="text-sm text-slate-500">Master crew list used by assignment crew dropdowns.</p></div>
@@ -3631,7 +3625,7 @@ export default function App() {
 
       {/* ── Resources Page ── */}
       {page === "resources" && (
-        <section className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+        <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div><h2 className="text-2xl font-bold">Resources</h2><p className="text-sm text-slate-500">Master resource list used by Dashboard assignment dropdowns.</p></div>
@@ -3708,7 +3702,7 @@ export default function App() {
 
       {/* ── Projects Page ── */}
       {page === "projects" && (
-        <section className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+        <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div><h2 className="text-2xl font-bold">Projects</h2><p className="text-sm text-slate-500">Create and edit projects here only. Resource assignments happen on the Dashboard.</p></div>
@@ -3790,7 +3784,7 @@ export default function App() {
 
       {/* ── Dashboard Page ── */}
       {page === "dashboard" && (
-        <section className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+        <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
           <div className="grid gap-4 md:grid-cols-4">
             <StatCard icon={BriefcaseBusiness} label="Total Projects" value={projects.length} />
             <StatCard icon={ClipboardCheck} label="Assignments" value={assignments.length} />
@@ -4284,7 +4278,7 @@ export default function App() {
                       <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
                       <p className="mt-1 text-xs text-slate-500">{item.project.division} • {formatDate(item.start)} - {formatDate(item.end)}</p>
                     </div>
-                    <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
+                    <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
                       <GanttSegmentBar item={item} timeline={timeline} label={item.project.name} />
                     </div>
                   </div>
@@ -4296,7 +4290,7 @@ export default function App() {
                       <p className="font-semibold text-slate-900">PTO — {pto.ptoId || "Unspecified"}</p>
                       <p className="mt-1 text-xs text-slate-500">{formatDate(pto.start)} – {formatDate(pto.end)}</p>
                     </div>
-                    <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
+                    <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
                       <PtoOverlayBar pto={pto} timeline={timeline} />
                     </div>
                   </div>
@@ -4379,7 +4373,7 @@ export default function App() {
                               <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
                               <p className="mt-0.5 text-xs text-slate-400">Counts toward selected period total.</p>
                             </div>
-                            <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${popupTimeline.width}px` }}>
+                            <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${popupTimeline.width}px` }}>
                               <GanttSegmentBar item={item} timeline={popupTimeline} label={`${item.project.name} · ${rowMen} men`} />
                             </div>
                           </div>
@@ -4468,7 +4462,7 @@ export default function App() {
                               </div>
                               <p className="mt-1 text-xs text-slate-500">{row.project.division} • {row.project.status} • {start ? formatDate(start) : "No start"} – {end ? formatDate(end) : "No end"}</p>
                             </div>
-                            <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${pmTimeline.width}px` }}>
+                            <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${pmTimeline.width}px` }}>
                               {row.items.map((item) => (
                                 <GanttSegmentBar key={`pm-util-${row.project.id}-${item.id}`} item={item} timeline={pmTimeline} label={row.project.name} />
                               ))}
@@ -4511,7 +4505,7 @@ export default function App() {
                         <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
                         <p className="mt-0.5 text-xs text-slate-400">{getAssignmentPeopleLabel(item.assignment, crews) || "Unassigned"}</p>
                       </div>
-                      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
+                      <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
                         <GanttSegmentBar item={item} timeline={periodTimeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
                       </div>
                     </div>
@@ -4547,7 +4541,7 @@ export default function App() {
                         <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
                         <p className="mt-0.5 text-xs text-slate-400">{getAssignmentPeopleLabel(item.assignment, crews) || "Unassigned"}</p>
                       </div>
-                      <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
+                      <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
                         <GanttSegmentBar item={item} timeline={periodTimeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
                       </div>
                     </div>
@@ -4696,7 +4690,7 @@ export default function App() {
           const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule, p.id);
           const monthValues = months.map((m) => ({ ...getMonthValue(p.id, m.key, spread), key: m.key, locked: isMonthLocked(m.key) }));
           const yearTotal = monthValues.reduce((s, mv) => s + mv.value, 0);
-          const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + getMonthValue(p.id, m).value, 0);
+          const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + (spread[m] || 0), 0);
           return { project: p, row, spread, monthValues, yearTotal, thereafter };
         });
 
