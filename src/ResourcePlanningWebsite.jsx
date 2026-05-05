@@ -2756,15 +2756,58 @@ export default function App() {
     return !!(globalLockThrough && monthKey <= globalLockThrough);
   }
 
-  // Get the value to display for a month — actual if exists, redistributed spread, else original spread
-  function getMonthValue(projectId, monthKey, spread) {
+  // Per-render cache so getMonthValue doesn't recompute the same project's
+  // spread 12 times in a row (once per month cell). Keyed by projectId →
+  // {baseSpread, redistributed, allMonths, actuals}. Cleared by re-render
+  // because the Map is a useRef whose .current we wipe on dependency change.
+  const spreadCacheRef = useRef(new Map());
+  // Bust the cache whenever forecast data, lock state, or assignments change.
+  // We use a dependency-tracking effect rather than useMemo because the cache
+  // is populated lazily by getMonthValue calls during render.
+  useEffect(() => { spreadCacheRef.current = new Map(); },
+    [forecastData, globalLockThrough, assignments, projects, forecastKey]);
+
+  function computeProjectSpread(projectId) {
+    const cached = spreadCacheRef.current.get(projectId);
+    if (cached) return cached;
+
     const row = getForecastRow(projectId);
-    if (row.actuals[monthKey] !== undefined) return { value: row.actuals[monthKey], isActual: true };
-    // Use redistributed spread if available (actuals have been entered)
-    if (row.redistributedSpread && row.redistributedSpread[monthKey] !== undefined) {
-      return { value: row.redistributedSpread[monthKey], isActual: false, isRedistributed: true };
+    const allMonths = getProjectMonths(projectId);
+    const actuals = row.actuals || {};
+    const contractValue = row.contractValue || 0;
+
+    const baseSpread = spreadRevenue(contractValue, allMonths, row.spreadRule, projectId);
+    const totalActuals = Object.values(actuals).reduce((s, v) => s + v, 0);
+    const lockedTotal = allMonths
+      .filter((m) => isMonthLocked(m) && actuals[m] === undefined)
+      .reduce((s, m) => s + (baseSpread[m] || 0), 0);
+
+    const remaining = contractValue - totalActuals - lockedTotal;
+    const remainingMonths = allMonths.filter((m) => actuals[m] === undefined && !isMonthLocked(m));
+    const redistributed = (remainingMonths.length > 0 && remaining >= 0)
+      ? spreadRevenue(remaining, remainingMonths, row.spreadRule, projectId)
+      : {};
+
+    const result = { baseSpread, redistributed, allMonths, actuals };
+    spreadCacheRef.current.set(projectId, result);
+    return result;
+  }
+
+  // Get the value to display for a single month.
+  //   - Actual entered → return that.
+  //   - Month is locked (no actual) → return base-spread amount.
+  //   - Otherwise → return redistributed amount.
+  function getMonthValue(projectId, monthKey, _legacySpreadIgnored) {
+    const row = getForecastRow(projectId);
+    const actuals = row.actuals || {};
+    if (actuals[monthKey] !== undefined) {
+      return { value: actuals[monthKey], isActual: true };
     }
-    return { value: spread[monthKey] || 0, isActual: false };
+    const { baseSpread, redistributed } = computeProjectSpread(projectId);
+    if (isMonthLocked(monthKey)) {
+      return { value: baseSpread[monthKey] || 0, isActual: false };
+    }
+    return { value: redistributed[monthKey] || 0, isActual: false, isRedistributed: true };
   }
 
   // Save/upsert a forecast row for a project
@@ -2861,10 +2904,31 @@ export default function App() {
   }
 
   // CSV export for forecast
+  // Single source of truth for "which projects are visible on the Forecast
+  // screen right now." Used by the on-screen render AND both export
+  // functions, so a CSV / PDF download always matches what the user sees.
+  // Includes division filter, status (no Complete), include-in-forecast
+  // (with the Pending Award opt-in rule), and the search box.
+  function getVisibleForecastProjects() {
+    return projects.filter((p) => {
+      if (!forecastDivisionFilter.includes(p.division)) return false;
+      if (p.status === "Complete") return false;
+      if (p.status === "Pending Award" && !p.includeInForecast) return false;
+      if (!p.includeInForecast) return false;
+      if (forecastSearch) {
+        const q = forecastSearch.toLowerCase();
+        return (p.projectNumber || "").toLowerCase().includes(q)
+          || p.name.toLowerCase().includes(q)
+          || (p.client || "").toLowerCase().includes(q);
+      }
+      return true;
+    });
+  }
+
   function exportForecastCsv() {
     const months = Array.from({ length: 12 }, (_, i) => `${forecastYear}-${String(i + 1).padStart(2, "0")}`);
     const headers = ["Project #", "Project Name", "Division", "Status", "Contract Value", "Spread Rule", "Per-Project Lock", ...months.map((m) => m), "Year Total", "Thereafter"];
-    const forecastProjects = projects.filter((p) => forecastDivisionFilter.includes(p.division) && p.status !== "Complete");
+    const forecastProjects = getVisibleForecastProjects();
     const rows = forecastProjects.map((p) => {
       const row = getForecastRow(p.id);
       const allMonths = getProjectMonths(p.id);
@@ -2884,8 +2948,7 @@ export default function App() {
       key: `${forecastYear}-${String(i + 1).padStart(2, "0")}`,
       label: new Date(forecastYear, i, 1).toLocaleString("default", { month: "short" }),
     }));
-    const forecastProjects = projects
-      .filter((p) => forecastDivisionFilter.includes(p.division) && p.includeInForecast && p.status !== "Complete")
+    const forecastProjects = getVisibleForecastProjects()
       .sort((a, b) => compareValues(a[forecastSort.key], b[forecastSort.key], forecastSort.direction));
     const fmt = (v) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v || 0);
 
