@@ -605,15 +605,60 @@ export function ProjectForm({ form, setForm, onSave, onCancel, onDelete, editing
 export function AssignmentForm({ form, setForm, onSave, onCancel, editing, resources, projects, crews }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
 
+  // Calculate end date by adding `durationWeeks` work weeks to `startDate`,
+  // following GGC's specific rules:
+  //
+  //   - Work weeks are Mon–Fri (no weekends).
+  //   - The end date is always a FRIDAY.
+  //   - First-week rounding depends on which weekday the start is:
+  //       Mon                 → end on Friday of SAME week
+  //       Tue, Wed            → end on Friday of SAME week
+  //       Thu, Fri            → end on Friday of NEXT week (a full week ahead)
+  //       Sat, Sun            → treated as the following Monday
+  //   - Each additional week adds 7 calendar days (the next Friday).
+  //
+  // Examples:
+  //   Mon + 1 wk → Fri same week    (5 days)
+  //   Mon + 2 wk → Fri week 2       (12 days)
+  //   Wed + 1 wk → Fri same week    (3 days)
+  //   Thu + 1 wk → Fri NEXT week    (8 days)
+  //   Fri + 2 wk → Fri 2 weeks out  (14 days)
   function calculateEndDateFromWeeks(startDate, durationWeeks) {
     if (!startDate || durationWeeks === "" || durationWeeks === null || durationWeeks === undefined) return "";
     const start = toDate(startDate);
     const weeks = parseFloat(durationWeeks);
     if (!start || isNaN(weeks) || weeks <= 0) return "";
-    try {
-      const end = addBusinessDaysInclusive(start, Math.round(weeks * 5));
-      return end ? end.toISOString().slice(0, 10) : "";
-    } catch (e) { return ""; }
+
+    // getDay(): Sun=0, Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6.
+    const dow = start.getDay();
+
+    // Step 1: figure out the Friday for the FIRST week.
+    let firstFriday = new Date(start);
+    if (dow === 0) {
+      // Sunday → treat as following Monday → Friday is +5 days.
+      firstFriday.setDate(firstFriday.getDate() + 5);
+    } else if (dow === 6) {
+      // Saturday → treat as following Monday → Friday is +6 days.
+      firstFriday.setDate(firstFriday.getDate() + 6);
+    } else if (dow >= 1 && dow <= 3) {
+      // Mon, Tue, Wed → Friday of the same week.
+      firstFriday.setDate(firstFriday.getDate() + (5 - dow));
+    } else if (dow === 4 || dow === 5) {
+      // Thu, Fri → Friday of NEXT week (skip ahead a full week from same-week Fri).
+      firstFriday.setDate(firstFriday.getDate() + (5 - dow) + 7);
+    }
+
+    // Step 2: each additional week pushes the Friday forward by 7 days.
+    const additionalWeeks = Math.max(0, Math.round(weeks) - 1);
+    const end = new Date(firstFriday);
+    end.setDate(end.getDate() + additionalWeeks * 7);
+
+    // Format as YYYY-MM-DD in LOCAL time to avoid timezone drift turning
+    // Friday into Thursday on the saved record.
+    const yyyy = end.getFullYear();
+    const mm = String(end.getMonth() + 1).padStart(2, "0");
+    const dd = String(end.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
   }
 
   function updateMobilization(id, field, value) {
@@ -1946,11 +1991,27 @@ export default function App() {
   // This matches: "filter by superintendents + hardscape" should show every
   // mobilization where a hardscape superintendent is named, regardless of
   // what division the project is in.
-  const demandFilteredItems = visibleItems
+  //
+  // Unassigned-need items also pass through if their `unassignedDivision`
+  // matches the home-division filter AND the user has "Superintendent" in
+  // their resource-type filter (unassigned needs are synthesized as
+  // unfilled superintendent slots — see line ~1959 above).
+  const demandFilteredItems = [...visibleItems, ...unassignedNeedItems]
     .filter((item) => itemOverlapsTimeline(item.start, item.end, demandTimeline))
     .filter((item) => {
-      // Walk the role fields the user has selected. For each, check whether
-      // the named person on this mobilization is in the home-division filter.
+      // Unassigned-need items have their own filter rule.
+      if (item.isUnassignedNeed) {
+        const needDivision = item.unassignedDivision;
+        if (!needDivision) return false;
+        if (!demandHomeDivisionFilter.includes(needDivision)) return false;
+        // Unassigned needs represent unfilled SUPERINTENDENT slots in this
+        // app. Only show them when superintendent is in the role filter.
+        return dashboardResourceTypeFilter.includes("Superintendent");
+      }
+
+      // Regular items: walk the role fields the user has selected. For each,
+      // check whether the named person on this mobilization is in the
+      // home-division filter.
       const rolesToCheck = dashboardResourceTypeFilter
         .map((rt) => RESOURCE_TYPE_TO_ROLE[rt])
         .filter(Boolean);
