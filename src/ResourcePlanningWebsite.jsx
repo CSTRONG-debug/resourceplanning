@@ -12,12 +12,18 @@ import {
 } from "./constants";
 
 import {
-  buildGanttItems, buildTimeline, itemOverlapsTimeline,
+  buildGanttItems,
+  buildTimeline as _legacyBuildTimeline,
+  itemOverlapsTimeline,
   findProject, getAssignmentCrewIds, getAssignmentCrewDisplayNames,
   getAssignmentPeopleLabel, getCrewDisplayName,
-  formatDate, formatTick, csvEscape, downloadTextFile, readCsvFile, splitList,
-  toggleListValue, toDate, addDays, rangesOverlap, timelinePercent,
-  timelineSpanPercent, getPeriodEnd,
+  formatDate,
+  formatTick as _legacyFormatTick,
+  csvEscape, downloadTextFile, readCsvFile, splitList,
+  toggleListValue, toDate, addDays, rangesOverlap,
+  timelinePercent as _legacyTimelinePercent,
+  timelineSpanPercent as _legacyTimelineSpanPercent,
+  getPeriodEnd as _legacyGetPeriodEnd,
 } from "./utils";
 
 import {
@@ -2985,7 +2991,7 @@ export default function App() {
       const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
       const yearValues = months.map((m) => getMonthValue(p.id, m, spread).value);
       const yearTotal = yearValues.reduce((s, v) => s + v, 0);
-      const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + (spread[m] || 0), 0);
+      const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + getMonthValue(p.id, m).value, 0);
       return [p.projectNumber, p.name, p.division, p.status, row.contractValue, row.spreadRule, row.perProjectLockThrough || "", ...yearValues.map((v) => v.toFixed(2)), yearTotal.toFixed(2), thereafter.toFixed(2)];
     });
     const csv = [headers, ...rows].map((r) => r.map(csvEscape).join(",")).join("\n");
@@ -3008,7 +3014,7 @@ export default function App() {
       const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
       const monthValues = months.map((m) => getMonthValue(p.id, m.key, spread));
       const yearTotal = monthValues.reduce((s, mv) => s + mv.value, 0);
-      const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + (spread[m] || 0), 0);
+      const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + getMonthValue(p.id, m).value, 0);
       const bg = idx % 2 === 0 ? "#f8fafc" : "#ffffff";
       const cells = monthValues.map((mv) => `<td style="padding:4px 6px;text-align:right;color:${mv.isActual ? "#065f46" : (mv.value < 0 ? "#b91c1c" : "#334155")};font-weight:${mv.isActual ? "600" : "400"}">${mv.value !== 0 ? fmt(mv.value) : ""}</td>`).join("");
       return `<tr style="background:${bg}"><td style="padding:4px 6px;font-weight:600">${p.projectNumber ? p.projectNumber + " - " : ""}${p.name}</td><td style="padding:4px 6px">${p.division}</td><td style="padding:4px 6px;text-align:right">${fmt(row.contractValue)}</td>${cells}<td style="padding:4px 6px;text-align:right;color:#64748b">${fmt(thereafter)}</td><td style="padding:4px 6px;text-align:right;font-weight:700">${fmt(yearTotal)}</td></tr>`;
@@ -3024,10 +3030,8 @@ export default function App() {
     });
     const yearGrandTotal = monthTotals.reduce((s, v) => s + v, 0);
     const thereafterTotal = forecastProjects.reduce((s, p) => {
-      const row = getForecastRow(p.id);
       const allMonths = getProjectMonths(p.id);
-      const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule);
-      return s + allMonths.filter((m) => m > `${forecastYear}-12`).reduce((ms, m) => ms + (spread[m] || 0), 0);
+      return s + allMonths.filter((m) => m > `${forecastYear}-12`).reduce((ms, m) => ms + getMonthValue(p.id, m).value, 0);
     }, 0);
     // Sum of all visible projects' contract values — shows up in the
     // Monthly Total row's Contract Value column so the PDF matches what
@@ -4690,7 +4694,7 @@ export default function App() {
           const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule, p.id);
           const monthValues = months.map((m) => ({ ...getMonthValue(p.id, m.key, spread), key: m.key, locked: isMonthLocked(m.key) }));
           const yearTotal = monthValues.reduce((s, mv) => s + mv.value, 0);
-          const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + (spread[m] || 0), 0);
+          const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + getMonthValue(p.id, m).value, 0);
           return { project: p, row, spread, monthValues, yearTotal, thereafter };
         });
 
