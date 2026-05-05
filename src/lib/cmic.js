@@ -61,7 +61,42 @@ async function callProxy(path) {
     "cmic-proxy" + path,
     { method: "GET" }
   );
-  if (error) throw new Error(error.message || "CMiC proxy call failed");
+
+  // When the Edge Function returns a non-2xx status, supabase-js sets
+  // `error` to a generic FunctionsHttpError with message "Edge Function
+  // returned a non-2xx status code". The actual reason is in `data.error`
+  // returned by our `json({ error }, 500)` handler. Try to dig that out
+  // first so the user sees something diagnostic, not a generic line.
+  if (error) {
+    // Try several places where the real error message may live, depending
+    // on which version of supabase-js we're on:
+    //   1. data.error (our Edge Function sets this on 500 responses)
+    //   2. error.context.body (FunctionsHttpError with response body)
+    //   3. error.message (last resort, generic)
+    let realMessage = data?.error;
+
+    if (!realMessage && error.context) {
+      try {
+        // error.context is a Response object on FunctionsHttpError
+        const bodyText = typeof error.context.text === "function"
+          ? await error.context.text()
+          : null;
+        if (bodyText) {
+          try {
+            const parsed = JSON.parse(bodyText);
+            realMessage = parsed.error || parsed.message || bodyText;
+          } catch {
+            realMessage = bodyText;
+          }
+        }
+      } catch {
+        // ignore — fall through to error.message
+      }
+    }
+
+    throw new Error(realMessage || error.message || "CMiC proxy call failed");
+  }
+
   if (data?.error) throw new Error(data.error);
   return data;
 }
