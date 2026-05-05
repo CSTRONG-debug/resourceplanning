@@ -57,6 +57,7 @@ export function mapAssignmentFromDb(a, mobilizations = []) {
         : (isFirst ? [a.crew1_id, a.crew2_id, a.crew3_id, a.crew4_id].filter(Boolean) : []),
       crewMenCounts: m.crew_men_counts || {},
       crewOnly: m.crew_only || false,
+      unassignedNeeds: Array.isArray(m.unassigned_needs) ? m.unassigned_needs.filter(Boolean) : [],
     };
   });
 
