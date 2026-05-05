@@ -1193,12 +1193,176 @@ export function PtoOverlayBar({ pto, timeline }) {
   );
 }
 
+// ─── DraggableGanttBar ────────────────────────────────────────────────────────
+//
+// Wraps GanttSegmentBar with drag handles that let the user adjust a
+// mobilization's start, end, or both by dragging in the timeline. Used only
+// on the Project Assignment Gantt — Resource and Crew Gantts use the plain
+// non-draggable GanttSegmentBar.
+//
+// Drag modes:
+//   - Left edge (6px hot zone): drag = adjust start date
+//   - Right edge (6px hot zone): drag = adjust end date
+//   - Middle: drag = shift both dates by the same amount
+//
+// Snap: whole days (`Math.round`).
+// Save: NOT automatic. On mouseup, calls `onDragEnd({mobilizationId, newStart,
+// newEnd})` and the parent shows a Save/Cancel confirmation dialog. Until
+// the parent confirms, the visual position is reverted by re-render.
+//
+// Skipped for: unassigned-need placeholders (no mobilization ID) and items
+// whose `id` doesn't correspond to a real DB mobilization. Falls back to a
+// plain GanttSegmentBar in those cases.
+
+export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
+  // Skip drag wiring entirely for unassigned-need rows or when no callback
+  // was provided (= drag disabled by parent).
+  if (!onDragEnd || item.isUnassignedNeed || !item.mobilizationId) {
+    return <GanttSegmentBar item={item} timeline={timeline} label={label} />;
+  }
+
+  const project = item.project;
+  const colorClass = project.status === "Pending Award"
+    ? pendingDivisionStyles[project.division] || "bg-slate-300"
+    : divisionStyles[project.division] || "bg-slate-700";
+
+  const [dragState, setDragState] = React.useState(null); // null | {mode, startPxX, origStart, origEnd, currStart, currEnd}
+  const containerRef = React.useRef(null);
+
+  // Pixels per day in the parent timeline. The bar's parent container is
+  // `timeline.width` pixels wide and spans `timeline.totalDays` days.
+  const pxPerDay = timeline.totalDays > 0 ? timeline.width / timeline.totalDays : 1;
+
+  // Use the dragState dates if dragging; otherwise the live item dates.
+  const effectiveStart = dragState ? dragState.currStart : item.start;
+  const effectiveEnd   = dragState ? dragState.currEnd   : item.end;
+  const { left, width } = timelineSpanPercent(effectiveStart, effectiveEnd, timeline);
+
+  function onPointerDown(mode, e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startPxX = e.clientX;
+    setDragState({
+      mode,
+      startPxX,
+      origStart: item.start,
+      origEnd: item.end,
+      currStart: item.start,
+      currEnd: item.end,
+    });
+
+    // Capture pointer so dragging continues even if the cursor leaves the bar.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  }
+
+  function onPointerMove(e) {
+    if (!dragState) return;
+    const dx = e.clientX - dragState.startPxX;
+    const dayDelta = Math.round(dx / pxPerDay);
+
+    const origStartDate = toDate(dragState.origStart);
+    const origEndDate   = toDate(dragState.origEnd);
+    if (!origStartDate || !origEndDate) return;
+
+    let newStartDate, newEndDate;
+    if (dragState.mode === "left") {
+      newStartDate = addDays(origStartDate, dayDelta);
+      newEndDate   = origEndDate;
+      // Don't allow start to cross end (would invert the bar).
+      if (newStartDate >= origEndDate) newStartDate = addDays(origEndDate, -1);
+    } else if (dragState.mode === "right") {
+      newStartDate = origStartDate;
+      newEndDate   = addDays(origEndDate, dayDelta);
+      if (newEndDate <= origStartDate) newEndDate = addDays(origStartDate, 1);
+    } else {
+      // Middle: shift both equally.
+      newStartDate = addDays(origStartDate, dayDelta);
+      newEndDate   = addDays(origEndDate, dayDelta);
+    }
+
+    setDragState({
+      ...dragState,
+      currStart: toIsoDate(newStartDate),
+      currEnd: toIsoDate(newEndDate),
+    });
+  }
+
+  function onPointerUp(e) {
+    if (!dragState) return;
+    const moved = dragState.currStart !== dragState.origStart || dragState.currEnd !== dragState.origEnd;
+    const finalState = { ...dragState };
+    setDragState(null);
+
+    if (!moved) return; // click without drag — do nothing
+
+    onDragEnd({
+      mobilizationId: item.mobilizationId,
+      assignmentId: item.assignment?.id,
+      itemId: item.id,
+      origStart: finalState.origStart,
+      origEnd: finalState.origEnd,
+      newStart: finalState.currStart,
+      newEnd: finalState.currEnd,
+      project,
+      label,
+    });
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className={`absolute top-1 h-9 overflow-visible rounded-xl ${colorClass} text-xs font-semibold leading-9 shadow-sm text-white ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
+      style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none" }}
+      onPointerDown={(e) => onPointerDown("middle", e)}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      title={`${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nDrag bar to shift • Drag edges to resize`}
+    >
+      {/* Left edge handle */}
+      <div
+        onPointerDown={(e) => onPointerDown("left", e)}
+        className="absolute left-0 top-0 z-10 h-full w-2 cursor-ew-resize hover:bg-white/30"
+      />
+      {/* Right edge handle */}
+      <div
+        onPointerDown={(e) => onPointerDown("right", e)}
+        className="absolute right-0 top-0 z-10 h-full w-2 cursor-ew-resize hover:bg-white/30"
+      />
+      {/* Bar label (overflow hidden so long labels don't escape) */}
+      <span className="block overflow-hidden whitespace-nowrap px-3">
+        {label || "Unassigned"}
+      </span>
+      {/* Live tooltip while dragging — positions above the bar */}
+      {dragState && (
+        <div className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[11px] font-bold text-white shadow-lg">
+          {formatDate(effectiveStart)} → {formatDate(effectiveEnd)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Tiny helper: Date → ISO YYYY-MM-DD. Uses local timezone to avoid the
+// classic "saved date is one day earlier" timezone bug. addDays is already
+// defined in the imports.
+function toIsoDate(d) {
+  if (!d) return "";
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 // ─── ProjectGanttRow ──────────────────────────────────────────────────────────
 
-export function ProjectGanttRow({ assignment, project, items, timeline, crews }) {
+export function ProjectGanttRow({ assignment, project, items, timeline, crews, onDragEnd, onLabelClick }) {
   return (
     <div className="grid grid-cols-[260px_1fr] items-center gap-5">
-      <button className="sticky left-0 z-20 bg-white pr-3 text-left">
+      <button
+        onClick={onLabelClick}
+        className="sticky left-0 z-20 bg-white pr-3 text-left hover:bg-slate-50"
+      >
         <div className="flex items-center gap-2">
           <span className={`h-3 w-3 rounded-full ${project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600"}`} />
           <p className="font-semibold text-slate-900 hover:text-emerald-700">
@@ -1209,7 +1373,13 @@ export function ProjectGanttRow({ assignment, project, items, timeline, crews })
       </button>
       <div className="relative h-11 rounded-xl bg-slate-100" style={{ width: `${timeline.width}px` }}>
         {items.map((item) => (
-          <GanttSegmentBar key={item.id} item={item} timeline={timeline} label={item.isUnassignedNeed ? `${item.unassignedAbbreviation} - Unassigned` : getAssignmentPeopleLabel(item.assignment, crews)} />
+          <DraggableGanttBar
+            key={item.id}
+            item={item}
+            timeline={timeline}
+            label={item.isUnassignedNeed ? `${item.unassignedAbbreviation} - Unassigned` : getAssignmentPeopleLabel(item.assignment, crews)}
+            onDragEnd={onDragEnd}
+          />
         ))}
       </div>
     </div>
@@ -1747,15 +1917,54 @@ export default function App() {
   );
   // Demand chart uses its own independent timeline scoped to demandZoom
   const demandTimeline = useMemo(() => buildTimeline(visibleItems, demandZoom), [visibleItems, demandZoom]);
-  const demandFilteredItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, demandTimeline)).map((item) => {
-    const assignedNames = [item.assignment.superintendent, item.assignment.projectManager, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].filter(Boolean);
-    const assignedResource = resources.find((r) => assignedNames.includes(r.name) && demandHomeDivisionFilter.includes(r.homeDivision));
-    const anyAssignedResource = assignedResource || resources.find((r) => assignedNames.includes(r.name));
-    const resourceHomeDivision = anyAssignedResource?.homeDivision || item.project.division;
-    return demandHomeDivisionFilter.includes(resourceHomeDivision)
-      ? { ...item, assignment: { ...item.assignment, _resourceHomeDivision: resourceHomeDivision } }
-      : null;
-  }).filter(Boolean);
+
+  // Build a name → resource lookup so we can resolve "Chris Salmon" → home
+  // division + resource type without scanning the full array each time.
+  const resourceByName = useMemo(() => {
+    const m = new Map();
+    resources.forEach((r) => { if (r.name) m.set(r.name, r); });
+    return m;
+  }, [resources]);
+
+  // Map resource type to the assignment role field that holds person names.
+  // Used to ensure that when the user filters by (e.g.) "Superintendent",
+  // we only look at the superintendent field on each mobilization, not all
+  // five role fields.
+  const RESOURCE_TYPE_TO_ROLE = {
+    "Project Manager":    "projectManager",
+    "Superintendent":     "superintendent",
+    "Field Coordinator":  "fieldCoordinator",
+    "Field Engineer":     "fieldEngineer",
+    "Safety":             "safety",
+  };
+
+  // Filter rule for the demand chart:
+  //   A mobilization is shown if AT LEAST ONE role-assigned person on it
+  //   matches BOTH the resource-type filter AND the home-division filter.
+  //   The bar color comes from the project's division (so a hardscape
+  //   superintendent on a commercial project shows up as a commercial bar).
+  // This matches: "filter by superintendents + hardscape" should show every
+  // mobilization where a hardscape superintendent is named, regardless of
+  // what division the project is in.
+  const demandFilteredItems = visibleItems
+    .filter((item) => itemOverlapsTimeline(item.start, item.end, demandTimeline))
+    .filter((item) => {
+      // Walk the role fields the user has selected. For each, check whether
+      // the named person on this mobilization is in the home-division filter.
+      const rolesToCheck = dashboardResourceTypeFilter
+        .map((rt) => RESOURCE_TYPE_TO_ROLE[rt])
+        .filter(Boolean);
+      for (const roleField of rolesToCheck) {
+        const personName = item.assignment[roleField];
+        if (!personName) continue;
+        const r = resourceByName.get(personName);
+        // If we can't find the resource record, fall back to allowing the
+        // person through — better than dropping data because of a name typo.
+        if (!r) continue;
+        if (demandHomeDivisionFilter.includes(r.homeDivision)) return true;
+      }
+      return false;
+    });
 
   const activeCrews = crews.filter((c) => !isCrewDeactivated(c));
 
@@ -2118,6 +2327,62 @@ export default function App() {
       mobilizations: mobs,
     });
     setShowAssignmentForm(true);
+  }
+
+  // ── Drag-to-adjust on the Project Assignment Gantt ────────────────────────
+  // When a bar is dragged in the Project Gantt, DraggableGanttBar calls this
+  // with the new dates. We open a Save/Cancel confirmation dialog; the user
+  // must explicitly confirm before the database is touched.
+  const [pendingDragChange, setPendingDragChange] = useState(null);
+  const [savingDragChange, setSavingDragChange] = useState(false);
+
+  function handleProjectGanttDragEnd(payload) {
+    setPendingDragChange(payload);
+  }
+
+  async function applyPendingDragChange() {
+    if (!pendingDragChange || !supabase) return;
+    setSavingDragChange(true);
+    const { mobilizationId, assignmentId, newStart, newEnd } = pendingDragChange;
+    try {
+      // Update the mobilization row in place. We do NOT touch the assignment
+      // row — start/end at the assignment level are derived from its first
+      // mobilization for legacy/blank cases only.
+      const { error } = await supabase
+        .from("mobilizations")
+        .update({ start: newStart, end: newEnd })
+        .eq("id", mobilizationId);
+      if (error) {
+        console.error(error);
+        alert("Could not save the date change. Please try again.");
+        setSavingDragChange(false);
+        return;
+      }
+      // Optimistically patch local state so the UI reflects the saved
+      // values immediately, without waiting for a refetch.
+      setAssignments((current) => current.map((a) => {
+        if (a.id !== assignmentId) return a;
+        const newMobs = (a.mobilizations || []).map((m) =>
+          m.id === mobilizationId ? { ...m, start: newStart, end: newEnd } : m
+        );
+        // For the first mobilization we also mirror onto the assignment-level
+        // start/end so the rest of the app stays consistent with how
+        // saveAssignment writes data.
+        const isFirst = a.mobilizations?.[0]?.id === mobilizationId;
+        return {
+          ...a,
+          mobilizations: newMobs,
+          ...(isFirst ? { start: newStart, end: newEnd } : {}),
+        };
+      }));
+      setPendingDragChange(null);
+    } finally {
+      setSavingDragChange(false);
+    }
+  }
+
+  function cancelPendingDragChange() {
+    setPendingDragChange(null);
   }
 
   async function saveAssignment() {
@@ -3288,9 +3553,17 @@ export default function App() {
               <GanttHeader timeline={timeline} zoom={zoom} />
               <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
                 {projectGanttRows.map((row) => (
-                  <button key={row.project.id} onClick={() => openEditAssignmentForm(row.assignment)} className="block w-full text-left">
-                    <ProjectGanttRow assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} />
-                  </button>
+                  <div key={row.project.id} className="block w-full text-left">
+                    <ProjectGanttRow
+                      assignment={row.assignment}
+                      project={row.project}
+                      items={row.items}
+                      timeline={timeline}
+                      crews={crews}
+                      onLabelClick={() => openEditAssignmentForm(row.assignment)}
+                      onDragEnd={handleProjectGanttDragEnd}
+                    />
+                  </div>
                 ))}
               </div>
             </div>
@@ -4008,7 +4281,18 @@ export default function App() {
                 <div>
                   <GanttHeader timeline={timeline} zoom={zoom} />
                   <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                    {projectGanttRows.map((row) => <ProjectGanttRow key={row.project.id} assignment={row.assignment} project={row.project} items={row.items} timeline={timeline} crews={crews} />)}
+                    {projectGanttRows.map((row) => (
+                      <ProjectGanttRow
+                        key={row.project.id}
+                        assignment={row.assignment}
+                        project={row.project}
+                        items={row.items}
+                        timeline={timeline}
+                        crews={crews}
+                        onLabelClick={() => openEditAssignmentForm(row.assignment)}
+                        onDragEnd={handleProjectGanttDragEnd}
+                      />
+                    ))}
                   </div>
                 </div>
               )}
@@ -4348,6 +4632,54 @@ export default function App() {
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} onDelete={() => deleteProject(editingProjectId)} editing={Boolean(editingProjectId)} certifications={certifications} projectTypes={projectTypes} />}
       {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={activeCrews} />}
       {showResourceForm && <ResourceForm form={resourceForm} setForm={setResourceForm} certifications={certifications} onSave={saveResource} onCancel={() => setShowResourceForm(false)} onDelete={() => deleteResource(editingResourceId)} onExportResume={() => exportResourceResume(resourceForm)} resourceStats={editingResourceId ? getResourceStats(resourceForm) : null} editing={Boolean(editingResourceId)} />}
+
+      {/* ── Drag-to-adjust confirmation dialog (Project Gantt) ── */}
+      {pendingDragChange && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-slate-900">Save schedule change?</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {pendingDragChange.project?.projectNumber ? `${pendingDragChange.project.projectNumber} · ` : ""}
+              {pendingDragChange.project?.name}
+              {pendingDragChange.label ? ` · ${pendingDragChange.label}` : ""}
+            </p>
+            <div className="mt-4 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="font-semibold text-slate-700">Start</span>
+                <span>
+                  <span className="text-slate-400 line-through">{formatDate(pendingDragChange.origStart)}</span>
+                  {" → "}
+                  <span className="font-bold text-emerald-700">{formatDate(pendingDragChange.newStart)}</span>
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="font-semibold text-slate-700">End</span>
+                <span>
+                  <span className="text-slate-400 line-through">{formatDate(pendingDragChange.origEnd)}</span>
+                  {" → "}
+                  <span className="font-bold text-emerald-700">{formatDate(pendingDragChange.newEnd)}</span>
+                </span>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={cancelPendingDragChange}
+                disabled={savingDragChange}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={applyPendingDragChange}
+                disabled={savingDragChange}
+                className="rounded-xl bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:bg-slate-300"
+              >
+                {savingDragChange ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showCrewForm && <CrewForm form={crewForm} setForm={setCrewForm} certifications={certifications} onSave={saveCrew} onCancel={() => setShowCrewForm(false)} onDelete={() => deleteCrew(editingCrewId)} editing={Boolean(editingCrewId)} />}
 
       {/* ── Forecast Settings Modal ── */}
