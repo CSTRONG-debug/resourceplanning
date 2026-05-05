@@ -316,12 +316,14 @@ function buildTimeline(items, zoom) {
 }
 
 // Pixel offset from minDate. Returns absolute pixels (not %), so bars and
-// today-lines can be positioned with `left: ${px}px`.
+// today-lines can be positioned with `left: ${px}px`. Tolerates legacy
+// timeline objects that lack pxPerDay by falling back to width/totalDays.
 function timelinePixelOffset(date, timeline) {
   const d = toDate(date);
   if (!d || !timeline) return 0;
+  const pxPerDay = timeline.pxPerDay || (timeline.totalDays > 0 ? timeline.width / timeline.totalDays : 1);
   const days = (d - timeline.minDate) / (1000 * 60 * 60 * 24);
-  return Math.round(days * timeline.pxPerDay);
+  return Math.round(days * pxPerDay);
 }
 
 // Returns { left, width } in PIXELS for placing a bar from start to end
@@ -1472,7 +1474,7 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
   const colorClass = isUnassigned || project.status === "Pending Award"
     ? pendingDivisionStyles[barDivision] || "bg-slate-300"
     : divisionStyles[barDivision] || "bg-slate-700";
-  const { left, width } = timelineSpanPercent(item.start, item.end, timeline);
+  const { left, width } = timelineSpanPixels(item.start, item.end, timeline);
   const patternStyle = isUnassigned ? {
     border: "2px solid #111827",
     backgroundImage: "repeating-linear-gradient(135deg, rgba(17,24,39,.35) 0 2px, transparent 2px 9px)",
@@ -1494,7 +1496,7 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
   return (
     <div
       className={`absolute top-0.5 h-7 overflow-hidden rounded-md ${colorClass} px-2.5 text-[11px] font-semibold leading-7 shadow-sm ${isUnassigned ? "text-slate-900" : "text-white"}`}
-      style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, ...patternStyle, ...conflictStyle }}
+      style={{ left: `${left}px`, width: `${width}px`, ...patternStyle, ...conflictStyle }}
       title={tooltip}
     >
       <span className={conflict ? "rounded bg-white/90 px-1.5 py-0.5 font-bold text-red-700" : ""}>{label || "Unassigned"}</span>
@@ -1510,11 +1512,11 @@ export function PtoOverlayBar({ pto, timeline }) {
   const start = toDate(pto.start);
   const end = toDate(pto.end);
   if (!start || !end || !rangesOverlap(start, addDays(end, 1), timeline.minDate, addDays(timeline.maxDate, 1))) return null;
-  const { left, width } = timelineSpanPercent(start, end, timeline);
+  const { left, width } = timelineSpanPixels(start, end, timeline);
   return (
     <div
       className="absolute top-0 z-20 h-8 overflow-hidden rounded-md border-2 border-black bg-white/70 px-2.5 text-[11px] font-bold leading-7 text-black shadow"
-      style={{ left: `${left}%`, width: `${Math.max(0.15, width)}%`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(0,0,0,.95) 8px 10px)", backgroundSize: "14px 14px" }}
+      style={{ left: `${left}px`, width: `${width}px`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(0,0,0,.95) 8px 10px)", backgroundSize: "14px 14px" }}
       title={`PTO ${pto.ptoId || ""}: ${formatDate(pto.start)} - ${formatDate(pto.end)}`}
     >
       PTO {pto.ptoId || ""}
@@ -1558,14 +1560,13 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
   const [dragState, setDragState] = React.useState(null); // null | {mode, startPxX, origStart, origEnd, currStart, currEnd}
   const containerRef = React.useRef(null);
 
-  // Pixels per day in the parent timeline. The bar's parent container is
-  // `timeline.width` pixels wide and spans `timeline.totalDays` days.
-  const pxPerDay = timeline.totalDays > 0 ? timeline.width / timeline.totalDays : 1;
+  // Pixels per day from the new pixel-based timeline.
+  const pxPerDay = timeline.pxPerDay || 1;
 
   // Use the dragState dates if dragging; otherwise the live item dates.
   const effectiveStart = dragState ? dragState.currStart : item.start;
   const effectiveEnd   = dragState ? dragState.currEnd   : item.end;
-  const { left, width } = timelineSpanPercent(effectiveStart, effectiveEnd, timeline);
+  const { left, width } = timelineSpanPixels(effectiveStart, effectiveEnd, timeline);
 
   function onPointerDown(mode, e) {
     e.preventDefault();
@@ -1641,7 +1642,7 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
     <div
       ref={containerRef}
       className={`absolute top-0.5 h-7 overflow-visible rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm text-white ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
-      style={{ left: `${left}%`, width: `${Math.max(2, width)}%`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none" }}
+      style={{ left: `${left}px`, width: `${width}px`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none" }}
       onPointerDown={(e) => onPointerDown("middle", e)}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -1701,7 +1702,7 @@ export function ProjectGanttRow({ assignment, project, items, timeline, crews, o
         </div>
         <p className="mt-1 text-xs text-slate-500">{project.division} • {project.status} • {items.length} mobilization{items.length === 1 ? "" : "s"}</p>
       </button>
-      <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
+      <div className="relative h-8 rounded-md" style={{ width: `${timeline.width}px` }}>
         {items.map((item) => (
           <DraggableGanttBar
             key={item.id}
@@ -1743,7 +1744,7 @@ export function ResourceGanttRow({ resource, items, timeline, onResourceClick })
           {ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}
         </p>
       </div>
-      <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
+      <div className="relative h-8 rounded-md" style={{ width: `${timeline.width}px` }}>
         {sortedItems.map((item) => (
           <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} conflict={conflictIds.has(item.id)} />
         ))}
@@ -1778,7 +1779,7 @@ export function UnassignedNeedGanttRow({ resource, items, timeline }) {
         <p className="mt-1 text-xs text-slate-500">{resource.homeDivision} • unassigned need</p>
         {resource.projectLabel && <p className="mt-0.5 text-xs font-medium text-slate-700">{resource.projectLabel}</p>}
       </div>
-      <div className="relative rounded-xl bg-amber-50" style={{ width: `${timeline.width}px`, height: `${Math.max(32, lanes.length * 32)}px` }}>
+      <div className="relative rounded-xl" style={{ width: `${timeline.width}px`, height: `${Math.max(32, lanes.length * 32)}px` }}>
         {lanes.map((lane, laneIndex) =>
           lane.map((item) => (
             <GanttSegmentBar
@@ -1818,10 +1819,10 @@ export function CrewGanttRow({ crew, items, timeline }) {
           {(crew.specialty || []).join(", ") || "No specialty"} • {items.length} assignment{items.length === 1 ? "" : "s"}
         </p>
       </div>
-      <div className="relative rounded-xl bg-slate-100" style={{ width: `${timeline.width}px`, height: `${Math.max(32, lanes.length * 32)}px` }}>
+      <div className="relative rounded-xl" style={{ width: `${timeline.width}px`, height: `${Math.max(32, lanes.length * 32)}px` }}>
         {lanes.map((lane, laneIndex) =>
           lane.map((item) => {
-            const span = timelineSpanPercent(item.start, item.end, timeline);
+            const span = timelineSpanPixels(item.start, item.end, timeline);
             const colorClass = item.project.status === "Pending Award"
               ? pendingDivisionStyles[item.project.division]
               : divisionStyles[item.project.division];
@@ -1829,7 +1830,7 @@ export function CrewGanttRow({ crew, items, timeline }) {
               <div
                 key={`${crew.id}-${item.id}`}
                 className={`absolute h-7 overflow-hidden rounded-md px-2.5 text-[11px] font-semibold leading-7 text-white shadow-sm ${colorClass || "bg-slate-700"}`}
-                style={{ left: `${span.left}%`, width: `${Math.max(2, span.width)}%`, top: `${laneIndex * 32 + 2}px` }}
+                style={{ left: `${span.left}px`, width: `${span.width}px`, top: `${laneIndex * 32 + 2}px` }}
               >
                 {item.project.name}
               </div>
@@ -4105,20 +4106,26 @@ export default function App() {
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
-              <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                {projectGanttRows.map((row) => (
-                  <div key={row.project.id} className="block w-full text-left">
-                    <ProjectGanttRow
-                      assignment={row.assignment}
-                      project={row.project}
-                      items={row.items}
-                      timeline={timeline}
-                      crews={crews}
-                      onLabelClick={() => openEditAssignmentForm(row.assignment)}
-                      onDragEnd={handleProjectGanttDragEnd}
-                    />
-                  </div>
-                ))}
+              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
+                {/* Backdrop: weekend bands + today line. Offset 260px to skip sticky label column. */}
+                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+                  <GanttBackdrop timeline={timeline} />
+                </div>
+                <div className="relative z-10 space-y-3">
+                  {projectGanttRows.map((row) => (
+                    <div key={row.project.id} className="block w-full text-left">
+                      <ProjectGanttRow
+                        assignment={row.assignment}
+                        project={row.project}
+                        items={row.items}
+                        timeline={timeline}
+                        crews={crews}
+                        onLabelClick={() => openEditAssignmentForm(row.assignment)}
+                        onDragEnd={handleProjectGanttDragEnd}
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </section>
@@ -4151,12 +4158,17 @@ export default function App() {
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
-              <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                {resourceGanttRowsWithUnassigned.map((row) => (
-                  row.isUnassignedNeedRow
-                    ? <UnassignedNeedGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />
-                    : <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />
-                ))}
+              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
+                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+                  <GanttBackdrop timeline={timeline} />
+                </div>
+                <div className="relative z-10 space-y-3">
+                  {resourceGanttRowsWithUnassigned.map((row) => (
+                    row.isUnassignedNeedRow
+                      ? <UnassignedNeedGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />
+                      : <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />
+                  ))}
+                </div>
               </div>
             </div>
           </section>
@@ -4211,8 +4223,13 @@ export default function App() {
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
-              <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                {crewGanttRows.map((row) => <CrewGanttRow key={row.crew.id} crew={row.crew} items={row.items} timeline={timeline} />)}
+              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
+                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+                  <GanttBackdrop timeline={timeline} />
+                </div>
+                <div className="relative z-10 space-y-3">
+                  {crewGanttRows.map((row) => <CrewGanttRow key={row.crew.id} crew={row.crew} items={row.items} timeline={timeline} />)}
+                </div>
               </div>
             </div>
           </section>
@@ -4834,35 +4851,50 @@ export default function App() {
               {expandedView === "project" && (
                 <div>
                   <GanttHeader timeline={timeline} zoom={zoom} />
-                  <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                    {projectGanttRows.map((row) => (
-                      <ProjectGanttRow
-                        key={row.project.id}
-                        assignment={row.assignment}
-                        project={row.project}
-                        items={row.items}
-                        timeline={timeline}
-                        crews={crews}
-                        onLabelClick={() => openEditAssignmentForm(row.assignment)}
-                        onDragEnd={handleProjectGanttDragEnd}
-                      />
-                    ))}
+                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
+                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+                      <GanttBackdrop timeline={timeline} />
+                    </div>
+                    <div className="relative z-10 space-y-3">
+                      {projectGanttRows.map((row) => (
+                        <ProjectGanttRow
+                          key={row.project.id}
+                          assignment={row.assignment}
+                          project={row.project}
+                          items={row.items}
+                          timeline={timeline}
+                          crews={crews}
+                          onLabelClick={() => openEditAssignmentForm(row.assignment)}
+                          onDragEnd={handleProjectGanttDragEnd}
+                        />
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
               {expandedView === "resource" && (
                 <div>
                   <GanttHeader timeline={timeline} zoom={zoom} />
-                  <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                    {resourceGanttRowsWithUnassigned.map((row) => row.isUnassignedNeedRow ? <UnassignedNeedGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} /> : <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}
+                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
+                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+                      <GanttBackdrop timeline={timeline} />
+                    </div>
+                    <div className="relative z-10 space-y-3">
+                      {resourceGanttRowsWithUnassigned.map((row) => row.isUnassignedNeedRow ? <UnassignedNeedGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} /> : <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}
+                    </div>
                   </div>
                 </div>
               )}
               {expandedView === "crew" && (
                 <div>
                   <GanttHeader timeline={timeline} zoom={zoom} />
-                  <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                    {crewGanttRows.map((row) => <CrewGanttRow key={row.crew.id} crew={row.crew} items={row.items} timeline={timeline} />)}
+                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
+                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+                      <GanttBackdrop timeline={timeline} />
+                    </div>
+                    <div className="relative z-10 space-y-3">
+                      {crewGanttRows.map((row) => <CrewGanttRow key={row.crew.id} crew={row.crew} items={row.items} timeline={timeline} />)}
+                    </div>
                   </div>
                 </div>
               )}
