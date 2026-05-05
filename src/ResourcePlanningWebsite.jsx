@@ -1497,15 +1497,32 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
     conflict ? "Conflict detected" : "",
   ].filter(Boolean).join("\n");
 
+  // If the bar starts to the LEFT of the visible chart area (because it
+  // started in the past), shift the label inward so it stays visible.
+  // The bar itself extends back to its true start position; only the label
+  // text is pulled into view. Once the bar exits the chart on the right,
+  // the whole thing disappears.
+  const labelOffset = left < 0 ? -left + 6 : 0;
+
+  // When zoomed out, the bar may be too narrow to contain its label. Allow
+  // the label to overflow OUTSIDE the bar's right edge so it stays visible.
+  // The bar itself uses overflow-visible; later bars in the same row paint
+  // over earlier bars' overflowed labels (so conflicts hide cleanly). The
+  // visible bar background still ends at the bar's true width.
+  const tooNarrow = width < 70;
+
   return (
     <div
-      className={`absolute top-0.5 h-7 overflow-hidden rounded-md ${colorClass} px-2.5 text-[11px] font-semibold leading-7 shadow-sm ${isUnassigned ? "text-slate-900" : "text-white"}`}
+      className={`absolute top-0.5 h-7 rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm ${isUnassigned ? "text-slate-900" : "text-white"} ${tooNarrow ? "overflow-visible" : "overflow-hidden px-2.5"}`}
       style={{ left: `${left}px`, width: `${width}px`, ...patternStyle, ...conflictStyle }}
       title={tooltip}
     >
-      <span className={conflict ? "rounded bg-white/90 px-1.5 py-0.5 font-bold text-red-700" : ""}>{label || "Unassigned"}</span>
-      {isUnassigned && <span className="ml-2 rounded bg-white/80 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-900">unassigned</span>}
-      {conflict && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-white">conflict</span>}
+      <span
+        className={`${conflict ? "rounded bg-white/90 px-1.5 py-0.5 font-bold text-red-700" : ""} ${tooNarrow ? "absolute left-full top-0 ml-1 whitespace-nowrap leading-7 text-slate-700" : ""}`}
+        style={labelOffset && !tooNarrow ? { paddingLeft: `${labelOffset}px` } : undefined}
+      >{label || "Unassigned"}</span>
+      {isUnassigned && !tooNarrow && <span className="ml-2 rounded bg-white/80 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-900">unassigned</span>}
+      {conflict && !tooNarrow && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-white">conflict</span>}
     </div>
   );
 }
@@ -1664,10 +1681,22 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
         onPointerDown={(e) => onPointerDown("right", e)}
         className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-ew-resize hover:bg-white/40 hover:w-2 transition-all"
       />
-      {/* Bar label (overflow hidden so long labels don't escape) */}
-      <span className="block overflow-hidden whitespace-nowrap px-2.5">
-        {label || "Unassigned"}
-      </span>
+      {/* Bar label (overflow hidden so long labels don't escape).
+          When the bar starts to the LEFT of the visible area, push the
+          label inward so it remains readable until the bar exits right.
+          When the bar is too narrow, render the label OUTSIDE on the right. */}
+      {width < 70 ? (
+        <span className="pointer-events-none absolute left-full top-0 ml-1 whitespace-nowrap leading-7 text-slate-700">
+          {label || "Unassigned"}
+        </span>
+      ) : (
+        <span
+          className="block overflow-hidden whitespace-nowrap px-2.5"
+          style={left < 0 ? { paddingLeft: `${-left + 10}px` } : undefined}
+        >
+          {label || "Unassigned"}
+        </span>
+      )}
       {/* Live tooltip while dragging — positions above the bar */}
       {dragState && (
         <div className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-white shadow-lg">
@@ -1693,7 +1722,7 @@ function toIsoDate(d) {
 
 export function ProjectGanttRow({ assignment, project, items, timeline, crews, onDragEnd, onLabelClick }) {
   return (
-    <div className="grid grid-cols-[260px_1fr] items-center gap-5">
+    <div className="grid grid-cols-[260px_1fr] items-center gap-0">
       <button
         onClick={onLabelClick}
         className="sticky left-0 z-20 bg-white pr-3 text-left hover:bg-slate-50"
@@ -1740,7 +1769,7 @@ export function ResourceGanttRow({ resource, items, timeline, onResourceClick })
   });
 
   return (
-    <div className="grid grid-cols-[260px_1fr] items-center gap-5">
+    <div className="grid grid-cols-[260px_1fr] items-center gap-0">
       <div className="sticky left-0 z-20 bg-white pr-3 text-left">
         <button onClick={() => onResourceClick?.(resource)} className="font-semibold text-slate-900 hover:text-emerald-700">{resource.name}</button>
         <p className="mt-1 text-xs text-slate-500">
@@ -1777,7 +1806,7 @@ export function UnassignedNeedGanttRow({ resource, items, timeline }) {
   });
 
   return (
-    <div className="grid grid-cols-[260px_1fr] items-start gap-5">
+    <div className="grid grid-cols-[260px_1fr] items-start gap-0">
       <div className="sticky left-0 z-20 bg-white pr-3 text-left">
         <p className="font-semibold text-amber-800">{resource.name}</p>
         <p className="mt-1 text-xs text-slate-500">{resource.homeDivision} • unassigned need</p>
@@ -1816,7 +1845,7 @@ export function CrewGanttRow({ crew, items, timeline }) {
   });
 
   return (
-    <div className="grid grid-cols-[260px_1fr] items-start gap-5">
+    <div className="grid grid-cols-[260px_1fr] items-start gap-0">
       <div className="sticky left-0 z-20 bg-white pr-3 text-left">
         <p className="font-semibold text-slate-900">{getCrewDisplayName(crew)}</p>
         <p className="mt-1 text-xs text-slate-500">
@@ -1830,13 +1859,21 @@ export function CrewGanttRow({ crew, items, timeline }) {
             const colorClass = item.project.status === "Pending Award"
               ? pendingDivisionStyles[item.project.division]
               : divisionStyles[item.project.division];
+            const tooNarrow = span.width < 70;
+            const labelOffset = span.left < 0 ? -span.left + 6 : 0;
             return (
               <div
                 key={`${crew.id}-${item.id}`}
-                className={`absolute h-7 overflow-hidden rounded-md px-2.5 text-[11px] font-semibold leading-7 text-white shadow-sm ${colorClass || "bg-slate-700"}`}
+                className={`absolute h-7 rounded-md text-[11px] font-semibold leading-7 text-white shadow-sm ${colorClass || "bg-slate-700"} ${tooNarrow ? "overflow-visible" : "overflow-hidden px-2.5"}`}
                 style={{ left: `${span.left}px`, width: `${span.width}px`, top: `${laneIndex * 32 + 2}px` }}
               >
-                {item.project.name}
+                {tooNarrow ? (
+                  <span className="pointer-events-none absolute left-full top-0 ml-1 whitespace-nowrap leading-7 text-slate-700">
+                    {item.project.name}
+                  </span>
+                ) : (
+                  <span style={labelOffset ? { paddingLeft: `${labelOffset}px` } : undefined}>{item.project.name}</span>
+                )}
               </div>
             );
           })
@@ -4561,24 +4598,24 @@ export default function App() {
               <GanttHeader timeline={timeline} zoom={zoom} />
               <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
                 {focusedResourceItems.map((item) => (
-                  <div key={`focused-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5">
+                  <div key={`focused-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-0">
                     <div className="text-left">
                       <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
                       <p className="mt-1 text-xs text-slate-500">{item.project.division} • {formatDate(item.start)} - {formatDate(item.end)}</p>
                     </div>
-                    <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
+                    <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
                       <GanttSegmentBar item={item} timeline={timeline} label={item.project.name} />
                     </div>
                   </div>
                 ))}
                 {/* PTO rows */}
                 {(focusedResource.pto || []).filter((p) => p.start && p.end).map((pto) => (
-                  <div key={`focused-pto-${pto.id || pto.ptoId}`} className="grid grid-cols-[260px_1fr] items-center gap-5">
+                  <div key={`focused-pto-${pto.id || pto.ptoId}`} className="grid grid-cols-[260px_1fr] items-center gap-0">
                     <div className="text-left">
                       <p className="font-semibold text-slate-900">PTO — {pto.ptoId || "Unspecified"}</p>
                       <p className="mt-1 text-xs text-slate-500">{formatDate(pto.start)} – {formatDate(pto.end)}</p>
                     </div>
-                    <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
+                    <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
                       <PtoOverlayBar pto={pto} timeline={timeline} />
                     </div>
                   </div>
@@ -4661,7 +4698,7 @@ export default function App() {
                               <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
                               <p className="mt-0.5 text-xs text-slate-400">Counts toward selected period total.</p>
                             </div>
-                            <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${popupTimeline.width}px` }}>
+                            <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${popupTimeline.width}px` }}>
                               <GanttSegmentBar item={item} timeline={popupTimeline} label={`${item.project.name} · ${rowMen} men`} />
                             </div>
                           </div>
@@ -4750,7 +4787,7 @@ export default function App() {
                               </div>
                               <p className="mt-1 text-xs text-slate-500">{row.project.division} • {row.project.status} • {start ? formatDate(start) : "No start"} – {end ? formatDate(end) : "No end"}</p>
                             </div>
-                            <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${pmTimeline.width}px` }}>
+                            <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${pmTimeline.width}px` }}>
                               {row.items.map((item) => (
                                 <GanttSegmentBar key={`pm-util-${row.project.id}-${item.id}`} item={item} timeline={pmTimeline} label={row.project.name} />
                               ))}
@@ -4787,13 +4824,13 @@ export default function App() {
                 <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 280}px` }}>
                   {items.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments found for this segment.</div>}
                   {items.map((item) => (
-                    <div key={`seg-drilldown-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5">
+                    <div key={`seg-drilldown-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-0">
                       <div className="text-left">
                         <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
                         <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
                         <p className="mt-0.5 text-xs text-slate-400">{getAssignmentPeopleLabel(item.assignment, crews) || "Unassigned"}</p>
                       </div>
-                      <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
+                      <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
                         <GanttSegmentBar item={item} timeline={periodTimeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
                       </div>
                     </div>
@@ -4823,13 +4860,13 @@ export default function App() {
                 <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 280}px` }}>
                   {periodItems.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments active in this period.</div>}
                   {periodItems.map((item) => (
-                    <div key={`period-drilldown-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-5">
+                    <div key={`period-drilldown-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-0">
                       <div className="text-left">
                         <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
                         <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
                         <p className="mt-0.5 text-xs text-slate-400">{getAssignmentPeopleLabel(item.assignment, crews) || "Unassigned"}</p>
                       </div>
-                      <div className="relative h-8 rounded-md bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
+                      <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
                         <GanttSegmentBar item={item} timeline={periodTimeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
                       </div>
                     </div>
