@@ -91,6 +91,7 @@ export function useSupabaseRealtime({
         });
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "assignments" }, async ({ new: row }) => {
+         if (savingAssignmentIdsRef?.current?.has(row.id)) return;
         const { data: mobs } = await supabase
           .from("mobilizations")
           .select("*")
@@ -111,6 +112,7 @@ export function useSupabaseRealtime({
       .on("postgres_changes", { event: "*", schema: "public", table: "mobilizations" }, async ({ new: row, old: oldRow }) => {
         const assignmentId = row?.assignment_id || oldRow?.assignment_id;
         if (!assignmentId) return;
+        if (savingAssignmentIdsRef?.current?.has(assignmentId)) return;
         const { data: assignmentRow } = await supabase
           .from("assignments")
           .select("*")
