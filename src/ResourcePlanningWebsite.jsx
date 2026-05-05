@@ -1938,6 +1938,13 @@ export default function App() {
     const names = [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety].filter(Boolean);
     // Crew-only mobilization — no named resources, always show
     if (!names.length) return true;
+    // Always show assignments that have at least one mobilization with an
+    // unassigned need (so mob holes always appear on the Gantt regardless
+    // of which roles are currently filtered).
+    const hasUnassignedNeed = (assignment.mobilizations || []).some((mob) =>
+      normalizeUnassignedNeeds(mob.unassignedNeeds || mob._unassignedNeeds).length > 0
+    );
+    if (hasUnassignedNeed) return true;
     const selectedNames = resources.filter((r) => dashboardResourceTypeFilter.includes(r.resourceType)).map((r) => r.name);
     return names.some((name) => selectedNames.includes(name));
   };
@@ -4789,7 +4796,7 @@ export default function App() {
                             <input type="number"
                               className={`w-full rounded-lg border px-2 py-1 text-right text-sm outline-none focus:bg-white ${contractMismatch ? "border-red-400 bg-red-50 text-red-700 font-bold focus:border-red-500" : "border-slate-200 bg-transparent focus:border-emerald-500"}`}
                               defaultValue={row.contractValue || ""} placeholder="0"
-                              title={contractMismatch ? `Contract ${fmt(row.contractValue || 0)} does not match Prior Year + Year Total + Thereafter (${fmt(computedTotal)}). Try clicking ↻ Recalculate.` : ""}
+                              title={contractMismatch ? `Contract: ${fmt(row.contractValue || 0)}\nPrior Year: ${fmt(priorYearTotal)}\nYear Total: ${fmt(yearTotal)}\nThereafter: ${fmt(thereafter)}\n— Computed Total: ${fmt(computedTotal)}\n— Difference: ${fmt(computedTotal - (row.contractValue || 0))}\n\nTry clicking ↻ Recalculate.` : `Contract: ${fmt(row.contractValue || 0)}\nPrior Year: ${fmt(priorYearTotal)}\nYear Total: ${fmt(yearTotal)}\nThereafter: ${fmt(thereafter)}\n— Total: ${fmt(computedTotal)}`}
                               onBlur={(e) => saveForecastRow(p.id, { contractValue: parseFloat(e.target.value) || 0 })} />
                           </td>
                           {/* Prior Year column */}
