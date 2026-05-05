@@ -50,6 +50,7 @@ const DIVISION_MAP = {
   CM: "Commercial",
   HS: "Hardscape",
   IN: "Industrial",
+  TL: "Tilt",
 };
 
 // ── Edge Function caller ──────────────────────────────────────────────────
