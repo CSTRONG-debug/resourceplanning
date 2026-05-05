@@ -2647,27 +2647,60 @@ export default function App() {
     return [...months].sort();
   }
 
-  // Get the number of onsite days a project has in a given month
-  // across all its mobilization date ranges
+  // Get the number of UNIQUE onsite days a project has in a given month.
+  //
+  // A project usually has multiple assignment rows (one per role: PM,
+  // Superintendent, Field Coordinator, etc), and each role's row holds its
+  // own mobilization records. Different roles often have overlapping
+  // mobilizations covering the same calendar dates. We must NOT count those
+  // overlaps multiple times — the project is physically onsite for one
+  // stretch regardless of how many people are working it.
+  //
+  // Algorithm: gather every mobilization range, merge overlaps into a set
+  // of disjoint ranges, then sum days that fall inside the requested month.
   function getProjectDaysInMonth(projectId, monthKey) {
     const [year, month] = monthKey.split("-").map(Number);
     const monthStart = new Date(year, month - 1, 1);
-    const monthEnd = new Date(year, month, 0); // last day of month
-    let days = 0;
-    const projectAssignments = assignments.filter((a) => a.projectId === projectId);
-    projectAssignments.forEach((a) => {
-      (a.mobilizations || []).forEach((mob) => {
-        if (!mob.start || !mob.end) return;
-        const mobStart = toDate(mob.start);
-        const mobEnd = toDate(mob.end);
-        if (!mobStart || !mobEnd) return;
-        const overlapStart = mobStart > monthStart ? mobStart : monthStart;
-        const overlapEnd = mobEnd < monthEnd ? mobEnd : monthEnd;
-        if (overlapStart <= overlapEnd) {
-          days += Math.ceil((overlapEnd - overlapStart) / (1000 * 60 * 60 * 24)) + 1;
-        }
+    const monthEnd = new Date(year, month, 0); // last day of the month
+
+    // Step 1: collect every mobilization range for this project.
+    const ranges = [];
+    assignments
+      .filter((a) => a.projectId === projectId)
+      .forEach((a) => {
+        (a.mobilizations || []).forEach((mob) => {
+          const s = toDate(mob.start);
+          const e = toDate(mob.end);
+          if (s && e && s <= e) ranges.push([s, e]);
+        });
       });
-    });
+    if (ranges.length === 0) return 0;
+
+    // Step 2: merge overlapping/adjacent ranges. Sort by start, then walk
+    // through; each new range either extends the current cluster or starts
+    // a new one.
+    ranges.sort((a, b) => a[0] - b[0]);
+    const merged = [ranges[0].slice()];
+    for (let i = 1; i < ranges.length; i++) {
+      const last = merged[merged.length - 1];
+      const [s, e] = ranges[i];
+      if (s <= last[1]) {
+        // Overlapping or touching — extend the cluster's end if needed.
+        if (e > last[1]) last[1] = e;
+      } else {
+        merged.push([s, e]);
+      }
+    }
+
+    // Step 3: for each merged range, count days that fall inside the month.
+    let days = 0;
+    for (const [s, e] of merged) {
+      const overlapStart = s > monthStart ? s : monthStart;
+      const overlapEnd   = e < monthEnd   ? e : monthEnd;
+      if (overlapStart <= overlapEnd) {
+        days += Math.ceil((overlapEnd - overlapStart) / (1000 * 60 * 60 * 24)) + 1;
+      }
+    }
     return days;
   }
 
