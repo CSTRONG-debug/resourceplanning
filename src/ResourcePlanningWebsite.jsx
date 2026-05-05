@@ -1866,7 +1866,8 @@ export default function App() {
   }, [loadSupabaseData]);
 
   // ── Realtime subscriptions (#5) ────────────────────────────────────────────
-  useSupabaseRealtime({ setProjects, setResources, setCrews, setAssignments, setCertifications });
+  const savingAssignmentIdsRef = useRef(new Set());
+  useSupabaseRealtime({ setProjects, setResources, setCrews, setAssignments, setCertifications, savingAssignmentIdsRef });
 
   // ── Load app users after login ─────────────────────────────────────────────
   useEffect(() => { if (currentUser) { loadAppUsers(); loadProjectTypes(); } }, [currentUser]);
@@ -2474,22 +2475,27 @@ export default function App() {
     if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
     const assignmentPayload = assignmentToDb(assignmentForm);
     let savedAssignment;
+    // Suppress realtime updates for this assignment while we're mid-save
+    // to prevent the delete→insert window from momentarily clearing Gantt bars.
+    if (editingAssignmentId) savingAssignmentIdsRef.current.add(editingAssignmentId);
     if (editingAssignmentId) {
       const { data, error } = await supabase.from("assignments").update(assignmentPayload).eq("id", editingAssignmentId).select().single();
-      if (error) { console.error(error); alert("Could not update assignment."); return; }
+      if (error) { console.error(error); alert("Could not update assignment."); savingAssignmentIdsRef.current.delete(editingAssignmentId); return; }
       savedAssignment = data;
       const del = await supabase.from("mobilizations").delete().eq("assignment_id", editingAssignmentId);
-      if (del.error) { console.error(del.error); alert("Could not update mobilizations."); return; }
+       if (del.error) { console.error(del.error); alert("Could not update mobilizations."); savingAssignmentIdsRef.current.delete(editingAssignmentId); return; }
     } else {
       const { data, error } = await supabase.from("assignments").insert(assignmentPayload).select().single();
       if (error) { console.error(error); alert("Could not save assignment."); return; }
       savedAssignment = data;
+      // Also suppress mob-insert realtime events for the new assignment
+      savingAssignmentIdsRef.current.add(savedAssignment.id);
     }
     const validMobs = (assignmentForm.mobilizations || []).filter((m) => m.start && m.end).map((m) => mobilizationToDbLocal(m, savedAssignment.id));
     let savedMobs = [];
     if (validMobs.length) {
       const { data, error } = await supabase.from("mobilizations").insert(validMobs).select();
-      if (error) { console.error(error); alert("Could not save mobilizations."); return; }
+      if (error) { console.error(error); alert("Could not save mobilizations."); savingAssignmentIdsRef.current.delete(savedAssignment.id); return; }
       savedMobs = data || [];
     }
     let mapped = mapAssignmentFromDbLocal(savedAssignment, savedMobs);
@@ -2506,6 +2512,9 @@ export default function App() {
     else setAssignments((current) => [mapped, ...current]);
     setShowAssignmentForm(false); setEditingAssignmentId(null);
     setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }] });
+    // Clear suppression after a short delay so any in-flight realtime events are ignored
+    const clearedId = savedAssignment.id;
+    setTimeout(() => savingAssignmentIdsRef.current.delete(clearedId), 2000);
   }
 
   async function deleteAssignment(id) {
