@@ -178,6 +178,210 @@ function mobilizationToDbLocal(mobilization, assignmentId) {
 
 import { useSupabaseRealtime } from "./hooks/useSupabaseRealtime";
 
+// ─── Custom Gantt Timeline ──────────────────────────────────────────────────
+//
+// Replaces the legacy buildTimeline / timelineSpanPercent / timelinePercent /
+// formatTick / getPeriodEnd helpers. The new model gives each zoom mode a
+// FIXED VISIBLE WINDOW SIZE — the chart container is set to `viewportWidth`,
+// while the scrollable inner timeline is `width` (which can be much larger).
+// The user scrolls horizontally to see additional periods.
+//
+// Standard visible windows per zoom (the "see N units before scrolling" spec):
+//   Days     → 15 days
+//   Weeks    → 10 weeks
+//   Months   →  6 months
+//   Quarters →  6 quarters
+//   Years    →  3 years
+//
+// Bar positioning: bars are placed in absolute pixels (left = pxPerDay × days
+// from minDate, width = pxPerDay × bar_days). Single-day bars get exactly
+// pxPerDay wide — no minimum-width floor, so a 1-day mob in Day view shows
+// up as a single column wide rather than a 4-day-wide blob.
+
+const ZOOM_VISIBLE_UNITS = {
+  Days: 15,
+  Weeks: 10,
+  Months: 6,
+  Quarters: 6,
+  Years: 3,
+};
+
+// Fixed viewport pixel width for the scrollable Gantt area. 1500px is roughly
+// what fits cleanly inside the new 1700px page layout.
+const GANTT_VIEWPORT_PX = 1500;
+
+function startOfWeek(date) {
+  // Treat Sunday as start of week (matches existing utility conventions).
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  d.setDate(d.getDate() - d.getDay());
+  return d;
+}
+
+function startOfQuarter(date) {
+  const m = Math.floor(date.getMonth() / 3) * 3;
+  return new Date(date.getFullYear(), m, 1);
+}
+
+function nextTickDate(date, zoom) {
+  const d = new Date(date);
+  if (zoom === "Days") d.setDate(d.getDate() + 1);
+  else if (zoom === "Weeks") d.setDate(d.getDate() + 7);
+  else if (zoom === "Months") d.setMonth(d.getMonth() + 1);
+  else if (zoom === "Quarters") d.setMonth(d.getMonth() + 3);
+  else if (zoom === "Years") d.setFullYear(d.getFullYear() + 1);
+  return d;
+}
+
+// Snap any date to the start of its zoom-level period.
+function snapToZoomStart(date, zoom) {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  if (zoom === "Days") return d;
+  if (zoom === "Weeks") return startOfWeek(d);
+  if (zoom === "Months") return new Date(d.getFullYear(), d.getMonth(), 1);
+  if (zoom === "Quarters") return startOfQuarter(d);
+  if (zoom === "Years") return new Date(d.getFullYear(), 0, 1);
+  return d;
+}
+
+// Build a timeline that:
+//   - starts at today (or earliest item if older), snapped to zoom boundary
+//   - extends to cover the latest item + a small buffer
+//   - has at least the visible-window count of ticks
+function buildTimeline(items, zoom) {
+  const today = new Date();
+  const todaySnapped = snapToZoomStart(today, zoom);
+  const visibleUnits = ZOOM_VISIBLE_UNITS[zoom] || 15;
+
+  // Find earliest start and latest end across items.
+  let earliestStart = todaySnapped;
+  let latestEnd = todaySnapped;
+  items.forEach((item) => {
+    const s = toDate(item.start);
+    const e = toDate(item.end);
+    if (s && s < earliestStart) earliestStart = s;
+    if (e && e > latestEnd) latestEnd = e;
+  });
+
+  // Anchor minDate at TODAY's snapped value (we want today visible at the
+  // left edge by default), but back up if there are older items to show.
+  const minDate = snapToZoomStart(earliestStart, zoom);
+
+  // maxDate must extend at least visibleUnits past minDate, but also cover
+  // the latest item + at least one extra unit of buffer past it.
+  let maxDate = minDate;
+  for (let i = 0; i < visibleUnits; i++) maxDate = nextTickDate(maxDate, zoom);
+  // Keep extending until we cover the latest item + 1 buffer unit.
+  let safetyCounter = 0;
+  while (maxDate <= latestEnd && safetyCounter++ < 500) {
+    maxDate = nextTickDate(maxDate, zoom);
+  }
+  // Add one extra unit of trailing buffer.
+  maxDate = nextTickDate(maxDate, zoom);
+
+  // Build tick array.
+  const ticks = [];
+  let cursor = new Date(minDate);
+  let tickSafety = 0;
+  while (cursor < maxDate && tickSafety++ < 2000) {
+    ticks.push(new Date(cursor));
+    cursor = nextTickDate(cursor, zoom);
+  }
+  if (!ticks.length) ticks.push(new Date(minDate));
+
+  // Compute totalDays, pxPerDay, and total pixel width.
+  const totalDays = Math.max(1, Math.ceil((maxDate - minDate) / (1000 * 60 * 60 * 24)));
+
+  // Scale pxPerDay so visibleUnits worth of days fit in the viewport.
+  let visibleDays;
+  if (zoom === "Days") visibleDays = visibleUnits;
+  else if (zoom === "Weeks") visibleDays = visibleUnits * 7;
+  else if (zoom === "Months") visibleDays = visibleUnits * 30.44; // avg month
+  else if (zoom === "Quarters") visibleDays = visibleUnits * 91.31;
+  else if (zoom === "Years") visibleDays = visibleUnits * 365.25;
+  else visibleDays = visibleUnits;
+
+  const pxPerDay = GANTT_VIEWPORT_PX / visibleDays;
+  const width = Math.round(pxPerDay * totalDays);
+
+  return {
+    minDate, maxDate,
+    currentDate: today,
+    totalDays,
+    ticks,
+    width,                         // total scrollable inner width in pixels
+    viewportWidth: GANTT_VIEWPORT_PX, // visible viewport size
+    pxPerDay,
+    zoom,
+  };
+}
+
+// Pixel offset from minDate. Returns absolute pixels (not %), so bars and
+// today-lines can be positioned with `left: ${px}px`.
+function timelinePixelOffset(date, timeline) {
+  const d = toDate(date);
+  if (!d || !timeline) return 0;
+  const days = (d - timeline.minDate) / (1000 * 60 * 60 * 24);
+  return Math.round(days * timeline.pxPerDay);
+}
+
+// Returns { left, width } in PIXELS for placing a bar from start to end
+// (inclusive — bar covers start day through end day).
+function timelineSpanPixels(start, end, timeline) {
+  const s = toDate(start);
+  const e = toDate(end);
+  if (!s || !e || !timeline) return { left: 0, width: 0 };
+  const startOffset = timelinePixelOffset(s, timeline);
+  // +1 day so a same-day mob (start = end) renders as one full day wide.
+  const inclusiveEnd = addDays(e, 1);
+  const endOffset = timelinePixelOffset(inclusiveEnd, timeline);
+  return { left: startOffset, width: Math.max(2, endOffset - startOffset) };
+}
+
+// Format a tick label based on zoom.
+function formatTick(date, zoom) {
+  if (zoom === "Days") return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  if (zoom === "Weeks") return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  if (zoom === "Months") return date.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+  if (zoom === "Quarters") {
+    const q = Math.floor(date.getMonth() / 3) + 1;
+    return `Q${q} ${String(date.getFullYear()).slice(2)}`;
+  }
+  if (zoom === "Years") return String(date.getFullYear());
+  return date.toLocaleDateString();
+}
+
+// End of a tick period — used for hit-testing and drilldowns.
+function getPeriodEnd(tickStart, zoom) {
+  return nextTickDate(tickStart, zoom);
+}
+
+// Compute the indices of weekend days inside the timeline. Returns an array
+// of `{ leftPx, widthPx }` so the caller can render shaded background bands.
+// Only meaningful for Days and Weeks zoom — empty array otherwise.
+function getWeekendBands(timeline) {
+  if (!timeline || (timeline.zoom !== "Days" && timeline.zoom !== "Weeks")) return [];
+  const bands = [];
+  const cursor = new Date(timeline.minDate);
+  while (cursor < timeline.maxDate) {
+    const dow = cursor.getDay(); // Sun=0, Sat=6
+    if (dow === 0 || dow === 6) {
+      const left = timelinePixelOffset(cursor, timeline);
+      const next = addDays(cursor, 1);
+      const width = timelinePixelOffset(next, timeline) - left;
+      bands.push({ leftPx: left, widthPx: width });
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return bands;
+}
+
+// Convenience: where is "today" in the timeline, in pixels?
+function getTodayLeftPx(timeline) {
+  const today = new Date();
+  if (today < timeline.minDate || today > timeline.maxDate) return -1;
+  return timelinePixelOffset(today, timeline);
+}
+
 function normalizeProjectTypes(value) {
   if (Array.isArray(value)) return value.filter(Boolean);
   if (!value) return [];
@@ -1177,25 +1381,84 @@ export function CrewForm({ form, setForm, certifications, onSave, onCancel, onDe
 // ─── GanttHeader ──────────────────────────────────────────────────────────────
 
 export function GanttHeader({ timeline, zoom }) {
-  const currentLeft = timelinePercent(timeline.currentDate, timeline);
+  const todayLeft = getTodayLeftPx(timeline);
   return (
-    <div className="grid grid-cols-[260px_1fr] border-b border-slate-200 pb-2" style={{ width: `${timeline.width + 260}px` }}>
-      <div className="sticky left-0 z-30 h-10 bg-white" />
+    <div
+      className="flex border-b border-slate-200 pb-2"
+      style={{ width: `${timeline.width + 260}px` }}
+    >
+      <div className="sticky left-0 z-30 h-10 w-[260px] shrink-0 bg-white" />
       <div className="relative h-10" style={{ width: `${timeline.width}px` }}>
-        {currentLeft >= 0 && currentLeft <= 100 && (
-          <div className="absolute top-0 z-20 h-10 border-l-4 border-dashed border-red-600" style={{ left: `${currentLeft}%` }}>
+        {todayLeft >= 0 && (
+          <div
+            className="absolute top-0 z-20 h-10 border-l-2 border-dashed border-red-600"
+            style={{ left: `${todayLeft}px` }}
+          >
             <span className="ml-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">Today</span>
           </div>
         )}
         {timeline.ticks.map((tick, index) => {
-          const left = timelinePercent(tick, timeline);
+          const left = timelinePixelOffset(tick, timeline);
           return (
-            <div key={`${tick.toISOString()}-${index}`} className="absolute top-0 h-10 border-l border-slate-200 pl-2 text-xs font-medium text-slate-500" style={{ left: `${left}%` }}>
+            <div
+              key={`${tick.toISOString()}-${index}`}
+              className="absolute top-0 h-10 border-l border-slate-200 pl-2 text-xs font-medium text-slate-500"
+              style={{ left: `${left}px` }}
+            >
               {formatTick(tick, zoom)}
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ─── GanttBackdrop ───────────────────────────────────────────────────────────
+//
+// Renders the chart-wide background layer that sits BEHIND the rows:
+//   - Vertical Today line that runs the full height of all rows
+//   - Weekend shading (Days & Weeks zoom only)
+//   - Tick gridlines (faint vertical lines at each major tick)
+//
+// Pointer events are disabled so clicks pass through to the row content.
+// The parent row container should be `relative` so this can position itself
+// absolutely inside it.
+
+export function GanttBackdrop({ timeline }) {
+  const weekendBands = getWeekendBands(timeline);
+  const todayLeft = getTodayLeftPx(timeline);
+  return (
+    <div
+      className="pointer-events-none absolute inset-y-0 z-0"
+      style={{ left: 0, width: `${timeline.width}px` }}
+    >
+      {/* Weekend shading — Sat/Sun only at Days/Weeks zoom */}
+      {weekendBands.map((band, i) => (
+        <div
+          key={`weekend-${i}`}
+          className="absolute inset-y-0 bg-slate-200/50"
+          style={{ left: `${band.leftPx}px`, width: `${band.widthPx}px` }}
+        />
+      ))}
+      {/* Faint vertical gridlines at each tick */}
+      {timeline.ticks.map((tick, i) => {
+        const left = timelinePixelOffset(tick, timeline);
+        return (
+          <div
+            key={`grid-${i}`}
+            className="absolute inset-y-0 w-px bg-slate-200"
+            style={{ left: `${left}px` }}
+          />
+        );
+      })}
+      {/* Today line — full chart height */}
+      {todayLeft >= 0 && (
+        <div
+          className="absolute inset-y-0 z-10 border-l-2 border-dashed border-red-600"
+          style={{ left: `${todayLeft}px` }}
+        />
+      )}
     </div>
   );
 }
