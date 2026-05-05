@@ -2761,7 +2761,7 @@ export default function App() {
 
     const remaining = (row.contractValue || 0) - totalActuals - lockedTotal;
     const remainingMonths = allMonths.filter((m) => actuals[m] === undefined && !isMonthLocked(m));
-    if (remainingMonths.length > 0 && remaining >= 0) {
+    if (remainingMonths.length > 0 && remaining !== 0) {
       return spreadRevenue(remaining, remainingMonths, row.spreadRule, projectId);
     }
     return {};
@@ -2817,7 +2817,7 @@ export default function App() {
 
     const remaining = contractValue - totalActuals - lockedTotal;
     const remainingMonths = allMonths.filter((m) => actuals[m] === undefined && !isMonthLocked(m));
-    const redistributed = (remainingMonths.length > 0 && remaining >= 0)
+    const redistributed = (remainingMonths.length > 0 && remaining !== 0)
       ? spreadRevenue(remaining, remainingMonths, row.spreadRule, projectId)
       : {};
 
@@ -2897,7 +2897,7 @@ export default function App() {
     const remaining = (row.contractValue || 0) - totalActuals - lockedTotal;
     const remainingMonths = allMonths.filter((m) => newActuals[m] === undefined && !isMonthLocked(m));
 
-    if (remainingMonths.length > 0 && remaining >= 0) {
+    if (remainingMonths.length > 0 && remaining !== 0) {
       const redistributed = spreadRevenue(remaining, remainingMonths, row.spreadRule, projectId);
       await saveForecastRow(projectId, { actuals: newActuals, redistributedSpread: redistributed });
     } else {
@@ -2923,7 +2923,7 @@ export default function App() {
 
     const remaining = (row.contractValue || 0) - totalActuals - lockedTotal;
     const remainingMonths = allMonths.filter((m) => actuals[m] === undefined && !isMonthLocked(m));
-    const redistributed = remainingMonths.length > 0 && remaining >= 0
+    const redistributed = remainingMonths.length > 0 && remaining !== 0
       ? spreadRevenue(remaining, remainingMonths, newRule, projectId)
       : {};
     await saveForecastRow(projectId, { spreadRule: newRule, redistributedSpread: redistributed });
@@ -3000,7 +3000,7 @@ export default function App() {
       const yearTotal = monthValues.reduce((s, mv) => s + mv.value, 0);
       const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + (spread[m] || 0), 0);
       const bg = idx % 2 === 0 ? "#f8fafc" : "#ffffff";
-      const cells = monthValues.map((mv) => `<td style="padding:4px 6px;text-align:right;color:${mv.isActual ? "#065f46" : "#334155"};font-weight:${mv.isActual ? "600" : "400"}">${mv.value > 0 ? fmt(mv.value) : ""}</td>`).join("");
+      const cells = monthValues.map((mv) => `<td style="padding:4px 6px;text-align:right;color:${mv.isActual ? "#065f46" : (mv.value < 0 ? "#b91c1c" : "#334155")};font-weight:${mv.isActual ? "600" : "400"}">${mv.value !== 0 ? fmt(mv.value) : ""}</td>`).join("");
       return `<tr style="background:${bg}"><td style="padding:4px 6px;font-weight:600">${p.projectNumber ? p.projectNumber + " - " : ""}${p.name}</td><td style="padding:4px 6px">${p.division}</td><td style="padding:4px 6px;text-align:right">${fmt(row.contractValue)}</td>${cells}<td style="padding:4px 6px;text-align:right;color:#64748b">${fmt(thereafter)}</td><td style="padding:4px 6px;text-align:right;font-weight:700">${fmt(yearTotal)}</td></tr>`;
     });
 
@@ -4793,7 +4793,7 @@ export default function App() {
                               onBlur={(e) => saveForecastRow(p.id, { contractValue: parseFloat(e.target.value) || 0 })} />
                           </td>
                           {/* Prior Year column */}
-                          <td className="p-3 text-right text-sm bg-slate-100 text-slate-600 font-medium">{priorYearTotal > 0 ? fmt(priorYearTotal) : <span className="text-slate-300">—</span>}</td>
+                          <td className="p-3 text-right text-sm bg-slate-100 text-slate-600 font-medium">{priorYearTotal !== 0 ? fmt(priorYearTotal) : <span className="text-slate-300">—</span>}</td>
                           <td className="p-3">
                             <select className="w-full rounded-lg border border-slate-200 bg-transparent px-2 py-1 text-sm outline-none focus:border-emerald-500 focus:bg-white" value={row.spreadRule} onChange={(e) => saveSpreadRule(p.id, e.target.value)}>
                               <option value="even">Even</option>
@@ -4806,14 +4806,14 @@ export default function App() {
                             <td key={mv.key} className={`p-1 text-right ${mv.locked ? "bg-amber-50" : ""}`}>
                               {mv.locked ? (
                                 <div className={`w-full rounded-lg px-2 py-1 text-right text-xs ${mv.isActual ? "bg-emerald-50 font-semibold text-emerald-800 border border-emerald-200" : "bg-amber-50 text-slate-500 border border-amber-200"}`}>
-                                  {mv.value > 0 ? fmt(mv.value) : <span className="text-slate-300">—</span>}
+                                  {mv.value !== 0 ? fmt(mv.value) : <span className="text-slate-300">—</span>}
                                 </div>
                               ) : (
                                 <div className="relative group/cell">
                                   <input type="number"
                                     className={`w-full rounded-lg border px-2 py-1 text-right text-xs outline-none focus:bg-white ${mv.isActual ? "border-emerald-300 bg-emerald-50 font-semibold text-emerald-800 focus:border-emerald-500" : mv.isRedistributed ? "border-blue-200 bg-blue-50 text-blue-700 focus:border-blue-400" : "border-transparent bg-transparent text-slate-700 hover:border-slate-200 focus:border-emerald-500"}`}
-                                    defaultValue={mv.isActual || mv.isRedistributed ? mv.value.toFixed(0) : (mv.value > 0 ? mv.value.toFixed(0) : "")}
-                                    placeholder={mv.value > 0 && !mv.isActual ? mv.value.toFixed(0) : ""}
+                                    defaultValue={mv.isActual || mv.isRedistributed ? mv.value.toFixed(0) : (mv.value !== 0 ? mv.value.toFixed(0) : "")}
+                                    placeholder={mv.value !== 0 && !mv.isActual ? mv.value.toFixed(0) : ""}
                                     onBlur={(e) => saveActual(p.id, mv.key, e.target.value)} />
                                   {mv.isActual && (
                                     <button
@@ -4827,7 +4827,7 @@ export default function App() {
                               )}
                             </td>
                           ))}
-                          <td className="p-3 text-right text-xs text-slate-500 bg-slate-50">{thereafter > 0 ? fmt(thereafter) : ""}</td>
+                          <td className="p-3 text-right text-xs text-slate-500 bg-slate-50">{thereafter !== 0 ? fmt(thereafter) : ""}</td>
                           <td className="p-3 text-right text-sm font-semibold text-slate-800 bg-slate-50">{fmt(yearTotal)}</td>
                         </tr>
                       );
