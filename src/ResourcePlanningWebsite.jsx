@@ -4687,7 +4687,7 @@ export default function App() {
           const spread = spreadRevenue(row.contractValue, allMonths, row.spreadRule, p.id);
           const monthValues = months.map((m) => ({ ...getMonthValue(p.id, m.key, spread), key: m.key, locked: isMonthLocked(m.key) }));
           const yearTotal = monthValues.reduce((s, mv) => s + mv.value, 0);
-          const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + (spread[m] || 0), 0);
+          const thereafter = allMonths.filter((m) => m > `${forecastYear}-12`).reduce((s, m) => s + getMonthValue(p.id, m).value, 0);
           return { project: p, row, spread, monthValues, yearTotal, thereafter };
         });
 
