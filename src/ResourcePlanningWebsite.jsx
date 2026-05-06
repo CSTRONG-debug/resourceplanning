@@ -1971,8 +1971,10 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
         item.project.division === d &&
         item.project.status === "Pending Award"
       ).length;
+      const currentKeyCount = buckets[d].current.size;
+      const pendingKeyCount = buckets[d].pending.size;
       if (currentCount > 0) segments.push({
-        division: d, type: "Current", value: currentCount, mobCount: currentMobCount, color: divisionSvgColors[d],
+        division: d, type: "Current", value: currentCount, mobCount: currentMobCount, keyCount: currentKeyCount, color: divisionSvgColors[d],
         segmentItems: periodItems.filter((item) =>
           item.project.division === d &&
           item.project.status !== "Pending Award" &&
@@ -1980,7 +1982,7 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
         ),
       });
       if (pendingCount > 0) segments.push({
-        division: d, type: "Pending", value: pendingCount, mobCount: pendingMobCount, color: pendingDivisionSvgColors[d],
+        division: d, type: "Pending", value: pendingCount, mobCount: pendingMobCount, keyCount: pendingKeyCount, color: pendingDivisionSvgColors[d],
         segmentItems: periodItems.filter((item) =>
           item.project.division === d &&
           item.project.status === "Pending Award"
@@ -2053,7 +2055,7 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
                       <rect x={x} y={rectY} width={barWidth} height={segmentHeight} rx="5" fill={segment.color}
                         onClick={() => onBarClick?.({ period, segment })}
                         style={{ cursor: "pointer" }}>
-                        <title>{segment.division} {segment.type}: {segment.value} (from {segment.mobCount} mob{segment.mobCount === 1 ? "" : "s"}) — click for details</title>
+                        <title>{segment.division} {segment.type}: {segment.value} (from {segment.mobCount} mob{segment.mobCount === 1 ? "" : "s"} / {segment.keyCount} unique slot{segment.keyCount === 1 ? "" : "s"}) — click for details</title>
                       </rect>
                       {segmentHeight >= 16 && (
                         <text x={x + barWidth / 2} y={rectY + segmentHeight / 2 + 4} textAnchor="middle" fontSize="11" fontWeight="700" fill="white" pointerEvents="none">
@@ -2404,11 +2406,12 @@ export default function App() {
   // we only look at the superintendent field on each mobilization, not all
   // five role fields.
   const RESOURCE_TYPE_TO_ROLE = {
-    "Project Manager":    "projectManager",
-    "Superintendent":     "superintendent",
-    "Field Coordinator":  "fieldCoordinator",
-    "Field Engineer":     "fieldEngineer",
-    "Safety":             "safety",
+    "Project Manager":       "projectManager",
+    "Superintendent":        "superintendent",
+    "General Superintendent":"superintendent",
+    "Field Coordinator":     "fieldCoordinator",
+    "Field Engineer":        "fieldEngineer",
+    "Safety":                "safety",
   };
 
   // Filter rule for the demand chart:
@@ -2455,39 +2458,29 @@ export default function App() {
       return false;
     });
 
-  // Build the demand counting keys for each item. The demand chart uses
-  // these to dedupe back-to-back coverage by the same person. Rules:
-  //   - Unassigned-need items: each gets a unique key (their item id) so
-  //     every unfilled slot still counts as 1 demand.
-  //   - Named items: emit one key per ROLE that has a person whose home
-  //     division passes the filter. Key format is `role:personName`. So a
-  //     mob with Jacob (Super) and Bob (FC) yields ["Superintendent:Jacob",
-  //     "Field Coordinator:Bob"] — both contribute, but Jacob covering 3
-  //     back-to-back Super mobs only counts as 1 because all 3 keys collapse
-  //     to "Superintendent:Jacob".
+  // Build the demand counting keys for each item. The upstream filter on
+  // `demandFilteredItems` has already vetted that this item belongs in the
+  // chart at all; here we just attribute its slots. For each selected role
+  // with a non-empty person name on the item, emit a `Role:Name` key. The
+  // chart then dedupes via maxConcurrency per (period, division, status,
+  // key) bucket. Unassigned-need items each get a unique key so every
+  // unfilled slot still counts.
   const getDemandKeys = (item) => {
     if (item.isUnassignedNeed) return [`UNASSIGNED:${item.id}`];
     const keys = [];
     for (const rt of demandResourceTypeFilter) {
       const roleField = RESOURCE_TYPE_TO_ROLE[rt];
       if (!roleField) continue;
-      const personName = item.assignment[roleField];
+      // Look at the assignment-level role first; fall back to a mob-level
+      // override (item.superintendent, item.fieldCoordinator) if present
+      // because mobilizations can override these fields on a per-mob basis.
+      const personName = (item[roleField] || item.assignment?.[roleField] || "").trim();
       if (!personName) continue;
-      const r = resourceByName.get(personName);
-      // Only count if this person actually passes the home-division filter
-      // for THIS role. (The item-level filter only required ANY role to
-      // pass — here we're attributing the slot to specific role-people.)
-      if (r && demandHomeDivisionFilter.includes(r.homeDivision)) {
-        keys.push(`${rt}:${personName}`);
-      } else if (!r) {
-        // Resource record missing — fall through and count by name anyway
-        // so we don't drop demand because of a typo or stale data.
-        keys.push(`${rt}:${personName}`);
-      }
+      keys.push(`${rt}:${personName}`);
     }
-    // If somehow no role matched (e.g. data weirdness), fall back to item id
-    // so this item still counts as some demand.
-    return keys.length ? keys : [`FALLBACK:${item.id}`];
+    // No role yielded a name (e.g. crew-only mob with no named roles).
+    // Group by project so multi-mob crew-only projects still collapse to 1.
+    return keys.length ? keys : [`PROJECT:${item.project?.id || item.id}`];
   };
 
   const activeCrews = crews.filter((c) => !isCrewDeactivated(c));
