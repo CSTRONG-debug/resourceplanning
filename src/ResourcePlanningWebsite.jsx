@@ -1884,7 +1884,21 @@ export function CrewGanttRow({ crew, items, timeline }) {
 
 // ─── ResourceDemandChart ──────────────────────────────────────────────────────
 
-export function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPdf, onBarClick, onPeriodClick, enlarged = false }) {
+export function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPdf, onBarClick, onPeriodClick, getItemKeys, enlarged = false }) {
+  // getItemKeys(item) -> string[] returns one or more keys identifying the
+  // unique person/slot demand contributed by this item. Multiple keys
+  // happen when the user filters by multiple roles (e.g. Super + FC) and
+  // the item has matching people in both roles. The chart dedupes within
+  // each (period, division, status) bucket, so a single person covering
+  // back-to-back mobilizations counts as 1. Unassigned needs each get a
+  // unique key (their id) so each unfilled slot still counts.
+  const keysOf = (item) => {
+    if (typeof getItemKeys === "function") {
+      const ks = getItemKeys(item);
+      if (Array.isArray(ks) && ks.length) return ks;
+    }
+    return [item.id];
+  };
   const periods = timeline.ticks.map((tick) => {
     const periodStart = tick;
     const periodEnd = getPeriodEnd(tick, zoom);
@@ -1900,20 +1914,23 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
     // The home-division filter is already applied on the items passed in — so only
     // assignments where the resource's home division matches show up, but the bar
     // color (and stack position) is still the project's division color.
+    // Using Sets so back-to-back coverage by the same person counts as 1.
     const buckets = {};
-    divisions.forEach((d) => { buckets[d] = { current: 0, pending: 0 }; });
+    divisions.forEach((d) => { buckets[d] = { current: new Set(), pending: new Set() }; });
 
     periodItems.forEach((item) => {
       const projectDivision = item.project.division;
       if (!buckets[projectDivision]) return;
-      if (item.project.status === "Pending Award") buckets[projectDivision].pending += 1;
-      else if (item.project.status !== "Complete") buckets[projectDivision].current += 1;
+      const ks = keysOf(item);
+      const target = item.project.status === "Pending Award" ? buckets[projectDivision].pending
+        : (item.project.status !== "Complete" ? buckets[projectDivision].current : null);
+      if (target) ks.forEach((k) => target.add(k));
     });
 
     const segments = [];
     divisions.forEach((d) => {
-      if (buckets[d].current > 0) segments.push({
-        division: d, type: "Current", value: buckets[d].current, color: divisionSvgColors[d],
+      if (buckets[d].current.size > 0) segments.push({
+        division: d, type: "Current", value: buckets[d].current.size, color: divisionSvgColors[d],
         // Segment drilldown shows items whose project division matches AND resource division filter passes
         segmentItems: periodItems.filter((item) =>
           item.project.division === d &&
@@ -1921,8 +1938,8 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
           item.project.status !== "Complete"
         ),
       });
-      if (buckets[d].pending > 0) segments.push({
-        division: d, type: "Pending", value: buckets[d].pending, color: pendingDivisionSvgColors[d],
+      if (buckets[d].pending.size > 0) segments.push({
+        division: d, type: "Pending", value: buckets[d].pending.size, color: pendingDivisionSvgColors[d],
         segmentItems: periodItems.filter((item) =>
           item.project.division === d &&
           item.project.status === "Pending Award"
@@ -1940,7 +1957,7 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
       width: 1160,
     };
 
-    const count = divisions.reduce((sum, d) => sum + buckets[d].current + buckets[d].pending, 0);
+    const count = divisions.reduce((sum, d) => sum + buckets[d].current.size + buckets[d].pending.size, 0);
     return { label: formatTick(tick, zoom), tick, periodStart, periodEnd, segments, count, periodItems, periodTimeline };
   });
 
@@ -2362,6 +2379,41 @@ export default function App() {
       }
       return false;
     });
+
+  // Build the demand counting keys for each item. The demand chart uses
+  // these to dedupe back-to-back coverage by the same person. Rules:
+  //   - Unassigned-need items: each gets a unique key (their item id) so
+  //     every unfilled slot still counts as 1 demand.
+  //   - Named items: emit one key per ROLE that has a person whose home
+  //     division passes the filter. Key format is `role:personName`. So a
+  //     mob with Jacob (Super) and Bob (FC) yields ["Superintendent:Jacob",
+  //     "Field Coordinator:Bob"] — both contribute, but Jacob covering 3
+  //     back-to-back Super mobs only counts as 1 because all 3 keys collapse
+  //     to "Superintendent:Jacob".
+  const getDemandKeys = (item) => {
+    if (item.isUnassignedNeed) return [`UNASSIGNED:${item.id}`];
+    const keys = [];
+    for (const rt of dashboardResourceTypeFilter) {
+      const roleField = RESOURCE_TYPE_TO_ROLE[rt];
+      if (!roleField) continue;
+      const personName = item.assignment[roleField];
+      if (!personName) continue;
+      const r = resourceByName.get(personName);
+      // Only count if this person actually passes the home-division filter
+      // for THIS role. (The item-level filter only required ANY role to
+      // pass — here we're attributing the slot to specific role-people.)
+      if (r && demandHomeDivisionFilter.includes(r.homeDivision)) {
+        keys.push(`${rt}:${personName}`);
+      } else if (!r) {
+        // Resource record missing — fall through and count by name anyway
+        // so we don't drop demand because of a typo or stale data.
+        keys.push(`${rt}:${personName}`);
+      }
+    }
+    // If somehow no role matched (e.g. data weirdness), fall back to item id
+    // so this item still counts as some demand.
+    return keys.length ? keys : [`FALLBACK:${item.id}`];
+  };
 
   const activeCrews = crews.filter((c) => !isCrewDeactivated(c));
 
@@ -4408,6 +4460,7 @@ export default function App() {
             onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")}
             onBarClick={setDemandDrilldown}
             onPeriodClick={setDemandPeriodDrilldown}
+            getItemKeys={getDemandKeys}
           />
 
           {/* Project Manager Utilization (moved into Resource Dashboard) */}
@@ -4744,33 +4797,48 @@ export default function App() {
             </div>
             <div className="flex-1 overflow-auto p-5">
               <GanttHeader timeline={timeline} zoom={zoom} />
-              <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 340}px` }}>
-                {focusedResourceItems.map((item) => (
-                  <div key={`focused-${item.id}`} className="grid grid-cols-[320px_1fr] items-center gap-0">
-                    <div className="text-left">
-                      <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
-                      <p className="mt-1 text-xs text-slate-500">{item.project.division} • {formatDate(item.start)} - {formatDate(item.end)}</p>
+              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
+                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
+                  <GanttBackdrop timeline={timeline} />
+                </div>
+                <div className="relative z-10">
+                  {focusedResourceItems.map((item, idx) => (
+                    <div key={`focused-${item.id}`} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                      <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
+                        <button
+                          type="button"
+                          onClick={() => { setFocusedResource(null); openEditAssignmentForm(item.assignment); }}
+                          className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden hover:bg-slate-50"
+                          title={`${item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}${item.project.name} — click to edit assignment`}
+                        >
+                          <p className="truncate text-[12px] font-semibold text-slate-900 hover:text-emerald-700">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
+                        </button>
+                        <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
+                          <GanttSegmentBar item={item} timeline={timeline} label={item.project.name} />
+                        </div>
+                      </div>
                     </div>
-                    <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
-                      <GanttSegmentBar item={item} timeline={timeline} label={item.project.name} />
-                    </div>
-                  </div>
-                ))}
-                {/* PTO rows */}
-                {(focusedResource.pto || []).filter((p) => p.start && p.end).map((pto) => (
-                  <div key={`focused-pto-${pto.id || pto.ptoId}`} className="grid grid-cols-[320px_1fr] items-center gap-0">
-                    <div className="text-left">
-                      <p className="font-semibold text-slate-900">PTO — {pto.ptoId || "Unspecified"}</p>
-                      <p className="mt-1 text-xs text-slate-500">{formatDate(pto.start)} – {formatDate(pto.end)}</p>
-                    </div>
-                    <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${timeline.width}px` }}>
-                      <PtoOverlayBar pto={pto} timeline={timeline} />
-                    </div>
-                  </div>
-                ))}
-                {focusedResourceItems.length === 0 && (focusedResource.pto || []).filter((p) => p.start && p.end).length === 0 && (
-                  <p className="text-sm text-slate-400">No assignments or PTO in the current timeline window.</p>
-                )}
+                  ))}
+                  {/* PTO rows */}
+                  {(focusedResource.pto || []).filter((p) => p.start && p.end).map((pto, idx) => {
+                    const offsetIdx = focusedResourceItems.length + idx;
+                    return (
+                      <div key={`focused-pto-${pto.id || pto.ptoId}`} className={`py-0.5 ${offsetIdx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                        <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
+                          <div className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden">
+                            <p className="truncate text-[12px] font-semibold text-slate-900" title={`PTO — ${pto.ptoId || "Unspecified"}`}>PTO — {pto.ptoId || "Unspecified"}</p>
+                          </div>
+                          <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
+                            <PtoOverlayBar pto={pto} timeline={timeline} />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {focusedResourceItems.length === 0 && (focusedResource.pto || []).filter((p) => p.start && p.end).length === 0 && (
+                    <p className="text-sm text-slate-400">No assignments or PTO in the current timeline window.</p>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -4832,37 +4900,45 @@ export default function App() {
                 {validRange && (
                   <>
                     <GanttHeader timeline={popupTimeline} zoom="Weeks" />
-                    <div className="mt-3 space-y-3" style={{ minWidth: `${popupTimeline.width + 340}px` }}>
-                      {items.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments found for this crew during the selected period.</div>}
-                      {items.map((item) => {
-                        const rowMen = getCrewMenForItem(item);
-                        return (
-                          <div key={`util-drilldown-${item.id}`} className="grid grid-cols-[320px_1fr] items-center gap-5">
-                            <div className="text-left">
-                              <div className="flex items-start justify-between gap-3">
-                                <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
-                                <span className="shrink-0 rounded-full bg-slate-900 px-2.5 py-1 text-xs font-bold text-white">{rowMen} men</span>
+                    <div className="relative mt-3" style={{ minWidth: `${popupTimeline.width + 340}px` }}>
+                      <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${popupTimeline.width}px` }}>
+                        <GanttBackdrop timeline={popupTimeline} />
+                      </div>
+                      <div className="relative z-10">
+                        {items.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments found for this crew during the selected period.</div>}
+                        {items.map((item, idx) => {
+                          const rowMen = getCrewMenForItem(item);
+                          return (
+                            <div key={`util-drilldown-${item.id}`} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                              <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
+                                <button
+                                  type="button"
+                                  onClick={() => { setSelectedUtilizationCrew(null); openEditAssignmentForm(item.assignment); }}
+                                  className="sticky left-0 z-20 flex h-7 items-center justify-between gap-2 bg-white pr-3 text-left overflow-hidden hover:bg-slate-50"
+                                  title={`${item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}${item.project.name} — click to edit assignment`}
+                                >
+                                  <p className="truncate text-[12px] font-semibold text-slate-900 hover:text-emerald-700">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
+                                  <span className="shrink-0 rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-white">{rowMen}</span>
+                                </button>
+                                <div className="relative h-7 rounded-md" style={{ width: `${popupTimeline.width}px` }}>
+                                  <GanttSegmentBar item={item} timeline={popupTimeline} label={`${item.project.name} · ${rowMen} men`} />
+                                </div>
                               </div>
-                              <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
-                              <p className="mt-0.5 text-xs text-slate-400">Counts toward selected period total.</p>
                             </div>
-                            <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${popupTimeline.width}px` }}>
-                              <GanttSegmentBar item={item} timeline={popupTimeline} label={`${item.project.name} · ${rowMen} men`} />
+                          );
+                        })}
+                        {items.length > 0 && (
+                          <div className="mt-3 grid grid-cols-[320px_1fr] items-center gap-5 border-t border-slate-200 pt-3">
+                            <div className="text-left">
+                              <p className="font-bold text-slate-900">Selected Period Total</p>
+                              <p className="text-xs text-slate-500">{utilizationStart} – {utilizationEnd}</p>
+                            </div>
+                            <div className="rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-800">
+                              {totalAssignedMen} assigned men / {crewCapacity} crew capacity · {utilizationDelta < 0 ? `+${Math.abs(utilizationDelta)} over` : utilizationDelta > 0 ? `${utilizationDelta} on bench` : "fully utilized"}
                             </div>
                           </div>
-                        );
-                      })}
-                      {items.length > 0 && (
-                        <div className="grid grid-cols-[320px_1fr] items-center gap-5 border-t border-slate-200 pt-3">
-                          <div className="text-left">
-                            <p className="font-bold text-slate-900">Selected Period Total</p>
-                            <p className="text-xs text-slate-500">{utilizationStart} – {utilizationEnd}</p>
-                          </div>
-                          <div className="rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-800">
-                            {totalAssignedMen} assigned men / {crewCapacity} crew capacity · {utilizationDelta < 0 ? `+${Math.abs(utilizationDelta)} over` : utilizationDelta > 0 ? `${utilizationDelta} on bench` : "fully utilized"}
-                          </div>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
                   </>
                 )}
@@ -4922,53 +4998,59 @@ export default function App() {
                 ) : (
                   <>
                     <GanttHeader timeline={pmTimeline} zoom={projectManagerUtilizationZoom} />
-                    <div className="mt-3 space-y-3" style={{ minWidth: `${pmTimeline.width + 340}px` }}>
-                      {pmRows.map((row) => {
-                        const start = getProjectStartFromItems(row.items);
-                        const end = getProjectEndFromItems(row.items);
-                        // Compute the hatched-bar span from project start
-                        // to project end, in pixels on the popup timeline.
-                        // The PM is on the project for the entire span,
-                        // including gaps between mobilizations and time
-                        // before the first / after the last mob.
-                        const span = (start && end)
-                          ? timelineSpanPixels(start, end, pmTimeline)
-                          : { left: 0, width: 0 };
-                        const divisionColor = divisionSvgColors[row.project.division] || "#475569";
-                        return (
-                          <div key={`pm-util-${row.project.id}`} className="grid grid-cols-[300px_1fr] items-center gap-5">
-                            <div className="text-left">
-                              <div className="flex items-center gap-2">
-                                <span className={`h-3 w-3 rounded-full ${row.project.status === "Pending Award" ? pendingDivisionStyles[row.project.division] : divisionStyles[row.project.division] || "bg-slate-600"}`} />
-                                <p className="font-semibold text-slate-900">{row.project.projectNumber ? `${row.project.projectNumber} - ` : ""}{row.project.name}</p>
+                    <div className="relative mt-3" style={{ minWidth: `${pmTimeline.width + 340}px` }}>
+                      <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${pmTimeline.width}px` }}>
+                        <GanttBackdrop timeline={pmTimeline} />
+                      </div>
+                      <div className="relative z-10">
+                        {pmRows.map((row, idx) => {
+                          const start = getProjectStartFromItems(row.items);
+                          const end = getProjectEndFromItems(row.items);
+                          const span = (start && end)
+                            ? timelineSpanPixels(start, end, pmTimeline)
+                            : { left: 0, width: 0 };
+                          const divisionColor = divisionSvgColors[row.project.division] || "#475569";
+                          return (
+                            <div key={`pm-util-${row.project.id}`} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                              <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
+                                <button
+                                  type="button"
+                                  onClick={() => { setSelectedProjectManagerUtilization(null); openEditAssignmentForm(row.items[0].assignment); }}
+                                  className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden hover:bg-slate-50"
+                                  title={`${row.project.projectNumber ? `${row.project.projectNumber} - ` : ""}${row.project.name} — click to edit assignment`}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className={`shrink-0 h-2.5 w-2.5 rounded-full ${row.project.status === "Pending Award" ? pendingDivisionStyles[row.project.division] : divisionStyles[row.project.division] || "bg-slate-600"}`} />
+                                    <p className="truncate text-[12px] font-semibold text-slate-900 hover:text-emerald-700">{row.project.projectNumber ? `${row.project.projectNumber} - ` : ""}{row.project.name}</p>
+                                  </div>
+                                </button>
+                                <div className="relative h-7 rounded-md" style={{ width: `${pmTimeline.width}px` }}>
+                                  {/* Continuous hatched bar: PM is on project
+                                      for the entire duration, even between
+                                      mobs. Sits BEHIND mob bars (z-0). */}
+                                  {span.width > 0 && (
+                                    <div
+                                      className="absolute top-0 z-0 h-7 rounded-md"
+                                      style={{
+                                        left: `${span.left}px`,
+                                        width: `${span.width}px`,
+                                        backgroundColor: divisionColor,
+                                        opacity: 0.25,
+                                        backgroundImage: `repeating-linear-gradient(135deg, transparent 0 8px, ${divisionColor} 8px 10px)`,
+                                        backgroundSize: "14px 14px",
+                                      }}
+                                      title={`${formatDate(start)} – ${formatDate(end)} (PM on project)`}
+                                    />
+                                  )}
+                                  {row.items.map((item) => (
+                                    <GanttSegmentBar key={`pm-util-${row.project.id}-${item.id}`} item={item} timeline={pmTimeline} label={row.project.name} />
+                                  ))}
+                                </div>
                               </div>
-                              <p className="mt-1 text-xs text-slate-500">{row.project.division} • {row.project.status} • {start ? formatDate(start) : "No start"} – {end ? formatDate(end) : "No end"}</p>
                             </div>
-                            <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${pmTimeline.width}px` }}>
-                              {/* Continuous hatched bar: PM is on project
-                                  for the entire duration, even between
-                                  mobs. Sits BEHIND mob bars (z-0). */}
-                              {span.width > 0 && (
-                                <div
-                                  className="absolute top-0.5 z-0 h-7 rounded-md"
-                                  style={{
-                                    left: `${span.left}px`,
-                                    width: `${span.width}px`,
-                                    backgroundColor: divisionColor,
-                                    opacity: 0.25,
-                                    backgroundImage: `repeating-linear-gradient(135deg, transparent 0 8px, ${divisionColor} 8px 10px)`,
-                                    backgroundSize: "14px 14px",
-                                  }}
-                                  title={`${formatDate(start)} – ${formatDate(end)} (PM on project)`}
-                                />
-                              )}
-                              {row.items.map((item) => (
-                                <GanttSegmentBar key={`pm-util-${row.project.id}-${item.id}`} item={item} timeline={pmTimeline} label={row.project.name} />
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                      </div>
                     </div>
                   </>
                 )}
@@ -4989,26 +5071,36 @@ export default function App() {
               <div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5">
                 <div>
                   <h2 className="text-2xl font-bold">{segment.division} Projects ({segment.type}) — {label}</h2>
-                  <p className="text-sm text-slate-500">{items.length} {segment.division} {segment.type.toLowerCase()} project{items.length === 1 ? "" : "s"} with filtered resources active during this period</p>
+                  <p className="text-sm text-slate-500">{items.length} {segment.division} {segment.type.toLowerCase()} mobilization{items.length === 1 ? "" : "s"} active during this period (bar shows distinct people + unfilled slots).</p>
                 </div>
                 <button onClick={() => setDemandDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
               </div>
               <div className="flex-1 overflow-auto p-5">
                 <GanttHeader timeline={periodTimeline} zoom={demandZoom} />
-                <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 340}px` }}>
-                  {items.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments found for this segment.</div>}
-                  {items.map((item) => (
-                    <div key={`seg-drilldown-${item.id}`} className="grid grid-cols-[320px_1fr] items-center gap-0">
-                      <div className="text-left">
-                        <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
-                        <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
-                        <p className="mt-0.5 text-xs text-slate-400">{getAssignmentPeopleLabel(item.assignment, crews) || "Unassigned"}</p>
+                <div className="relative mt-3" style={{ minWidth: `${periodTimeline.width + 340}px` }}>
+                  <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${periodTimeline.width}px` }}>
+                    <GanttBackdrop timeline={periodTimeline} />
+                  </div>
+                  <div className="relative z-10">
+                    {items.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments found for this segment.</div>}
+                    {items.map((item, idx) => (
+                      <div key={`seg-drilldown-${item.id}`} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                        <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
+                          <button
+                            type="button"
+                            onClick={() => { setDemandDrilldown(null); openEditAssignmentForm(item.assignment); }}
+                            className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden hover:bg-slate-50"
+                            title={`${item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}${item.project.name} — click to edit assignment`}
+                          >
+                            <p className="truncate text-[12px] font-semibold text-slate-900 hover:text-emerald-700">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
+                          </button>
+                          <div className="relative h-7 rounded-md" style={{ width: `${periodTimeline.width}px` }}>
+                            <GanttSegmentBar item={item} timeline={periodTimeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
+                          </div>
+                        </div>
                       </div>
-                      <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
-                        <GanttSegmentBar item={item} timeline={periodTimeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -5025,26 +5117,36 @@ export default function App() {
               <div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5">
                 <div>
                   <h2 className="text-2xl font-bold">All Assignments — {label}</h2>
-                  <p className="text-sm text-slate-500">{periodItems.length} assignment{periodItems.length === 1 ? "" : "s"} active during this period across all divisions</p>
+                  <p className="text-sm text-slate-500">{periodItems.length} mobilization{periodItems.length === 1 ? "" : "s"} active during this period (bar shows distinct people + unfilled slots).</p>
                 </div>
                 <button onClick={() => setDemandPeriodDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
               </div>
               <div className="flex-1 overflow-auto p-5">
                 <GanttHeader timeline={periodTimeline} zoom={demandZoom} />
-                <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 340}px` }}>
-                  {periodItems.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments active in this period.</div>}
-                  {periodItems.map((item) => (
-                    <div key={`period-drilldown-${item.id}`} className="grid grid-cols-[320px_1fr] items-center gap-0">
-                      <div className="text-left">
-                        <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
-                        <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
-                        <p className="mt-0.5 text-xs text-slate-400">{getAssignmentPeopleLabel(item.assignment, crews) || "Unassigned"}</p>
+                <div className="relative mt-3" style={{ minWidth: `${periodTimeline.width + 340}px` }}>
+                  <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${periodTimeline.width}px` }}>
+                    <GanttBackdrop timeline={periodTimeline} />
+                  </div>
+                  <div className="relative z-10">
+                    {periodItems.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments active in this period.</div>}
+                    {periodItems.map((item, idx) => (
+                      <div key={`period-drilldown-${item.id}`} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                        <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
+                          <button
+                            type="button"
+                            onClick={() => { setDemandPeriodDrilldown(null); openEditAssignmentForm(item.assignment); }}
+                            className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden hover:bg-slate-50"
+                            title={`${item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}${item.project.name} — click to edit assignment`}
+                          >
+                            <p className="truncate text-[12px] font-semibold text-slate-900 hover:text-emerald-700">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
+                          </button>
+                          <div className="relative h-7 rounded-md" style={{ width: `${periodTimeline.width}px` }}>
+                            <GanttSegmentBar item={item} timeline={periodTimeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
+                          </div>
+                        </div>
                       </div>
-                      <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${periodTimeline.width}px` }}>
-                        <GanttSegmentBar item={item} timeline={periodTimeline} label={getAssignmentPeopleLabel(item.assignment, crews) || item.project.name} />
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -5134,6 +5236,7 @@ export default function App() {
                   onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")}
                   onBarClick={setDemandDrilldown}
                   onPeriodClick={setDemandPeriodDrilldown}
+                  getItemKeys={getDemandKeys}
                 />
               )}
             </div>
