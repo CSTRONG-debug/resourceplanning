@@ -1509,7 +1509,10 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
   // The bar itself uses overflow-visible; later bars in the same row paint
   // over earlier bars' overflowed labels (so conflicts hide cleanly). The
   // visible bar background still ends at the bar's true width.
-  const tooNarrow = width < 70;
+  // Skip external labels for unassigned-need bars — the hatched pattern
+  // already conveys the unassigned state, and rendering text on top of
+  // the hatched pattern reads as visual noise.
+  const tooNarrow = width < 70 && !isUnassigned;
 
   return (
     <div
@@ -1517,12 +1520,20 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
       style={{ left: `${left}px`, width: `${width}px`, ...patternStyle, ...conflictStyle }}
       title={tooltip}
     >
-      <span
-        className={`${conflict ? "rounded bg-white/90 px-1.5 py-0.5 font-bold text-red-700" : ""} ${tooNarrow ? "absolute left-full top-0 ml-1 whitespace-nowrap leading-7 text-slate-700" : ""}`}
-        style={labelOffset && !tooNarrow ? { paddingLeft: `${labelOffset}px` } : undefined}
-      >{label || "Unassigned"}</span>
-      {isUnassigned && !tooNarrow && <span className="ml-2 rounded bg-white/80 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-900">unassigned</span>}
-      {conflict && !tooNarrow && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-white">conflict</span>}
+      {tooNarrow ? (
+        <span
+          className="pointer-events-none absolute left-full top-0 ml-1 whitespace-nowrap rounded bg-white/95 px-1.5 leading-7 text-slate-700 shadow-sm"
+        >{label || "Unassigned"}</span>
+      ) : (
+        <>
+          <span
+            className={conflict ? "rounded bg-white/90 px-1.5 py-0.5 font-bold text-red-700" : ""}
+            style={labelOffset ? { paddingLeft: `${labelOffset}px` } : undefined}
+          >{label || "Unassigned"}</span>
+          {isUnassigned && <span className="ml-2 rounded bg-white/80 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-900">unassigned</span>}
+          {conflict && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-white">conflict</span>}
+        </>
+      )}
     </div>
   );
 }
@@ -1686,7 +1697,7 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
           label inward so it remains readable until the bar exits right.
           When the bar is too narrow, render the label OUTSIDE on the right. */}
       {width < 70 ? (
-        <span className="pointer-events-none absolute left-full top-0 ml-1 whitespace-nowrap leading-7 text-slate-700">
+        <span className="pointer-events-none absolute left-full top-0 ml-1 whitespace-nowrap rounded bg-white/95 px-1.5 leading-7 text-slate-700 shadow-sm">
           {label || "Unassigned"}
         </span>
       ) : (
@@ -1868,7 +1879,7 @@ export function CrewGanttRow({ crew, items, timeline }) {
                 style={{ left: `${span.left}px`, width: `${span.width}px`, top: `${laneIndex * 32 + 2}px` }}
               >
                 {tooNarrow ? (
-                  <span className="pointer-events-none absolute left-full top-0 ml-1 whitespace-nowrap leading-7 text-slate-700">
+                  <span className="pointer-events-none absolute left-full top-0 ml-1 whitespace-nowrap rounded bg-white/95 px-1.5 leading-7 text-slate-700 shadow-sm">
                     {item.project.name}
                   </span>
                 ) : (
@@ -4195,9 +4206,12 @@ export default function App() {
                 <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
                   <GanttBackdrop timeline={timeline} />
                 </div>
-                <div className="relative z-10 space-y-3">
-                  {projectGanttRows.map((row) => (
-                    <div key={row.project.id} className="block w-full text-left">
+                <div className="relative z-10">
+                  {projectGanttRows.map((row, idx) => (
+                    <div
+                      key={row.project.id}
+                      className={`block w-full text-left py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}
+                    >
                       <ProjectGanttRow
                         assignment={row.assignment}
                         project={row.project}
@@ -4293,11 +4307,13 @@ export default function App() {
                 <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
                   <GanttBackdrop timeline={timeline} />
                 </div>
-                <div className="relative z-10 space-y-3">
-                  {resourceGanttRowsWithUnassigned.map((row) => (
-                    row.isUnassignedNeedRow
-                      ? <UnassignedNeedGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} />
-                      : <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />
+                <div className="relative z-10">
+                  {resourceGanttRowsWithUnassigned.map((row, idx) => (
+                    <div key={row.resource.id} className={`py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                      {row.isUnassignedNeedRow
+                        ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={timeline} />
+                        : <ResourceGanttRow resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />}
+                    </div>
                   ))}
                 </div>
               </div>
@@ -4399,8 +4415,12 @@ export default function App() {
                 <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
                   <GanttBackdrop timeline={timeline} />
                 </div>
-                <div className="relative z-10 space-y-3">
-                  {crewGanttRows.map((row) => <CrewGanttRow key={row.crew.id} crew={row.crew} items={row.items} timeline={timeline} />)}
+                <div className="relative z-10">
+                  {crewGanttRows.map((row, idx) => (
+                    <div key={row.crew.id} className={`py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                      <CrewGanttRow crew={row.crew} items={row.items} timeline={timeline} />
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -4976,18 +4996,19 @@ export default function App() {
                     <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
                       <GanttBackdrop timeline={timeline} />
                     </div>
-                    <div className="relative z-10 space-y-3">
-                      {projectGanttRows.map((row) => (
-                        <ProjectGanttRow
-                          key={row.project.id}
-                          assignment={row.assignment}
-                          project={row.project}
-                          items={row.items}
-                          timeline={timeline}
-                          crews={crews}
-                          onLabelClick={() => openEditAssignmentForm(row.assignment)}
-                          onDragEnd={handleProjectGanttDragEnd}
-                        />
+                    <div className="relative z-10">
+                      {projectGanttRows.map((row, idx) => (
+                        <div key={row.project.id} className={`py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                          <ProjectGanttRow
+                            assignment={row.assignment}
+                            project={row.project}
+                            items={row.items}
+                            timeline={timeline}
+                            crews={crews}
+                            onLabelClick={() => openEditAssignmentForm(row.assignment)}
+                            onDragEnd={handleProjectGanttDragEnd}
+                          />
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -5000,8 +5021,14 @@ export default function App() {
                     <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
                       <GanttBackdrop timeline={timeline} />
                     </div>
-                    <div className="relative z-10 space-y-3">
-                      {resourceGanttRowsWithUnassigned.map((row) => row.isUnassignedNeedRow ? <UnassignedNeedGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} /> : <ResourceGanttRow key={row.resource.id} resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />)}
+                    <div className="relative z-10">
+                      {resourceGanttRowsWithUnassigned.map((row, idx) => (
+                        <div key={row.resource.id} className={`py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                          {row.isUnassignedNeedRow
+                            ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={timeline} />
+                            : <ResourceGanttRow resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -5013,8 +5040,12 @@ export default function App() {
                     <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
                       <GanttBackdrop timeline={timeline} />
                     </div>
-                    <div className="relative z-10 space-y-3">
-                      {crewGanttRows.map((row) => <CrewGanttRow key={row.crew.id} crew={row.crew} items={row.items} timeline={timeline} />)}
+                    <div className="relative z-10">
+                      {crewGanttRows.map((row, idx) => (
+                        <div key={row.crew.id} className={`py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                          <CrewGanttRow crew={row.crew} items={row.items} timeline={timeline} />
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
