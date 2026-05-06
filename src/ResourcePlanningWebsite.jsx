@@ -2056,7 +2056,8 @@ export default function App() {
   const [zoom, setZoom] = useState("Months");
   const [divisionFilter, setDivisionFilter] = useState([...divisions]);
   const [statusFilter, setStatusFilter] = useState([...statuses]);
-  const [page, setPage] = useState("dashboard");
+  const [page, setPage] = useState("projectDash");
+  const [setupTab, setSetupTab] = useState("projects");
   const [showCertSettings, setShowCertSettings] = useState(false);
   const [newCertification, setNewCertification] = useState("");
   const [resourceTypeFilter, setResourceTypeFilter] = useState([...resourceTypes]);
@@ -2195,7 +2196,7 @@ export default function App() {
 
   // Keep the bottom Assignments table collapsed whenever the Dashboard is opened.
   useEffect(() => {
-    if (page === "dashboard") setShowAssignments(false);
+    if (page === "projectDash") setShowAssignments(false);
   }, [page]);
 
   function formatLocalIsoDate(date) {
@@ -3865,28 +3866,50 @@ export default function App() {
         <div className="border-t border-slate-100 bg-white">
           <div className="mx-auto flex max-w-[1700px] items-center justify-between gap-3 px-4 py-3">
             <nav className="flex min-w-0 flex-1 flex-nowrap gap-2 overflow-x-auto">
-              {["dashboard", "projects", "resources", "crews", "forecast"].map((p) => (
-                <button key={p} onClick={() => setPage(p)} className={`shrink-0 rounded-xl px-4 py-2.5 font-semibold shadow-sm capitalize ${page === p ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>{p}</button>
+              {[
+                { key: "projectDash", label: "Project Dashboard" },
+                { key: "resourceDash", label: "Resource Dashboard" },
+                { key: "crewDash", label: "Crew Dashboard" },
+                { key: "forecast", label: "Forecast" },
+                { key: "setup", label: "Setup" },
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setPage(tab.key)}
+                  className={`shrink-0 rounded-xl px-4 py-2.5 font-semibold shadow-sm ${page === tab.key ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}
+                >
+                  {tab.label}
+                </button>
               ))}
             </nav>
             <div className="flex shrink-0 items-center gap-2">
-              {page === "dashboard" && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><ClipboardCheck size={18} /> Assign</button>}
-              {page === "projects" && (
+              {page === "projectDash" && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><ClipboardCheck size={18} /> Assign</button>}
+              {page === "setup" && setupTab === "projects" && (
                 <>
                   <CmicPullProjects projects={projects} onApplied={() => loadSupabaseData()} />
                   <button onClick={openAddProjectForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Project</button>
                 </>
               )}
-              {page === "resources" && <button onClick={openAddResourceForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Resource</button>}
-              {page === "crews" && <button onClick={openAddCrewForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Crew</button>}
+              {page === "setup" && setupTab === "resources" && <button onClick={openAddResourceForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Resource</button>}
+              {page === "setup" && setupTab === "crews" && <button onClick={openAddCrewForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Crew</button>}
             </div>
           </div>
         </div>
       </header>
 
-      {/* ── Crews Page ── */}
-      {page === "crews" && (
+      {/* ── Setup: Crews ── */}
+      {page === "setup" && setupTab === "crews" && (
         <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
+          {/* Setup sub-tabs */}
+          <div className="flex gap-2 border-b border-slate-200 pb-3">
+            {[
+              { key: "projects", label: "Projects" },
+              { key: "resources", label: "Resources" },
+              { key: "crews", label: "Crews" },
+            ].map((t) => (
+              <button key={t.key} onClick={() => setSetupTab(t.key)} className={`rounded-xl px-4 py-2 text-sm font-semibold ${setupTab === t.key ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>{t.label}</button>
+            ))}
+          </div>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div><h2 className="text-2xl font-bold">Crews</h2><p className="text-sm text-slate-500">Master crew list used by assignment crew dropdowns.</p></div>
@@ -3932,9 +3955,19 @@ export default function App() {
         </section>
       )}
 
-      {/* ── Resources Page ── */}
-      {page === "resources" && (
+      {/* ── Setup: Resources ── */}
+      {page === "setup" && setupTab === "resources" && (
         <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
+          {/* Setup sub-tabs */}
+          <div className="flex gap-2 border-b border-slate-200 pb-3">
+            {[
+              { key: "projects", label: "Projects" },
+              { key: "resources", label: "Resources" },
+              { key: "crews", label: "Crews" },
+            ].map((t) => (
+              <button key={t.key} onClick={() => setSetupTab(t.key)} className={`rounded-xl px-4 py-2 text-sm font-semibold ${setupTab === t.key ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>{t.label}</button>
+            ))}
+          </div>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div><h2 className="text-2xl font-bold">Resources</h2><p className="text-sm text-slate-500">Master resource list used by Dashboard assignment dropdowns.</p></div>
@@ -4009,9 +4042,19 @@ export default function App() {
         </section>
       )}
 
-      {/* ── Projects Page ── */}
-      {page === "projects" && (
+      {/* ── Setup: Projects ── */}
+      {page === "setup" && setupTab === "projects" && (
         <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
+          {/* Setup sub-tabs */}
+          <div className="flex gap-2 border-b border-slate-200 pb-3">
+            {[
+              { key: "projects", label: "Projects" },
+              { key: "resources", label: "Resources" },
+              { key: "crews", label: "Crews" },
+            ].map((t) => (
+              <button key={t.key} onClick={() => setSetupTab(t.key)} className={`rounded-xl px-4 py-2 text-sm font-semibold ${setupTab === t.key ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>{t.label}</button>
+            ))}
+          </div>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div><h2 className="text-2xl font-bold">Projects</h2><p className="text-sm text-slate-500">Create and edit projects here only. Resource assignments happen on the Dashboard.</p></div>
@@ -4091,8 +4134,8 @@ export default function App() {
         </section>
       )}
 
-      {/* ── Dashboard Page ── */}
-      {page === "dashboard" && (
+      {/* ── Project Dashboard ── */}
+      {page === "projectDash" && (
         <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
           <div className="grid gap-4 md:grid-cols-4">
             <StatCard icon={BriefcaseBusiness} label="Total Projects" value={projects.length} />
@@ -4171,6 +4214,53 @@ export default function App() {
             </div>
           </section>
 
+          {/* Assignments table moved to Project Dashboard */}
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <div><h2 className="text-xl font-bold">Assignments</h2><p className="text-sm text-slate-500">Assign existing projects to resources and crews.</p></div>
+              <div className="flex flex-wrap gap-3">
+                <button onClick={() => setShowAssignments((c) => !c)} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">{showAssignments ? "Collapse" : "Expand"}</button>
+                <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importAssignmentsCsv} className="hidden" /></label>
+                <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><ClipboardCheck size={17} /> Assign</button>
+              </div>
+            </div>
+            {showAssignments && (
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full min-w-[1250px] text-left text-sm">
+                  <thead className="bg-slate-100 text-slate-600">
+                    <tr><th className="p-3">Project</th><th className="p-3">PM</th><th className="p-3">Superintendent</th><th className="p-3">Field Coordinator</th><th className="p-3">Field Engineer</th><th className="p-3">Safety</th><th className="p-3">Crews</th><th className="p-3">Mobilizations</th><th className="p-3 text-right">Actions</th></tr>
+                  </thead>
+                  <tbody>
+                    {visibleAssignments.map((assignment) => {
+                      const project = findProject(projects, assignment.projectId);
+                      return (
+                        <tr key={assignment.id} className="border-t border-slate-200 align-top">
+                          <td className="p-3 font-medium">{project ? `${project.projectNumber} - ${project.name}` : "Missing project"}</td>
+                          <td className="p-3">{assignment.projectManager}</td>
+                          <td className="p-3">{assignment.superintendent}</td>
+                          <td className="p-3">{assignment.fieldCoordinator}</td>
+                          <td className="p-3">{assignment.fieldEngineer}</td>
+                          <td className="p-3">{assignment.safety}</td>
+                          <td className="p-3">{getAssignmentCrewDisplayNames(assignment, crews).join(", ")}</td>
+                          <td className="p-3">{(assignment.mobilizations || []).map((m, i) => `#${i + 1}: ${formatDate(m.start)} - ${formatDate(m.end)}`).join("; ")}</td>
+                          <td className="p-3 text-right">
+                            <button onClick={() => openEditAssignmentForm(assignment)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button>
+                            <button onClick={() => deleteAssignment(assignment.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </section>
+      )}
+
+      {/* ── Resource Dashboard ── */}
+      {page === "resourceDash" && (
+        <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={dashboardResourceTypeFilter} setSelected={setDashboardResourceTypeFilter} />
           </div>
@@ -4243,6 +4333,47 @@ export default function App() {
             onPeriodClick={setDemandPeriodDrilldown}
           />
 
+          {/* Project Manager Utilization (moved into Resource Dashboard) */}
+          <section id="project-manager-utilization" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-xl font-bold">Project Manager Utilization</h2>
+                <p className="text-sm text-slate-500">Current workload by project manager. Active includes Scheduled, Active, and On-Hold projects.</p>
+              </div>
+              <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">Click a PM row to view project duration Gantt</div>
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full min-w-[760px] text-left text-sm">
+                <thead className="bg-slate-100 text-slate-600">
+                  <tr>
+                    <th className="p-3">Project Manager</th>
+                    <th className="p-3 text-center">Current Active Projects</th>
+                    <th className="p-3 text-center">Pending Awards</th>
+                    <th className="p-3 text-center">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {projectManagerUtilizationRows.map((row) => (
+                    <tr key={row.projectManager} onClick={() => setSelectedProjectManagerUtilization(row.projectManager)} className="cursor-pointer border-t border-slate-200 hover:bg-emerald-50">
+                      <td className="p-3 font-semibold text-slate-900 hover:text-emerald-700">{row.projectManager}</td>
+                      <td className="p-3 text-center font-semibold text-slate-700">{row.activeCount}</td>
+                      <td className="p-3 text-center font-semibold text-amber-700">{row.pendingCount}</td>
+                      <td className="p-3 text-center font-bold text-slate-900">{row.totalCount}</td>
+                    </tr>
+                  ))}
+                  {projectManagerUtilizationRows.length === 0 && (
+                    <tr><td colSpan={4} className="p-6 text-center text-slate-400">No project manager assignments found for active or pending projects.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      )}
+
+      {/* ── Crew Dashboard ── */}
+      {page === "crewDash" && (
+        <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
           {/* Crew Gantt */}
           <section id="crew-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -4501,83 +4632,6 @@ export default function App() {
               </section>
             );
           })()}
-
-          {/* Project Manager Utilization */}
-          <section id="project-manager-utilization" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-xl font-bold">Project Manager Utilization</h2>
-                <p className="text-sm text-slate-500">Current workload by project manager. Active includes Scheduled, Active, and On-Hold projects.</p>
-              </div>
-              <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">Click a PM row to view project duration Gantt</div>
-            </div>
-            <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="w-full min-w-[760px] text-left text-sm">
-                <thead className="bg-slate-100 text-slate-600">
-                  <tr>
-                    <th className="p-3">Project Manager</th>
-                    <th className="p-3 text-center">Current Active Projects</th>
-                    <th className="p-3 text-center">Pending Awards</th>
-                    <th className="p-3 text-center">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projectManagerUtilizationRows.map((row) => (
-                    <tr key={row.projectManager} onClick={() => setSelectedProjectManagerUtilization(row.projectManager)} className="cursor-pointer border-t border-slate-200 hover:bg-emerald-50">
-                      <td className="p-3 font-semibold text-slate-900 hover:text-emerald-700">{row.projectManager}</td>
-                      <td className="p-3 text-center font-semibold text-slate-700">{row.activeCount}</td>
-                      <td className="p-3 text-center font-semibold text-amber-700">{row.pendingCount}</td>
-                      <td className="p-3 text-center font-bold text-slate-900">{row.totalCount}</td>
-                    </tr>
-                  ))}
-                  {projectManagerUtilizationRows.length === 0 && (
-                    <tr><td colSpan={4} className="p-6 text-center text-slate-400">No project manager assignments found for active or pending projects.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
-              <div><h2 className="text-xl font-bold">Assignments</h2><p className="text-sm text-slate-500">Assign existing projects to resources and crews.</p></div>
-              <div className="flex flex-wrap gap-3">
-                <button onClick={() => setShowAssignments((c) => !c)} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">{showAssignments ? "Collapse" : "Expand"}</button>
-                <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importAssignmentsCsv} className="hidden" /></label>
-                <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><ClipboardCheck size={17} /> Assign</button>
-              </div>
-            </div>
-            {showAssignments && (
-              <div className="overflow-x-auto rounded-xl border border-slate-200">
-                <table className="w-full min-w-[1250px] text-left text-sm">
-                  <thead className="bg-slate-100 text-slate-600">
-                    <tr><th className="p-3">Project</th><th className="p-3">PM</th><th className="p-3">Superintendent</th><th className="p-3">Field Coordinator</th><th className="p-3">Field Engineer</th><th className="p-3">Safety</th><th className="p-3">Crews</th><th className="p-3">Mobilizations</th><th className="p-3 text-right">Actions</th></tr>
-                  </thead>
-                  <tbody>
-                    {visibleAssignments.map((assignment) => {
-                      const project = findProject(projects, assignment.projectId);
-                      return (
-                        <tr key={assignment.id} className="border-t border-slate-200 align-top">
-                          <td className="p-3 font-medium">{project ? `${project.projectNumber} - ${project.name}` : "Missing project"}</td>
-                          <td className="p-3">{assignment.projectManager}</td>
-                          <td className="p-3">{assignment.superintendent}</td>
-                          <td className="p-3">{assignment.fieldCoordinator}</td>
-                          <td className="p-3">{assignment.fieldEngineer}</td>
-                          <td className="p-3">{assignment.safety}</td>
-                          <td className="p-3">{getAssignmentCrewDisplayNames(assignment, crews).join(", ")}</td>
-                          <td className="p-3">{(assignment.mobilizations || []).map((m, i) => `#${i + 1}: ${formatDate(m.start)} - ${formatDate(m.end)}`).join("; ")}</td>
-                          <td className="p-3 text-right">
-                            <button onClick={() => openEditAssignmentForm(assignment)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button>
-                            <button onClick={() => deleteAssignment(assignment.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
         </section>
       )}
 
@@ -4778,6 +4832,15 @@ export default function App() {
                       {pmRows.map((row) => {
                         const start = getProjectStartFromItems(row.items);
                         const end = getProjectEndFromItems(row.items);
+                        // Compute the hatched-bar span from project start
+                        // to project end, in pixels on the popup timeline.
+                        // The PM is on the project for the entire span,
+                        // including gaps between mobilizations and time
+                        // before the first / after the last mob.
+                        const span = (start && end)
+                          ? timelineSpanPixels(start, end, pmTimeline)
+                          : { left: 0, width: 0 };
+                        const divisionColor = divisionSvgColors[row.project.division] || "#475569";
                         return (
                           <div key={`pm-util-${row.project.id}`} className="grid grid-cols-[300px_1fr] items-center gap-5">
                             <div className="text-left">
@@ -4788,6 +4851,23 @@ export default function App() {
                               <p className="mt-1 text-xs text-slate-500">{row.project.division} • {row.project.status} • {start ? formatDate(start) : "No start"} – {end ? formatDate(end) : "No end"}</p>
                             </div>
                             <div className="relative h-8 overflow-hidden rounded-md bg-slate-100" style={{ width: `${pmTimeline.width}px` }}>
+                              {/* Continuous hatched bar: PM is on project
+                                  for the entire duration, even between
+                                  mobs. Sits BEHIND mob bars (z-0). */}
+                              {span.width > 0 && (
+                                <div
+                                  className="absolute top-0.5 z-0 h-7 rounded-md"
+                                  style={{
+                                    left: `${span.left}px`,
+                                    width: `${span.width}px`,
+                                    backgroundColor: divisionColor,
+                                    opacity: 0.25,
+                                    backgroundImage: `repeating-linear-gradient(135deg, transparent 0 8px, ${divisionColor} 8px 10px)`,
+                                    backgroundSize: "14px 14px",
+                                  }}
+                                  title={`${formatDate(start)} – ${formatDate(end)} (PM on project)`}
+                                />
+                              )}
                               {row.items.map((item) => (
                                 <GanttSegmentBar key={`pm-util-${row.project.id}-${item.id}`} item={item} timeline={pmTimeline} label={row.project.name} />
                               ))}
