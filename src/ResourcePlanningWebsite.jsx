@@ -1964,35 +1964,42 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
       return total;
     };
 
+    // Sort helper: group items by their primary demand key (so McKenna's
+    // mobs cluster together, Jacob's together, etc.), then by start date
+    // within the group. Falls back to project name if no keys.
+    const sortByDemandKey = (arr) => [...arr].sort((a, b) => {
+      const ak = keysOf(a)[0] || "";
+      const bk = keysOf(b)[0] || "";
+      if (ak !== bk) return ak.localeCompare(bk);
+      const aStart = toDate(a.start)?.getTime() || 0;
+      const bStart = toDate(b.start)?.getTime() || 0;
+      return aStart - bStart;
+    });
+
     const segments = [];
     divisions.forEach((d) => {
       const currentCount = sumBucket(buckets[d].current);
       const pendingCount = sumBucket(buckets[d].pending);
-      const currentMobCount = periodItems.filter((item) =>
+      const currentItems = sortByDemandKey(periodItems.filter((item) =>
         item.project.division === d &&
         item.project.status !== "Pending Award" &&
         item.project.status !== "Complete"
-      ).length;
-      const pendingMobCount = periodItems.filter((item) =>
+      ));
+      const pendingItems = sortByDemandKey(periodItems.filter((item) =>
         item.project.division === d &&
         item.project.status === "Pending Award"
-      ).length;
+      ));
+      const currentMobCount = currentItems.length;
+      const pendingMobCount = pendingItems.length;
       const currentKeyCount = buckets[d].current.size;
       const pendingKeyCount = buckets[d].pending.size;
       if (currentCount > 0) segments.push({
         division: d, type: "Current", value: currentCount, mobCount: currentMobCount, keyCount: currentKeyCount, color: divisionSvgColors[d],
-        segmentItems: periodItems.filter((item) =>
-          item.project.division === d &&
-          item.project.status !== "Pending Award" &&
-          item.project.status !== "Complete"
-        ),
+        segmentItems: currentItems,
       });
       if (pendingCount > 0) segments.push({
         division: d, type: "Pending", value: pendingCount, mobCount: pendingMobCount, keyCount: pendingKeyCount, color: pendingDivisionSvgColors[d],
-        segmentItems: periodItems.filter((item) =>
-          item.project.division === d &&
-          item.project.status === "Pending Award"
-        ),
+        segmentItems: pendingItems,
       });
     });
 
@@ -2007,7 +2014,9 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
     };
 
     const count = divisions.reduce((sum, d) => sum + sumBucket(buckets[d].current) + sumBucket(buckets[d].pending), 0);
-    return { label: formatTick(tick, zoom), tick, periodStart, periodEnd, segments, count, periodItems, periodTimeline };
+    // Period-wide drilldown also gets the grouped order
+    const sortedPeriodItems = sortByDemandKey(periodItems);
+    return { label: formatTick(tick, zoom), tick, periodStart, periodEnd, segments, count, periodItems: sortedPeriodItems, periodTimeline };
   });
 
   const rawMaxValue = Math.max(totalResources, ...periods.map((p) => p.count), 1);
@@ -3441,8 +3450,11 @@ export default function App() {
   // functions, so a CSV / PDF download always matches what the user sees.
   // Includes division filter, status (no Complete), include-in-forecast
   // (with the Pending Award opt-in rule), and the search box.
+  // Pending Award projects sort to the bottom of the table (within the
+  // already-filtered set). Within each group (current first, pending after),
+  // original project order is preserved.
   function getVisibleForecastProjects() {
-    return projects.filter((p) => {
+    const filtered = projects.filter((p) => {
       if (!forecastDivisionFilter.includes(p.division)) return false;
       if (p.status === "Complete") return false;
       if (p.status === "Pending Award" && !p.includeInForecast) return false;
@@ -3454,6 +3466,14 @@ export default function App() {
           || (p.client || "").toLowerCase().includes(q);
       }
       return true;
+    });
+    // Stable partition: non-pending first, pending last. Array.sort with
+    // a (a,b)=>0 tiebreaker is stable in modern JS engines, preserving
+    // input order within each group.
+    return filtered.sort((a, b) => {
+      const aPending = a.status === "Pending Award" ? 1 : 0;
+      const bPending = b.status === "Pending Award" ? 1 : 0;
+      return aPending - bPending;
     });
   }
 
