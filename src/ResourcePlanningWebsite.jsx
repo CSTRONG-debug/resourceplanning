@@ -1962,8 +1962,17 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
     divisions.forEach((d) => {
       const currentCount = sumBucket(buckets[d].current);
       const pendingCount = sumBucket(buckets[d].pending);
+      const currentMobCount = periodItems.filter((item) =>
+        item.project.division === d &&
+        item.project.status !== "Pending Award" &&
+        item.project.status !== "Complete"
+      ).length;
+      const pendingMobCount = periodItems.filter((item) =>
+        item.project.division === d &&
+        item.project.status === "Pending Award"
+      ).length;
       if (currentCount > 0) segments.push({
-        division: d, type: "Current", value: currentCount, color: divisionSvgColors[d],
+        division: d, type: "Current", value: currentCount, mobCount: currentMobCount, color: divisionSvgColors[d],
         segmentItems: periodItems.filter((item) =>
           item.project.division === d &&
           item.project.status !== "Pending Award" &&
@@ -1971,7 +1980,7 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
         ),
       });
       if (pendingCount > 0) segments.push({
-        division: d, type: "Pending", value: pendingCount, color: pendingDivisionSvgColors[d],
+        division: d, type: "Pending", value: pendingCount, mobCount: pendingMobCount, color: pendingDivisionSvgColors[d],
         segmentItems: periodItems.filter((item) =>
           item.project.division === d &&
           item.project.status === "Pending Award"
@@ -2040,11 +2049,18 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
                   const rectY = y(stackedValue + segment.value);
                   stackedValue += segment.value;
                   return (
-                    <rect key={`${segment.division}-${segment.type}`} x={x} y={rectY} width={barWidth} height={segmentHeight} rx="5" fill={segment.color}
-                      onClick={() => onBarClick?.({ period, segment })}
-                      style={{ cursor: "pointer" }}>
-                      <title>{segment.division} {segment.type}: {segment.value} — click for details</title>
-                    </rect>
+                    <g key={`${segment.division}-${segment.type}`}>
+                      <rect x={x} y={rectY} width={barWidth} height={segmentHeight} rx="5" fill={segment.color}
+                        onClick={() => onBarClick?.({ period, segment })}
+                        style={{ cursor: "pointer" }}>
+                        <title>{segment.division} {segment.type}: {segment.value} (from {segment.mobCount} mob{segment.mobCount === 1 ? "" : "s"}) — click for details</title>
+                      </rect>
+                      {segmentHeight >= 16 && (
+                        <text x={x + barWidth / 2} y={rectY + segmentHeight / 2 + 4} textAnchor="middle" fontSize="11" fontWeight="700" fill="white" pointerEvents="none">
+                          {segment.value}
+                        </text>
+                      )}
+                    </g>
                   );
                 })}
                 <text
@@ -2114,6 +2130,11 @@ export default function App() {
   const [dashboardResourceTypeFilter, setDashboardResourceTypeFilter] = useState([...defaultDashboardResourceTypes]);
   const [projectTabDivisionFilter, setProjectTabDivisionFilter] = useState([...divisions]);
   const [demandHomeDivisionFilter, setDemandHomeDivisionFilter] = useState([...divisions]);
+  // Demand graph has its own resource type filter, independent of the
+  // Resource Gantt's filter. PM is excluded from the OPTIONS list because
+  // PM utilization is shown elsewhere; they can never be selected here.
+  const demandResourceTypeOptions = resourceTypes.filter((rt) => rt !== "Project Manager");
+  const [demandResourceTypeFilter, setDemandResourceTypeFilter] = useState(demandResourceTypeOptions);
   const [demandZoom, setDemandZoom] = useState("Weeks");
   const [expandedView, setExpandedView] = useState(null);
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
@@ -2413,13 +2434,13 @@ export default function App() {
         if (!demandHomeDivisionFilter.includes(needDivision)) return false;
         // Unassigned needs represent unfilled SUPERINTENDENT slots in this
         // app. Only show them when superintendent is in the role filter.
-        return dashboardResourceTypeFilter.includes("Superintendent");
+        return demandResourceTypeFilter.includes("Superintendent");
       }
 
       // Regular items: walk the role fields the user has selected. For each,
       // check whether the named person on this mobilization is in the
       // home-division filter.
-      const rolesToCheck = dashboardResourceTypeFilter
+      const rolesToCheck = demandResourceTypeFilter
         .map((rt) => RESOURCE_TYPE_TO_ROLE[rt])
         .filter(Boolean);
       for (const roleField of rolesToCheck) {
@@ -2447,7 +2468,7 @@ export default function App() {
   const getDemandKeys = (item) => {
     if (item.isUnassignedNeed) return [`UNASSIGNED:${item.id}`];
     const keys = [];
-    for (const rt of dashboardResourceTypeFilter) {
+    for (const rt of demandResourceTypeFilter) {
       const roleField = RESOURCE_TYPE_TO_ROLE[rt];
       if (!roleField) continue;
       const personName = item.assignment[roleField];
@@ -4498,6 +4519,9 @@ export default function App() {
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-wrap gap-4 items-start">
               <div className="flex-1 min-w-[200px]">
+                <MultiSelectFilter label="Resource Demand Type Filter" options={demandResourceTypeOptions} selected={demandResourceTypeFilter} setSelected={setDemandResourceTypeFilter} />
+              </div>
+              <div className="flex-1 min-w-[200px]">
                 <MultiSelectFilter label="Resource Demand Home Division Filter" options={divisions} selected={demandHomeDivisionFilter} setSelected={setDemandHomeDivisionFilter} />
               </div>
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
@@ -4517,7 +4541,7 @@ export default function App() {
             items={demandFilteredItems}
             timeline={demandTimeline}
             zoom={demandZoom}
-            totalResources={resources.filter((r) => dashboardResourceTypeFilter.includes(r.resourceType) && demandHomeDivisionFilter.includes(r.homeDivision)).length}
+            totalResources={resources.filter((r) => demandResourceTypeFilter.includes(r.resourceType) && demandHomeDivisionFilter.includes(r.homeDivision)).length}
             onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")}
             onBarClick={setDemandDrilldown}
             onPeriodClick={setDemandPeriodDrilldown}
@@ -5300,7 +5324,7 @@ export default function App() {
                   items={demandFilteredItems}
                   timeline={demandTimeline}
                   zoom={demandZoom}
-                  totalResources={resources.filter((r) => dashboardResourceTypeFilter.includes(r.resourceType) && demandHomeDivisionFilter.includes(r.homeDivision)).length}
+                  totalResources={resources.filter((r) => demandResourceTypeFilter.includes(r.resourceType) && demandHomeDivisionFilter.includes(r.homeDivision)).length}
                   onExportPdf={() => exportSectionPdf("resource-demand-graph", "Resource Demand Graph")}
                   onBarClick={setDemandDrilldown}
                   onPeriodClick={setDemandPeriodDrilldown}
