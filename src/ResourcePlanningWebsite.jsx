@@ -1886,18 +1886,41 @@ export function CrewGanttRow({ crew, items, timeline }) {
 
 export function ResourceDemandChart({ items, timeline, zoom, totalResources, onExportPdf, onBarClick, onPeriodClick, getItemKeys, enlarged = false }) {
   // getItemKeys(item) -> string[] returns one or more keys identifying the
-  // unique person/slot demand contributed by this item. Multiple keys
-  // happen when the user filters by multiple roles (e.g. Super + FC) and
-  // the item has matching people in both roles. The chart dedupes within
-  // each (period, division, status) bucket, so a single person covering
-  // back-to-back mobilizations counts as 1. Unassigned needs each get a
-  // unique key (their id) so each unfilled slot still counts.
+  // unique person/role slot that this item draws on. Multiple keys per item
+  // happen when the user filters by multiple roles and the item has matching
+  // people in more than one of them.
+  //
+  // Counting model: within each (period, division, status) bucket, for each
+  // distinct key we tally MAX CONCURRENT mobilizations carrying that key
+  // during the period. So one person on two SEQUENTIAL mobs collapses to 1
+  // (they cover both via handoff). One person on two OVERLAPPING mobs counts
+  // as 2 (they're stretched — both projects need full coverage during the
+  // overlap). Unassigned needs each get a unique key, so they always count
+  // their own concurrency (typically 1 each).
   const keysOf = (item) => {
     if (typeof getItemKeys === "function") {
       const ks = getItemKeys(item);
       if (Array.isArray(ks) && ks.length) return ks;
     }
     return [item.id];
+  };
+  // Compute max concurrent count of a list of mobilizations using a sweep.
+  // End dates are treated as inclusive (a mob ending May 11 still occupies
+  // May 11 entirely), so the end event fires at end+1.
+  const maxConcurrency = (mobs) => {
+    if (!mobs || mobs.length <= 1) return mobs ? mobs.length : 0;
+    const events = [];
+    mobs.forEach((m) => {
+      const s = toDate(m.start);
+      const e = toDate(m.end);
+      if (!s || !e) return;
+      events.push({ t: s.getTime(), delta: 1 });
+      events.push({ t: e.getTime() + 86400000, delta: -1 });
+    });
+    events.sort((a, b) => a.t - b.t || b.delta - a.delta);
+    let cur = 0, max = 0;
+    events.forEach(({ delta }) => { cur += delta; if (cur > max) max = cur; });
+    return max;
   };
   const periods = timeline.ticks.map((tick) => {
     const periodStart = tick;
@@ -1910,36 +1933,45 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
       return itemStart && itemEnd && rangesOverlap(itemStart, addDays(itemEnd, 1), periodStart, periodEnd);
     });
 
-    // Bucket by PROJECT division so bar colors reflect the actual work being done.
-    // The home-division filter is already applied on the items passed in — so only
-    // assignments where the resource's home division matches show up, but the bar
-    // color (and stack position) is still the project's division color.
-    // Using Sets so back-to-back coverage by the same person counts as 1.
+    // Bucket by PROJECT division so bar colors reflect the actual work being
+    // done. Each bucket holds Map<key, mobs[]> rather than counts directly,
+    // because we have to compute max concurrency per key after aggregating.
     const buckets = {};
-    divisions.forEach((d) => { buckets[d] = { current: new Set(), pending: new Set() }; });
+    divisions.forEach((d) => { buckets[d] = { current: new Map(), pending: new Map() }; });
 
     periodItems.forEach((item) => {
       const projectDivision = item.project.division;
       if (!buckets[projectDivision]) return;
-      const ks = keysOf(item);
       const target = item.project.status === "Pending Award" ? buckets[projectDivision].pending
         : (item.project.status !== "Complete" ? buckets[projectDivision].current : null);
-      if (target) ks.forEach((k) => target.add(k));
+      if (!target) return;
+      const ks = keysOf(item);
+      ks.forEach((k) => {
+        if (!target.has(k)) target.set(k, []);
+        target.get(k).push(item);
+      });
     });
+
+    const sumBucket = (map) => {
+      let total = 0;
+      for (const mobs of map.values()) total += maxConcurrency(mobs);
+      return total;
+    };
 
     const segments = [];
     divisions.forEach((d) => {
-      if (buckets[d].current.size > 0) segments.push({
-        division: d, type: "Current", value: buckets[d].current.size, color: divisionSvgColors[d],
-        // Segment drilldown shows items whose project division matches AND resource division filter passes
+      const currentCount = sumBucket(buckets[d].current);
+      const pendingCount = sumBucket(buckets[d].pending);
+      if (currentCount > 0) segments.push({
+        division: d, type: "Current", value: currentCount, color: divisionSvgColors[d],
         segmentItems: periodItems.filter((item) =>
           item.project.division === d &&
           item.project.status !== "Pending Award" &&
           item.project.status !== "Complete"
         ),
       });
-      if (buckets[d].pending.size > 0) segments.push({
-        division: d, type: "Pending", value: buckets[d].pending.size, color: pendingDivisionSvgColors[d],
+      if (pendingCount > 0) segments.push({
+        division: d, type: "Pending", value: pendingCount, color: pendingDivisionSvgColors[d],
         segmentItems: periodItems.filter((item) =>
           item.project.division === d &&
           item.project.status === "Pending Award"
@@ -1957,7 +1989,7 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
       width: 1160,
     };
 
-    const count = divisions.reduce((sum, d) => sum + buckets[d].current.size + buckets[d].pending.size, 0);
+    const count = divisions.reduce((sum, d) => sum + sumBucket(buckets[d].current) + sumBucket(buckets[d].pending), 0);
     return { label: formatTick(tick, zoom), tick, periodStart, periodEnd, segments, count, periodItems, periodTimeline };
   });
 
@@ -2070,6 +2102,8 @@ export default function App() {
   const [crewForm, setCrewForm] = useState(blankCrew);
 
   const [zoom, setZoom] = useState("Months");
+  const [resourceZoom, setResourceZoom] = useState("Months");
+  const [crewZoom, setCrewZoom] = useState("Months");
   const [divisionFilter, setDivisionFilter] = useState([...divisions]);
   const [statusFilter, setStatusFilter] = useState([...statuses]);
   const [page, setPage] = useState("projectDash");
@@ -2289,7 +2323,11 @@ export default function App() {
   const visibleAssignments = assignments.filter((a) => assignmentMatchesDashboardResourceType(a));
   const activeProjects = projects.filter((p) => p.status !== "Complete");
   const timeline = useMemo(() => buildTimeline(visibleItems, zoom), [visibleItems, zoom]);
+  const resourceTimeline = useMemo(() => buildTimeline(visibleItems, resourceZoom), [visibleItems, resourceZoom]);
+  const crewTimeline = useMemo(() => buildTimeline(visibleItems, crewZoom), [visibleItems, crewZoom]);
   const timelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, timeline));
+  const resourceTimelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, resourceTimeline));
+  const crewTimelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, crewTimeline));
   function getUnassignedNeedsForItem(item) {
     const direct = normalizeUnassignedNeeds(item.assignment?.unassignedNeeds || item.assignment?._unassignedNeeds);
     if (direct.length) return direct;
@@ -2301,6 +2339,22 @@ export default function App() {
     return normalizeUnassignedNeeds(sourceMob?.unassignedNeeds);
   }
   const unassignedNeedItems = timelineVisibleItems.flatMap((item) =>
+    getUnassignedNeedsForItem(item).map((division) => {
+      const abbr = getDivisionAbbreviation(division);
+      return {
+        ...item,
+        id: `${item.id}-unassigned-${abbr}`,
+        isUnassignedNeed: true,
+        unassignedDivision: division,
+        unassignedAbbreviation: abbr,
+        assignment: { ...item.assignment, superintendent: `${abbr} - Unassigned` },
+      };
+    })
+  );
+  // Same set, but scoped to the resource gantt's independent timeline.
+  // The Resource Gantt uses this when rendering unassigned-need rows so
+  // that toggling the resource zoom narrows those rows accordingly.
+  const resourceUnassignedNeedItems = resourceTimelineVisibleItems.flatMap((item) =>
     getUnassignedNeedsForItem(item).map((division) => {
       const abbr = getDivisionAbbreviation(division);
       return {
@@ -2511,7 +2565,7 @@ export default function App() {
       const q = dashboardResourceSearch.toLowerCase();
       if (!resource.name.toLowerCase().includes(q)) return null;
     }
-    const items = timelineVisibleItems.filter((item) =>
+    const items = resourceTimelineVisibleItems.filter((item) =>
       [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].includes(resource.name)
     );
     if (!items.length) return null;
@@ -2519,7 +2573,7 @@ export default function App() {
   }).filter(Boolean);
 
   const unassignedNeedResourceRows = showUnassignedNeedRows
-    ? Object.values(unassignedNeedItems.reduce((groups, item) => {
+    ? Object.values(resourceUnassignedNeedItems.reduce((groups, item) => {
         const abbr = item.unassignedAbbreviation || getDivisionAbbreviation(item.unassignedDivision);
         const key = `${abbr}-${item.project?.id || "missing-project"}`;
         const searchText = `${abbr} unassigned ${item.unassignedDivision} ${item.project?.projectNumber || ""} ${item.project?.name || ""}`.toLowerCase();
@@ -2588,7 +2642,7 @@ export default function App() {
       // so crew-only mobs (which have no named resources) are always included
       const items = ganttItems.filter((item) =>
         getAssignmentCrewIds(item.assignment).includes(crew.id) &&
-        itemOverlapsTimeline(item.start, item.end, timeline) &&
+        itemOverlapsTimeline(item.start, item.end, crewTimeline) &&
         divisionFilter.includes(item.project.division) &&
         statusFilter.includes(item.project.status)
       );
@@ -4411,21 +4465,28 @@ export default function App() {
                     <option value="endDate">Latest Assignment</option>
                   </select>
                 </label>
+                <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <ZoomIn size={16} className="text-slate-500" />
+                  <span className="text-sm font-medium text-slate-700">Zoom</span>
+                  <select value={resourceZoom} onChange={(e) => setResourceZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">
+                    {zoomModes.map((m) => <option key={m}>{m}</option>)}
+                  </select>
+                </div>
                 <button onClick={() => exportSectionScreenshotPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
               </div>
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
-              <GanttHeader timeline={timeline} zoom={zoom} />
-              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
-                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
-                  <GanttBackdrop timeline={timeline} />
+              <GanttHeader timeline={resourceTimeline} zoom={resourceZoom} />
+              <div className="relative mt-3" style={{ minWidth: `${resourceTimeline.width + 340}px` }}>
+                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${resourceTimeline.width}px` }}>
+                  <GanttBackdrop timeline={resourceTimeline} />
                 </div>
                 <div className="relative z-10">
                   {resourceGanttRowsWithUnassigned.map((row, idx) => (
                     <div key={row.resource.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
                       {row.isUnassignedNeedRow
-                        ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={timeline} />
-                        : <ResourceGanttRow resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />}
+                        ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} />
+                        : <ResourceGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} onResourceClick={setFocusedResource} />}
                     </div>
                   ))}
                 </div>
@@ -4535,17 +4596,24 @@ export default function App() {
                   <option value="endDate">Latest Assignment</option>
                 </select>
               </label>
+              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <ZoomIn size={16} className="text-slate-500" />
+                <span className="text-sm font-medium text-slate-700">Zoom</span>
+                <select value={crewZoom} onChange={(e) => setCrewZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">
+                  {zoomModes.map((m) => <option key={m}>{m}</option>)}
+                </select>
+              </div>
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
-              <GanttHeader timeline={timeline} zoom={zoom} />
-              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
-                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
-                  <GanttBackdrop timeline={timeline} />
+              <GanttHeader timeline={crewTimeline} zoom={crewZoom} />
+              <div className="relative mt-3" style={{ minWidth: `${crewTimeline.width + 340}px` }}>
+                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${crewTimeline.width}px` }}>
+                  <GanttBackdrop timeline={crewTimeline} />
                 </div>
                 <div className="relative z-10">
                   {crewGanttRows.map((row, idx) => (
                     <div key={row.crew.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
-                      <CrewGanttRow crew={row.crew} items={row.items} timeline={timeline} />
+                      <CrewGanttRow crew={row.crew} items={row.items} timeline={crewTimeline} />
                     </div>
                   ))}
                 </div>
@@ -5071,7 +5139,7 @@ export default function App() {
               <div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5">
                 <div>
                   <h2 className="text-2xl font-bold">{segment.division} Projects ({segment.type}) — {label}</h2>
-                  <p className="text-sm text-slate-500">{items.length} {segment.division} {segment.type.toLowerCase()} mobilization{items.length === 1 ? "" : "s"} active during this period (bar shows distinct people + unfilled slots).</p>
+                  <p className="text-sm text-slate-500">{items.length} {segment.division} {segment.type.toLowerCase()} mobilization{items.length === 1 ? "" : "s"} active here. Bar shows peak concurrent demand: same-person sequential mobs count as 1, overlapping mobs count separately.</p>
                 </div>
                 <button onClick={() => setDemandDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
               </div>
@@ -5117,7 +5185,7 @@ export default function App() {
               <div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5">
                 <div>
                   <h2 className="text-2xl font-bold">All Assignments — {label}</h2>
-                  <p className="text-sm text-slate-500">{periodItems.length} mobilization{periodItems.length === 1 ? "" : "s"} active during this period (bar shows distinct people + unfilled slots).</p>
+                  <p className="text-sm text-slate-500">{periodItems.length} mobilization{periodItems.length === 1 ? "" : "s"} active here. Bar shows peak concurrent demand: same-person sequential mobs count as 1, overlapping mobs count separately.</p>
                 </div>
                 <button onClick={() => setDemandPeriodDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
               </div>
@@ -5192,17 +5260,17 @@ export default function App() {
               )}
               {expandedView === "resource" && (
                 <div>
-                  <GanttHeader timeline={timeline} zoom={zoom} />
-                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
-                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
-                      <GanttBackdrop timeline={timeline} />
+                  <GanttHeader timeline={resourceTimeline} zoom={resourceZoom} />
+                  <div className="relative mt-3" style={{ minWidth: `${resourceTimeline.width + 340}px` }}>
+                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${resourceTimeline.width}px` }}>
+                      <GanttBackdrop timeline={resourceTimeline} />
                     </div>
                     <div className="relative z-10">
                       {resourceGanttRowsWithUnassigned.map((row, idx) => (
                         <div key={row.resource.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
                           {row.isUnassignedNeedRow
-                            ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={timeline} />
-                            : <ResourceGanttRow resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />}
+                            ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} />
+                            : <ResourceGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} onResourceClick={setFocusedResource} />}
                         </div>
                       ))}
                     </div>
@@ -5211,15 +5279,15 @@ export default function App() {
               )}
               {expandedView === "crew" && (
                 <div>
-                  <GanttHeader timeline={timeline} zoom={zoom} />
-                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
-                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
-                      <GanttBackdrop timeline={timeline} />
+                  <GanttHeader timeline={crewTimeline} zoom={crewZoom} />
+                  <div className="relative mt-3" style={{ minWidth: `${crewTimeline.width + 340}px` }}>
+                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${crewTimeline.width}px` }}>
+                      <GanttBackdrop timeline={crewTimeline} />
                     </div>
                     <div className="relative z-10">
                       {crewGanttRows.map((row, idx) => (
                         <div key={row.crew.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
-                          <CrewGanttRow crew={row.crew} items={row.items} timeline={timeline} />
+                          <CrewGanttRow crew={row.crew} items={row.items} timeline={crewTimeline} />
                         </div>
                       ))}
                     </div>
