@@ -1393,7 +1393,7 @@ export function GanttHeader({ timeline, zoom }) {
       className="flex border-b border-slate-200 pb-2"
       style={{ width: `${timeline.width + 260}px` }}
     >
-      <div className="sticky left-0 z-30 h-10 w-[260px] shrink-0 bg-white" />
+      <div className="sticky left-0 z-30 h-10 w-[320px] shrink-0 bg-white" />
       <div className="relative h-10" style={{ width: `${timeline.width}px` }}>
         {todayLeft >= 0 && (
           <div
@@ -1673,7 +1673,7 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
   return (
     <div
       ref={containerRef}
-      className={`absolute top-0.5 h-7 overflow-visible rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm text-white ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
+      className={`absolute top-0 h-7 overflow-visible rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm text-white ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
       style={{ left: `${left}px`, width: `${width}px`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none" }}
       onPointerDown={(e) => onPointerDown("middle", e)}
       onPointerMove={onPointerMove}
@@ -1733,20 +1733,19 @@ function toIsoDate(d) {
 
 export function ProjectGanttRow({ assignment, project, items, timeline, crews, onDragEnd, onLabelClick }) {
   return (
-    <div className="grid grid-cols-[260px_1fr] items-center gap-0">
+    <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
       <button
         onClick={onLabelClick}
-        className="sticky left-0 z-20 bg-white pr-3 text-left hover:bg-slate-50"
+        className="sticky left-0 z-20 h-7 bg-white pr-3 text-left hover:bg-slate-50 overflow-hidden"
       >
         <div className="flex items-center gap-2">
-          <span className={`h-3 w-3 rounded-full ${project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600"}`} />
-          <p className="font-semibold text-slate-900 hover:text-emerald-700">
+          <span className={`shrink-0 h-2.5 w-2.5 rounded-full ${project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600"}`} />
+          <p className="truncate text-[12px] font-semibold text-slate-900 hover:text-emerald-700">
             {project.projectNumber ? `${project.projectNumber} - ` : ""}{project.name}
           </p>
         </div>
-        <p className="mt-1 text-xs text-slate-500">{project.division} • {project.status} • {items.length} mobilization{items.length === 1 ? "" : "s"}</p>
       </button>
-      <div className="relative h-8 rounded-md" style={{ width: `${timeline.width}px` }}>
+      <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
         {items.map((item) => (
           <DraggableGanttBar
             key={item.id}
@@ -1780,7 +1779,7 @@ export function ResourceGanttRow({ resource, items, timeline, onResourceClick })
   });
 
   return (
-    <div className="grid grid-cols-[260px_1fr] items-center gap-0">
+    <div className="grid grid-cols-[320px_1fr] items-center gap-0">
       <div className="sticky left-0 z-20 bg-white pr-3 text-left">
         <button onClick={() => onResourceClick?.(resource)} className="font-semibold text-slate-900 hover:text-emerald-700">{resource.name}</button>
         <p className="mt-1 text-xs text-slate-500">
@@ -1817,7 +1816,7 @@ export function UnassignedNeedGanttRow({ resource, items, timeline }) {
   });
 
   return (
-    <div className="grid grid-cols-[260px_1fr] items-start gap-0">
+    <div className="grid grid-cols-[320px_1fr] items-start gap-0">
       <div className="sticky left-0 z-20 bg-white pr-3 text-left">
         <p className="font-semibold text-amber-800">{resource.name}</p>
         <p className="mt-1 text-xs text-slate-500">{resource.homeDivision} • unassigned need</p>
@@ -1856,7 +1855,7 @@ export function CrewGanttRow({ crew, items, timeline }) {
   });
 
   return (
-    <div className="grid grid-cols-[260px_1fr] items-start gap-0">
+    <div className="grid grid-cols-[320px_1fr] items-start gap-0">
       <div className="sticky left-0 z-20 bg-white pr-3 text-left">
         <p className="font-semibold text-slate-900">{getCrewDisplayName(crew)}</p>
         <p className="mt-1 text-xs text-slate-500">
@@ -4201,16 +4200,16 @@ export default function App() {
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
-              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
+              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
                 {/* Backdrop: weekend bands + today line. Offset 260px to skip sticky label column. */}
-                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
                   <GanttBackdrop timeline={timeline} />
                 </div>
                 <div className="relative z-10">
                   {projectGanttRows.map((row, idx) => (
                     <div
                       key={row.project.id}
-                      className={`block w-full text-left py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}
+                      className={`block w-full text-left py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}
                     >
                       <ProjectGanttRow
                         assignment={row.assignment}
@@ -4303,8 +4302,8 @@ export default function App() {
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
-              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
+                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
                   <GanttBackdrop timeline={timeline} />
                 </div>
                 <div className="relative z-10">
@@ -4411,8 +4410,8 @@ export default function App() {
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
-              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+              <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
+                <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
                   <GanttBackdrop timeline={timeline} />
                 </div>
                 <div className="relative z-10">
@@ -4670,9 +4669,9 @@ export default function App() {
             </div>
             <div className="flex-1 overflow-auto p-5">
               <GanttHeader timeline={timeline} zoom={zoom} />
-              <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 280}px` }}>
+              <div className="mt-3 space-y-3" style={{ minWidth: `${timeline.width + 340}px` }}>
                 {focusedResourceItems.map((item) => (
-                  <div key={`focused-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-0">
+                  <div key={`focused-${item.id}`} className="grid grid-cols-[320px_1fr] items-center gap-0">
                     <div className="text-left">
                       <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
                       <p className="mt-1 text-xs text-slate-500">{item.project.division} • {formatDate(item.start)} - {formatDate(item.end)}</p>
@@ -4684,7 +4683,7 @@ export default function App() {
                 ))}
                 {/* PTO rows */}
                 {(focusedResource.pto || []).filter((p) => p.start && p.end).map((pto) => (
-                  <div key={`focused-pto-${pto.id || pto.ptoId}`} className="grid grid-cols-[260px_1fr] items-center gap-0">
+                  <div key={`focused-pto-${pto.id || pto.ptoId}`} className="grid grid-cols-[320px_1fr] items-center gap-0">
                     <div className="text-left">
                       <p className="font-semibold text-slate-900">PTO — {pto.ptoId || "Unspecified"}</p>
                       <p className="mt-1 text-xs text-slate-500">{formatDate(pto.start)} – {formatDate(pto.end)}</p>
@@ -4758,7 +4757,7 @@ export default function App() {
                 {validRange && (
                   <>
                     <GanttHeader timeline={popupTimeline} zoom="Weeks" />
-                    <div className="mt-3 space-y-3" style={{ minWidth: `${popupTimeline.width + 280}px` }}>
+                    <div className="mt-3 space-y-3" style={{ minWidth: `${popupTimeline.width + 340}px` }}>
                       {items.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments found for this crew during the selected period.</div>}
                       {items.map((item) => {
                         const rowMen = getCrewMenForItem(item);
@@ -4848,7 +4847,7 @@ export default function App() {
                 ) : (
                   <>
                     <GanttHeader timeline={pmTimeline} zoom={projectManagerUtilizationZoom} />
-                    <div className="mt-3 space-y-3" style={{ minWidth: `${pmTimeline.width + 280}px` }}>
+                    <div className="mt-3 space-y-3" style={{ minWidth: `${pmTimeline.width + 340}px` }}>
                       {pmRows.map((row) => {
                         const start = getProjectStartFromItems(row.items);
                         const end = getProjectEndFromItems(row.items);
@@ -4921,10 +4920,10 @@ export default function App() {
               </div>
               <div className="flex-1 overflow-auto p-5">
                 <GanttHeader timeline={periodTimeline} zoom={demandZoom} />
-                <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 280}px` }}>
+                <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 340}px` }}>
                   {items.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments found for this segment.</div>}
                   {items.map((item) => (
-                    <div key={`seg-drilldown-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-0">
+                    <div key={`seg-drilldown-${item.id}`} className="grid grid-cols-[320px_1fr] items-center gap-0">
                       <div className="text-left">
                         <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
                         <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
@@ -4957,10 +4956,10 @@ export default function App() {
               </div>
               <div className="flex-1 overflow-auto p-5">
                 <GanttHeader timeline={periodTimeline} zoom={demandZoom} />
-                <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 280}px` }}>
+                <div className="mt-3 space-y-3" style={{ minWidth: `${periodTimeline.width + 340}px` }}>
                   {periodItems.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments active in this period.</div>}
                   {periodItems.map((item) => (
-                    <div key={`period-drilldown-${item.id}`} className="grid grid-cols-[260px_1fr] items-center gap-0">
+                    <div key={`period-drilldown-${item.id}`} className="grid grid-cols-[320px_1fr] items-center gap-0">
                       <div className="text-left">
                         <p className="font-semibold text-slate-900">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
                         <p className="mt-1 text-xs text-slate-500">{item.project.division} • {item.project.status} • {formatDate(item.start)} – {formatDate(item.end)}</p>
@@ -4992,13 +4991,13 @@ export default function App() {
               {expandedView === "project" && (
                 <div>
                   <GanttHeader timeline={timeline} zoom={zoom} />
-                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
+                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
                       <GanttBackdrop timeline={timeline} />
                     </div>
                     <div className="relative z-10">
                       {projectGanttRows.map((row, idx) => (
-                        <div key={row.project.id} className={`py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                        <div key={row.project.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
                           <ProjectGanttRow
                             assignment={row.assignment}
                             project={row.project}
@@ -5017,8 +5016,8 @@ export default function App() {
               {expandedView === "resource" && (
                 <div>
                   <GanttHeader timeline={timeline} zoom={zoom} />
-                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
+                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
                       <GanttBackdrop timeline={timeline} />
                     </div>
                     <div className="relative z-10">
@@ -5036,8 +5035,8 @@ export default function App() {
               {expandedView === "crew" && (
                 <div>
                   <GanttHeader timeline={timeline} zoom={zoom} />
-                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 280}px` }}>
-                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "260px", width: `${timeline.width}px` }}>
+                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
+                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
                       <GanttBackdrop timeline={timeline} />
                     </div>
                     <div className="relative z-10">
