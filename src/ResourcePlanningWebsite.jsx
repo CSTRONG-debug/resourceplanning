@@ -3614,92 +3614,114 @@ export default function App() {
   function importForecastCsv(event) {
     readCsvFile(event, async (rows) => {
       try {
+        let importedCount = 0;
+        let skippedCount = 0;
+        let detectedYear = null;
+
+        function cleanNumber(value) {
+          const text = String(value ?? "").replace(/[$,]/g, "").trim();
+          if (text === "") return 0;
+          const n = Number(text);
+          return Number.isFinite(n) ? n : 0;
+        }
+
+        function cleanText(value) {
+          return String(value ?? "").trim();
+        }
+
+        function truthy(value) {
+          const text = String(value ?? "").trim().toLowerCase();
+          return ["yes", "y", "true", "1", "x", "include", "included"].includes(text);
+        }
+
         for (const rawRow of rows) {
-          // Normalize keys so headers like "2025-01" become "202501"
           const row = {};
           Object.entries(rawRow || {}).forEach(([key, value]) => {
-            const normalizedKey = String(key || "")
-              .toLowerCase()
-              .replace(/[^a-z0-9]/g, "");
+            const rawKey = String(key || "").trim();
+            const normalizedKey = rawKey.toLowerCase().replace(/[^a-z0-9]/g, "");
             row[normalizedKey] = value;
+            row[rawKey] = value;
           });
 
-          const projectNum = row.projectnumber || row.project || "";
-          const projectName = row.projectname || row.name || "";
+          const projectNum = cleanText(row.project || row.projectnumber || row["Project #"]);
+          const projectName = cleanText(row.projectname || row.name || row["Project Name"]);
 
-          const project = projects.find(
-            (p) =>
-              String(p.projectNumber || "").trim() === String(projectNum).trim() ||
-              String(p.name || "").trim().toLowerCase() === String(projectName).trim().toLowerCase()
+          const project = projects.find((p) =>
+            cleanText(p.projectNumber) === projectNum ||
+            cleanText(p.name).toLowerCase() === projectName.toLowerCase()
           );
 
           if (!project) {
-            console.warn("Forecast import skipped project:", projectNum || projectName);
+            skippedCount += 1;
+            console.warn("Forecast import skipped project because it was not found:", { projectNum, projectName, rawRow });
             continue;
           }
 
-          const patch = {};
+          // The Forecast table displays monthly imports from row.actuals using keys like "2025-01".
+          // Do not save these as monthlyValues; the table will not read that field.
+          const existingRow = getForecastRow(project.id);
+          const actuals = { ...(existingRow.actuals || {}) };
 
-          // Contract Value
-          const contractValue = parseFloat(
-            row.contractvalue ||
-            row.contract ||
-            row.totalcontract ||
-            0
-          );
+          Object.entries(rawRow || {}).forEach(([key, value]) => {
+            const header = String(key || "").trim();
+            const monthMatch = header.match(/^(20\d{2})[-_/ ]?(0[1-9]|1[0-2])$/);
+            if (!monthMatch) return;
 
-          if (!isNaN(contractValue)) {
-            patch.contractValue = contractValue;
-          }
+            const monthKey = `${monthMatch[1]}-${monthMatch[2]}`;
+            actuals[monthKey] = cleanNumber(value);
 
-          // Spread Rule
-          const spreadRule = String(row.spreadrule || "").toLowerCase();
-          if (["even", "front", "back", "scurve"].includes(spreadRule)) {
-            patch.spreadRule = spreadRule;
-          }
-
-          // Include In Forecast
-          if (row.includeinforecast !== undefined) {
-            patch.includeInForecast = parseYesNo(row.includeinforecast);
-          }
-
-          // Monthly forecast values
-          const monthlyValues = {};
-
-          Object.entries(row).forEach(([key, value]) => {
-            // Matches normalized YYYYMM columns from CSV headers like 2025-01
-            if (/^\d{6}$/.test(key)) {
-              const amount = parseFloat(String(value || "").replace(/[$,]/g, ""));
-              if (!isNaN(amount)) {
-                monthlyValues[key] = amount;
-              }
-            }
+            if (!detectedYear) detectedYear = Number(monthMatch[1]);
           });
 
-          if (Object.keys(monthlyValues).length > 0) {
-            patch.monthlyValues = monthlyValues;
+          const spreadRuleRaw = cleanText(row.spreadrule || row["Spread Rule"]).toLowerCase();
+          const spreadRule = ["even", "front", "back", "scurve"].includes(spreadRuleRaw) ? spreadRuleRaw : existingRow.spreadRule || "even";
+
+          const contractValue = cleanNumber(
+            row.contractvalue ??
+            row.contract ??
+            row.totalcontract ??
+            row["Contract Value"]
+          );
+
+          await saveForecastRow(project.id, {
+            contractValue,
+            spreadRule,
+            actuals,
+            redistributedSpread: {},
+          });
+
+          // Make sure the imported project is visible in the Forecast tab.
+          // The Forecast table filters out anything that is not includeInForecast.
+          if (!project.includeInForecast) {
+            const updatedProject = { ...project, includeInForecast: true };
+            const { error } = await supabase
+              .from("projects")
+              .update(projectToDbLocal(updatedProject))
+              .eq("id", project.id);
+
+            if (error) {
+              console.error("Could not mark project Include in Forecast:", error);
+            } else {
+              setProjects((current) =>
+                current.map((p) => p.id === project.id ? { ...p, includeInForecast: true } : p)
+              );
+            }
           }
 
-          // Year Total / Thereafter
-          const yearTotal = parseFloat(String(row.yeartotal || "").replace(/[$,]/g, ""));
-          if (!isNaN(yearTotal)) {
-            patch.yearTotal = yearTotal;
-          }
-
-          const thereafter = parseFloat(String(row.thereafter || "").replace(/[$,]/g, ""));
-          if (!isNaN(thereafter)) {
-            patch.thereafter = thereafter;
-          }
-
-          console.log("Importing forecast row:", project.projectNumber, patch);
-
-          await saveForecastRow(project.id, patch);
+          importedCount += 1;
         }
 
-        alert("Forecast CSV import completed.");
+        if (detectedYear) setForecastYear(detectedYear);
+
+        setForecastKey((k) => k + 1);
+
+        alert(`Forecast CSV import completed. Imported ${importedCount} row(s). Skipped ${skippedCount} row(s).`);
       } catch (err) {
         console.error("Forecast CSV import failed:", err);
-        alert("Forecast CSV import failed. Check console for details.");
+        alert("Forecast CSV import failed. Open DevTools (F12) → Console for details.");
+      } finally {
+        // Allow importing the same file again after fixing data.
+        if (event?.target) event.target.value = "";
       }
     });
   }
