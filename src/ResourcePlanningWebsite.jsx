@@ -3613,15 +3613,93 @@ export default function App() {
   // CSV import for forecast
   function importForecastCsv(event) {
     readCsvFile(event, async (rows) => {
-      for (const row of rows) {
-        const projectNum = row.projectnumber || row.project || "";
-        const project = projects.find((p) => p.projectNumber === projectNum || p.name === (row.projectname || row.name || ""));
-        if (!project) continue;
-        const contractValue = parseFloat(row.contractvalue || row.contract || 0) || 0;
-        const spreadRule = ["even", "front", "back", "scurve"].includes(row.spreadrule) ? row.spreadrule : undefined;
-        const patch = { contractValue };
-        if (spreadRule) patch.spreadRule = spreadRule;
-        await saveForecastRow(project.id, patch);
+      try {
+        for (const rawRow of rows) {
+          // Normalize keys so headers like "2025-01" become "202501"
+          const row = {};
+          Object.entries(rawRow || {}).forEach(([key, value]) => {
+            const normalizedKey = String(key || "")
+              .toLowerCase()
+              .replace(/[^a-z0-9]/g, "");
+            row[normalizedKey] = value;
+          });
+
+          const projectNum = row.projectnumber || row.project || "";
+          const projectName = row.projectname || row.name || "";
+
+          const project = projects.find(
+            (p) =>
+              String(p.projectNumber || "").trim() === String(projectNum).trim() ||
+              String(p.name || "").trim().toLowerCase() === String(projectName).trim().toLowerCase()
+          );
+
+          if (!project) {
+            console.warn("Forecast import skipped project:", projectNum || projectName);
+            continue;
+          }
+
+          const patch = {};
+
+          // Contract Value
+          const contractValue = parseFloat(
+            row.contractvalue ||
+            row.contract ||
+            row.totalcontract ||
+            0
+          );
+
+          if (!isNaN(contractValue)) {
+            patch.contractValue = contractValue;
+          }
+
+          // Spread Rule
+          const spreadRule = String(row.spreadrule || "").toLowerCase();
+          if (["even", "front", "back", "scurve"].includes(spreadRule)) {
+            patch.spreadRule = spreadRule;
+          }
+
+          // Include In Forecast
+          if (row.includeinforecast !== undefined) {
+            patch.includeInForecast = parseYesNo(row.includeinforecast);
+          }
+
+          // Monthly forecast values
+          const monthlyValues = {};
+
+          Object.entries(row).forEach(([key, value]) => {
+            // Matches normalized YYYYMM columns from CSV headers like 2025-01
+            if (/^\d{6}$/.test(key)) {
+              const amount = parseFloat(String(value || "").replace(/[$,]/g, ""));
+              if (!isNaN(amount)) {
+                monthlyValues[key] = amount;
+              }
+            }
+          });
+
+          if (Object.keys(monthlyValues).length > 0) {
+            patch.monthlyValues = monthlyValues;
+          }
+
+          // Year Total / Thereafter
+          const yearTotal = parseFloat(String(row.yeartotal || "").replace(/[$,]/g, ""));
+          if (!isNaN(yearTotal)) {
+            patch.yearTotal = yearTotal;
+          }
+
+          const thereafter = parseFloat(String(row.thereafter || "").replace(/[$,]/g, ""));
+          if (!isNaN(thereafter)) {
+            patch.thereafter = thereafter;
+          }
+
+          console.log("Importing forecast row:", project.projectNumber, patch);
+
+          await saveForecastRow(project.id, patch);
+        }
+
+        alert("Forecast CSV import completed.");
+      } catch (err) {
+        console.error("Forecast CSV import failed:", err);
+        alert("Forecast CSV import failed. Check console for details.");
       }
     });
   }
