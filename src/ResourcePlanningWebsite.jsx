@@ -161,13 +161,23 @@ function mapAssignmentFromDbLocal(assignment, mobilizations) {
   const mapped = mapAssignmentFromDb(assignment, mobilizations);
   const rawMobs = (mobilizations || []).filter((m) => m.assignment_id === assignment.id);
   const byId = new Map(rawMobs.map((m) => [m.id, m]));
-  return {
-    ...mapped,
-    mobilizations: (mapped.mobilizations || []).map((mob) => {
-      const raw = byId.get(mob.id) || rawMobs.find((m) => m.start_date === mob.start && m.end_date === mob.end) || {};
-      return { ...mob, unassignedNeeds: normalizeUnassignedNeeds(raw.unassigned_needs || mob.unassignedNeeds) };
-    }),
-  };
+  const enrichedMobs = (mapped.mobilizations || []).map((mob) => {
+    const raw = byId.get(mob.id) || rawMobs.find((m) => m.start_date === mob.start && m.end_date === mob.end) || {};
+    return { ...mob, unassignedNeeds: normalizeUnassignedNeeds(raw.unassigned_needs || mob.unassignedNeeds) };
+  });
+  // Sort by start date so the earliest mobilization is always first. Mobs
+  // without a start date sort to the bottom. This keeps the assignment form
+  // and Gantt rendering in chronological order even after the user adds a
+  // mobilization that predates the existing ones.
+  enrichedMobs.sort((a, b) => {
+    const aDate = toDate(a.start);
+    const bDate = toDate(b.start);
+    if (!aDate && !bDate) return 0;
+    if (!aDate) return 1;
+    if (!bDate) return -1;
+    return aDate - bDate;
+  });
+  return { ...mapped, mobilizations: enrichedMobs };
 }
 function mobilizationToDbLocal(mobilization, assignmentId) {
   return {
@@ -1516,7 +1526,7 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
 
   return (
     <div
-      className={`absolute top-0.5 h-7 rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm ${isUnassigned ? "text-slate-900" : "text-white"} ${tooNarrow ? "overflow-visible" : "overflow-hidden px-2.5"}`}
+      className={`absolute top-0 h-7 rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm ${isUnassigned ? "text-slate-900" : "text-white"} ${tooNarrow ? "overflow-visible" : "overflow-hidden px-2.5"}`}
       style={{ left: `${left}px`, width: `${width}px`, ...patternStyle, ...conflictStyle }}
       title={tooltip}
     >
@@ -1779,15 +1789,11 @@ export function ResourceGanttRow({ resource, items, timeline, onResourceClick })
   });
 
   return (
-    <div className="grid grid-cols-[320px_1fr] items-center gap-0">
-      <div className="sticky left-0 z-20 bg-white pr-3 text-left">
-        <button onClick={() => onResourceClick?.(resource)} className="font-semibold text-slate-900 hover:text-emerald-700">{resource.name}</button>
-        <p className="mt-1 text-xs text-slate-500">
-          {resource.resourceType} • {resource.homeDivision} • {items.length} assignment{items.length === 1 ? "" : "s"}
-          {ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}
-        </p>
+    <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
+      <div className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden">
+        <button onClick={() => onResourceClick?.(resource)} className="block w-full truncate text-left text-[12px] font-semibold text-slate-900 hover:text-emerald-700" title={`${resource.name} — ${resource.resourceType} • ${resource.homeDivision} • ${items.length} assignment${items.length === 1 ? "" : "s"}${ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}`}>{resource.name}</button>
       </div>
-      <div className="relative h-8 rounded-md" style={{ width: `${timeline.width}px` }}>
+      <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
         {sortedItems.map((item) => (
           <GanttSegmentBar key={`${resource.name}-${item.id}`} item={item} timeline={timeline} label={item.project.name} conflict={conflictIds.has(item.id)} />
         ))}
@@ -1803,36 +1809,22 @@ export function ResourceGanttRow({ resource, items, timeline, onResourceClick })
 
 export function UnassignedNeedGanttRow({ resource, items, timeline }) {
   const sortedItems = [...items].sort((a, b) => new Date(a.start) - new Date(b.start));
-  const lanes = [];
-
-  sortedItems.forEach((item) => {
-    const start = toDate(item.start);
-    const end = toDate(item.end);
-    let laneIndex = lanes.findIndex(
-      (lane) => !lane.some((placed) => rangesOverlap(start, addDays(end, 1), toDate(placed.start), addDays(toDate(placed.end), 1)))
-    );
-    if (laneIndex === -1) { laneIndex = lanes.length; lanes.push([]); }
-    lanes[laneIndex].push(item);
-  });
 
   return (
-    <div className="grid grid-cols-[320px_1fr] items-start gap-0">
-      <div className="sticky left-0 z-20 bg-white pr-3 text-left">
-        <p className="font-semibold text-amber-800">{resource.name}</p>
-        <p className="mt-1 text-xs text-slate-500">{resource.homeDivision} • unassigned need</p>
-        {resource.projectLabel && <p className="mt-0.5 text-xs font-medium text-slate-700">{resource.projectLabel}</p>}
+    <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
+      <div className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden">
+        <p className="truncate text-[12px] font-semibold text-amber-800" title={`${resource.name} — ${resource.homeDivision} unassigned need${resource.projectLabel ? ` · ${resource.projectLabel}` : ""}`}>{resource.name}</p>
+        {resource.projectLabel && <p className="truncate text-[10px] text-slate-500 leading-tight">{resource.projectLabel}</p>}
       </div>
-      <div className="relative rounded-xl" style={{ width: `${timeline.width}px`, height: `${Math.max(32, lanes.length * 32)}px` }}>
-        {lanes.map((lane, laneIndex) =>
-          lane.map((item) => (
-            <GanttSegmentBar
-              key={`${resource.id}-${item.id}`}
-              item={item}
-              timeline={timeline}
-              label={`${item.unassignedAbbreviation} - Unassigned`}
-            />
-          ))
-        )}
+      <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
+        {sortedItems.map((item) => (
+          <GanttSegmentBar
+            key={`${resource.id}-${item.id}`}
+            item={item}
+            timeline={timeline}
+            label={`${item.unassignedAbbreviation} - Unassigned`}
+          />
+        ))}
       </div>
     </div>
   );
@@ -1856,13 +1848,10 @@ export function CrewGanttRow({ crew, items, timeline }) {
 
   return (
     <div className="grid grid-cols-[320px_1fr] items-start gap-0">
-      <div className="sticky left-0 z-20 bg-white pr-3 text-left">
-        <p className="font-semibold text-slate-900">{getCrewDisplayName(crew)}</p>
-        <p className="mt-1 text-xs text-slate-500">
-          {(crew.specialty || []).join(", ") || "No specialty"} • {items.length} assignment{items.length === 1 ? "" : "s"}
-        </p>
+      <div className="sticky left-0 z-20 bg-white pr-3 text-left overflow-hidden" style={{ height: `${Math.max(28, lanes.length * 28)}px` }}>
+        <p className="truncate text-[12px] font-semibold text-slate-900" title={`${getCrewDisplayName(crew)} — ${(crew.specialty || []).join(", ") || "No specialty"} • ${items.length} assignment${items.length === 1 ? "" : "s"}`}>{getCrewDisplayName(crew)}</p>
       </div>
-      <div className="relative rounded-xl" style={{ width: `${timeline.width}px`, height: `${Math.max(32, lanes.length * 32)}px` }}>
+      <div className="relative rounded-md" style={{ width: `${timeline.width}px`, height: `${Math.max(28, lanes.length * 28)}px` }}>
         {lanes.map((lane, laneIndex) =>
           lane.map((item) => {
             const span = timelineSpanPixels(item.start, item.end, timeline);
@@ -1875,7 +1864,7 @@ export function CrewGanttRow({ crew, items, timeline }) {
               <div
                 key={`${crew.id}-${item.id}`}
                 className={`absolute h-7 rounded-md text-[11px] font-semibold leading-7 text-white shadow-sm ${colorClass || "bg-slate-700"} ${tooNarrow ? "overflow-visible" : "overflow-hidden px-2.5"}`}
-                style={{ left: `${span.left}px`, width: `${span.width}px`, top: `${laneIndex * 32 + 2}px` }}
+                style={{ left: `${span.left}px`, width: `${span.width}px`, top: `${laneIndex * 28}px` }}
               >
                 {tooNarrow ? (
                   <span className="pointer-events-none absolute left-full top-0 ml-1 whitespace-nowrap rounded bg-white/95 px-1.5 leading-7 text-slate-700 shadow-sm">
@@ -2086,6 +2075,8 @@ export default function App() {
   const [focusedResource, setFocusedResource] = useState(null);
   const [projectSort, setProjectSort] = useState({ key: "projectNumber", direction: "asc" });
   const [projectGanttSort, setProjectGanttSort] = useState("projectNumber");
+  const [resourceGanttSort, setResourceGanttSort] = useState("name");
+  const [crewGanttSort, setCrewGanttSort] = useState("crewName");
   const [resourceSort, setResourceSort] = useState({ key: "name", direction: "asc" });
   const [crewSort, setCrewSort] = useState({ key: "crewName", direction: "asc" });
   const [demandDrilldown, setDemandDrilldown] = useState(null);
@@ -2505,7 +2496,32 @@ export default function App() {
       })
     : [];
 
-  const resourceGanttRowsWithUnassigned = [...resourceGanttRows, ...unassignedNeedResourceRows];
+  const resourceGanttRowsWithUnassigned = (() => {
+    const all = [...resourceGanttRows, ...unassignedNeedResourceRows];
+    const earliestStart = (row) => {
+      const dates = (row.items || []).map((i) => toDate(i.start)).filter(Boolean);
+      return dates.length ? Math.min(...dates.map((d) => d.getTime())) : Number.MAX_SAFE_INTEGER;
+    };
+    const latestEnd = (row) => {
+      const dates = (row.items || []).map((i) => toDate(i.end)).filter(Boolean);
+      return dates.length ? Math.max(...dates.map((d) => d.getTime())) : 0;
+    };
+    return [...all].sort((a, b) => {
+      // Always keep unassigned-need rows at the bottom
+      const aUn = a.isUnassignedNeedRow ? 1 : 0;
+      const bUn = b.isUnassignedNeedRow ? 1 : 0;
+      if (aUn !== bUn) return aUn - bUn;
+
+      if (resourceGanttSort === "name") return compareValues(a.resource.name, b.resource.name, "asc");
+      if (resourceGanttSort === "homeDivision") return compareValues(a.resource.homeDivision, b.resource.homeDivision, "asc")
+        || compareValues(a.resource.name, b.resource.name, "asc");
+      if (resourceGanttSort === "resourceType") return compareValues(a.resource.resourceType, b.resource.resourceType, "asc")
+        || compareValues(a.resource.name, b.resource.name, "asc");
+      if (resourceGanttSort === "startDate") return earliestStart(a) - earliestStart(b);
+      if (resourceGanttSort === "endDate") return latestEnd(a) - latestEnd(b);
+      return 0;
+    });
+  })();
 
   const crewGanttRows = activeCrews
     .filter((c) => {
@@ -2526,7 +2542,23 @@ export default function App() {
       );
       if (!items.length) return null;
       return { crew, items };
-    }).filter(Boolean);
+    }).filter(Boolean)
+    .sort((a, b) => {
+      const earliestStart = (row) => {
+        const dates = (row.items || []).map((i) => toDate(i.start)).filter(Boolean);
+        return dates.length ? Math.min(...dates.map((d) => d.getTime())) : Number.MAX_SAFE_INTEGER;
+      };
+      const latestEnd = (row) => {
+        const dates = (row.items || []).map((i) => toDate(i.end)).filter(Boolean);
+        return dates.length ? Math.max(...dates.map((d) => d.getTime())) : 0;
+      };
+      if (crewGanttSort === "crewName") return compareValues(a.crew.crewName, b.crew.crewName, "asc");
+      if (crewGanttSort === "foremanName") return compareValues(a.crew.foremanName || "", b.crew.foremanName || "", "asc");
+      if (crewGanttSort === "totalMembers") return (a.crew.totalMembers || 0) - (b.crew.totalMembers || 0);
+      if (crewGanttSort === "startDate") return earliestStart(a) - earliestStart(b);
+      if (crewGanttSort === "endDate") return latestEnd(a) - latestEnd(b);
+      return 0;
+    });
 
   const projectManagerUtilizationRows = Object.values(assignments.reduce((groups, assignment) => {
     const pmName = (assignment.projectManager || "").trim();
@@ -2819,11 +2851,13 @@ export default function App() {
     }
     let mapped = mapAssignmentFromDbLocal(savedAssignment, savedMobs);
     // Preserve mobilization-level unassigned selections immediately so the Gantt updates without a refresh.
+    // Match by start+end date first since mapped mobs come back sorted, which
+    // may not match the form's original ordering.
     const formMobs = (assignmentForm.mobilizations || []).filter((m) => m.start && m.end);
     mapped = {
       ...mapped,
       mobilizations: (mapped.mobilizations || []).map((mob, index) => {
-        const formMob = formMobs[index] || formMobs.find((m) => String(m.start || "") === String(mob.start || "") && String(m.end || "") === String(mob.end || ""));
+        const formMob = formMobs.find((m) => String(m.start || "") === String(mob.start || "") && String(m.end || "") === String(mob.end || "")) || formMobs[index];
         return formMob ? { ...mob, unassignedNeeds: normalizeUnassignedNeeds(formMob.unassignedNeeds) } : mob;
       }),
     };
@@ -4274,6 +4308,20 @@ export default function App() {
       {/* ── Resource Dashboard ── */}
       {page === "resourceDash" && (
         <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
+          {/* Certification alerts */}
+          <div className="grid gap-4 md:grid-cols-2">
+            <button type="button" onClick={() => setCertAlertModal("expiring")} className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-left shadow-sm hover:bg-amber-100">
+              <p className="text-sm font-semibold text-amber-800">Certifications Expiring Within 30 Days</p>
+              <p className="mt-1 text-3xl font-bold text-amber-900">{expiringCertificationRows.length}</p>
+              <p className="mt-1 text-xs text-amber-700">Click to review upcoming expirations.</p>
+            </button>
+            <button type="button" onClick={() => setCertAlertModal("expired")} className="rounded-2xl border border-red-200 bg-red-50 p-5 text-left shadow-sm hover:bg-red-100">
+              <p className="text-sm font-semibold text-red-800">Past Due Certifications</p>
+              <p className="mt-1 text-3xl font-bold text-red-900">{expiredCertificationRows.length}</p>
+              <p className="mt-1 text-xs text-red-700">Click to review expired certifications.</p>
+            </button>
+          </div>
+
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <MultiSelectFilter label="Resource Type Filter" options={resourceTypes} selected={dashboardResourceTypeFilter} setSelected={setDashboardResourceTypeFilter} />
           </div>
@@ -4297,6 +4345,20 @@ export default function App() {
                   <input type="checkbox" className="h-4 w-4 accent-amber-600" checked={showUnassignedNeedRows} onChange={(e) => setShowUnassignedNeedRows(e.target.checked)} />
                   Show unassigned needs
                 </label>
+                <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                  Sort by
+                  <select
+                    value={resourceGanttSort}
+                    onChange={(e) => setResourceGanttSort(e.target.value)}
+                    className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm font-semibold text-slate-700 outline-none focus:border-emerald-600"
+                  >
+                    <option value="name">Name</option>
+                    <option value="resourceType">Resource Type</option>
+                    <option value="homeDivision">Home Division</option>
+                    <option value="startDate">Earliest Assignment</option>
+                    <option value="endDate">Latest Assignment</option>
+                  </select>
+                </label>
                 <button onClick={() => exportSectionScreenshotPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
               </div>
             </div>
@@ -4308,7 +4370,7 @@ export default function App() {
                 </div>
                 <div className="relative z-10">
                   {resourceGanttRowsWithUnassigned.map((row, idx) => (
-                    <div key={row.resource.id} className={`py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                    <div key={row.resource.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
                       {row.isUnassignedNeedRow
                         ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={timeline} />
                         : <ResourceGanttRow resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />}
@@ -4406,7 +4468,20 @@ export default function App() {
                 <Search size={15} className="text-slate-400" />
                 <input className="outline-none text-sm w-40" placeholder="Search crews…" value={dashboardCrewSearch} onChange={(e) => setDashboardCrewSearch(e.target.value)} />
               </div>
-
+              <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                Sort by
+                <select
+                  value={crewGanttSort}
+                  onChange={(e) => setCrewGanttSort(e.target.value)}
+                  className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm font-semibold text-slate-700 outline-none focus:border-emerald-600"
+                >
+                  <option value="crewName">Crew Name</option>
+                  <option value="foremanName">Foreman</option>
+                  <option value="totalMembers">Total Members</option>
+                  <option value="startDate">Earliest Assignment</option>
+                  <option value="endDate">Latest Assignment</option>
+                </select>
+              </label>
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
               <GanttHeader timeline={timeline} zoom={zoom} />
@@ -4416,7 +4491,7 @@ export default function App() {
                 </div>
                 <div className="relative z-10">
                   {crewGanttRows.map((row, idx) => (
-                    <div key={row.crew.id} className={`py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                    <div key={row.crew.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
                       <CrewGanttRow crew={row.crew} items={row.items} timeline={timeline} />
                     </div>
                   ))}
@@ -5022,7 +5097,7 @@ export default function App() {
                     </div>
                     <div className="relative z-10">
                       {resourceGanttRowsWithUnassigned.map((row, idx) => (
-                        <div key={row.resource.id} className={`py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                        <div key={row.resource.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
                           {row.isUnassignedNeedRow
                             ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={timeline} />
                             : <ResourceGanttRow resource={row.resource} items={row.items} timeline={timeline} onResourceClick={setFocusedResource} />}
@@ -5041,7 +5116,7 @@ export default function App() {
                     </div>
                     <div className="relative z-10">
                       {crewGanttRows.map((row, idx) => (
-                        <div key={row.crew.id} className={`py-1.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                        <div key={row.crew.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
                           <CrewGanttRow crew={row.crew} items={row.items} timeline={timeline} />
                         </div>
                       ))}
@@ -5240,7 +5315,6 @@ export default function App() {
                         <tr key={p.id} className={`border-t border-slate-100 ${rowBg} hover:bg-emerald-50 group`}>
                           <td className={`sticky left-0 z-10 p-3 group-hover:bg-emerald-50 ${rowBg}`}>
                             <p className="font-semibold text-slate-900">{p.projectNumber ? `${p.projectNumber} - ` : ""}{p.name}</p>
-                            <p className="text-xs text-slate-400">{p.status}</p>
                           </td>
                           <td className="p-3">
                             <span className={`rounded-full px-2 py-0.5 text-xs font-semibold text-white ${divisionStyles[p.division] || "bg-slate-500"}`}>{p.division}</span>
