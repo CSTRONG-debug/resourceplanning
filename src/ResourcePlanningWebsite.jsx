@@ -1906,7 +1906,11 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
   };
   // Compute max concurrent count of a list of mobilizations using a sweep.
   // End dates are treated as inclusive (a mob ending May 11 still occupies
-  // May 11 entirely), so the end event fires at end+1.
+  // May 11 entirely), so the end event fires at end+1 00:00. CRITICAL: when
+  // two events fall at the same instant, end events (-1) MUST fire before
+  // start events (+1). Otherwise sequential mobs (e.g. one ending May 11,
+  // next starting May 12) would falsely register as overlapping at the
+  // boundary.
   const maxConcurrency = (mobs) => {
     if (!mobs || mobs.length <= 1) return mobs ? mobs.length : 0;
     const events = [];
@@ -1917,7 +1921,9 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
       events.push({ t: s.getTime(), delta: 1 });
       events.push({ t: e.getTime() + 86400000, delta: -1 });
     });
-    events.sort((a, b) => a.t - b.t || b.delta - a.delta);
+    // Same-time sort: -1 (end) before +1 (start). delta -1 < delta +1 so
+    // ascending delta order does the right thing.
+    events.sort((a, b) => a.t - b.t || a.delta - b.delta);
     let cur = 0, max = 0;
     events.forEach(({ delta }) => { cur += delta; if (cur > max) max = cur; });
     return max;
