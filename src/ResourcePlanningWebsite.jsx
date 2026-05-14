@@ -2335,7 +2335,35 @@ export default function App() {
   }
 
   // ── Derived data ───────────────────────────────────────────────────────────
-  const ganttItems = buildGanttItems(projects, assignments);
+  const rawGanttItems = buildGanttItems(projects, assignments);
+  // The shared buildGanttItems helper may skip mobilizations that have no
+  // named resources (PM/Super/FC/FE/Safety all blank) but DO have crews
+  // attached. Those crew-only mobs still belong on the Project Gantt and the
+  // Crew Gantt. Detect missing mob ids and append synthetic items so they
+  // show up everywhere downstream.
+  const existingMobIds = new Set(rawGanttItems.map((it) => it.mobilizationId).filter(Boolean));
+  const crewOnlyExtras = [];
+  assignments.forEach((assignment) => {
+    const project = findProject(projects, assignment.projectId);
+    if (!project) return;
+    (assignment.mobilizations || []).forEach((mob) => {
+      if (!mob.start || !mob.end) return;
+      if (existingMobIds.has(mob.id)) return;
+      const namedAnyone = [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety, mob.projectManager, mob.superintendent, mob.fieldCoordinator, mob.fieldEngineer, mob.safety].some((v) => v && String(v).trim());
+      if (namedAnyone) return; // Helper would have already produced this item
+      const crewIds = getAssignmentCrewIds(assignment);
+      if (!crewIds.length) return; // Mob has neither people nor crews; skip
+      crewOnlyExtras.push({
+        id: `crewmob-${assignment.id}-${mob.id}`,
+        mobilizationId: mob.id,
+        project,
+        assignment,
+        start: mob.start,
+        end: mob.end,
+      });
+    });
+  });
+  const ganttItems = crewOnlyExtras.length ? [...rawGanttItems, ...crewOnlyExtras] : rawGanttItems;
 
   const assignmentMatchesDashboardResourceType = (assignment) => {
     const names = [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety].filter(Boolean);
@@ -3613,115 +3641,15 @@ export default function App() {
   // CSV import for forecast
   function importForecastCsv(event) {
     readCsvFile(event, async (rows) => {
-      try {
-        let importedCount = 0;
-        let skippedCount = 0;
-        let detectedYear = null;
-
-        function cleanNumber(value) {
-          const text = String(value ?? "").replace(/[$,]/g, "").trim();
-          if (text === "") return 0;
-          const n = Number(text);
-          return Number.isFinite(n) ? n : 0;
-        }
-
-        function cleanText(value) {
-          return String(value ?? "").trim();
-        }
-
-        function truthy(value) {
-          const text = String(value ?? "").trim().toLowerCase();
-          return ["yes", "y", "true", "1", "x", "include", "included"].includes(text);
-        }
-
-        for (const rawRow of rows) {
-          const row = {};
-          Object.entries(rawRow || {}).forEach(([key, value]) => {
-            const rawKey = String(key || "").trim();
-            const normalizedKey = rawKey.toLowerCase().replace(/[^a-z0-9]/g, "");
-            row[normalizedKey] = value;
-            row[rawKey] = value;
-          });
-
-          const projectNum = cleanText(row.project || row.projectnumber || row["Project #"]);
-          const projectName = cleanText(row.projectname || row.name || row["Project Name"]);
-
-          const project = projects.find((p) =>
-            cleanText(p.projectNumber) === projectNum ||
-            cleanText(p.name).toLowerCase() === projectName.toLowerCase()
-          );
-
-          if (!project) {
-            skippedCount += 1;
-            console.warn("Forecast import skipped project because it was not found:", { projectNum, projectName, rawRow });
-            continue;
-          }
-
-          // The Forecast table displays monthly imports from row.actuals using keys like "2025-01".
-          // Do not save these as monthlyValues; the table will not read that field.
-          const existingRow = getForecastRow(project.id);
-          const actuals = { ...(existingRow.actuals || {}) };
-
-          Object.entries(rawRow || {}).forEach(([key, value]) => {
-            const header = String(key || "").trim();
-            const monthMatch = header.match(/^(20\d{2})[-_/ ]?(0[1-9]|1[0-2])$/);
-            if (!monthMatch) return;
-
-            const monthKey = `${monthMatch[1]}-${monthMatch[2]}`;
-            actuals[monthKey] = cleanNumber(value);
-
-            if (!detectedYear) detectedYear = Number(monthMatch[1]);
-          });
-
-          const spreadRuleRaw = cleanText(row.spreadrule || row["Spread Rule"]).toLowerCase();
-          const spreadRule = ["even", "front", "back", "scurve"].includes(spreadRuleRaw) ? spreadRuleRaw : existingRow.spreadRule || "even";
-
-          const contractValue = cleanNumber(
-            row.contractvalue ??
-            row.contract ??
-            row.totalcontract ??
-            row["Contract Value"]
-          );
-
-          await saveForecastRow(project.id, {
-            contractValue,
-            spreadRule,
-            actuals,
-            redistributedSpread: {},
-          });
-
-          // Make sure the imported project is visible in the Forecast tab.
-          // The Forecast table filters out anything that is not includeInForecast.
-          if (!project.includeInForecast) {
-            const updatedProject = { ...project, includeInForecast: true };
-            const { error } = await supabase
-              .from("projects")
-              .update(projectToDbLocal(updatedProject))
-              .eq("id", project.id);
-
-            if (error) {
-              console.error("Could not mark project Include in Forecast:", error);
-            } else {
-              setProjects((current) =>
-                current.map((p) => p.id === project.id ? { ...p, includeInForecast: true } : p)
-              );
-            }
-          }
-
-          importedCount += 1;
-        }
-
-        if (detectedYear) setForecastYear(detectedYear);
-
-        setForecastKey((k) => k + 1);
-
-        alert(`Forecast CSV import completed. Imported ${importedCount} row(s). Skipped ${skippedCount} row(s).`);
-      } catch (err) {
-        console.error("Forecast CSV import failed:", err);
-        alert("Forecast CSV import failed. Open DevTools (F12) → Console for details.");
-      } finally {
-        // Allow importing the same file again after fixing data.
-        if (event?.target) event.target.value = "";
+      for (const row of rows) {
+        const projectNum = row.projectnumber || row.project || "";
+        const project = projects.find((p) => p.projectNumber === projectNum || p.name === (row.projectname || row.name || ""));
+        if (!project) continue;
+        const contractValue = parseFloat(row.contractvalue || row.contract || 0) || 0;
+        const spreadRule = ["even", "front", "back", "scurve"].includes(row.spreadrule) ? row.spreadrule : undefined;
+        const patch = { contractValue };
+        if (spreadRule) patch.spreadRule = spreadRule;
+        await saveForecastRow(project.id, patch);
       }
     });
   }
