@@ -2337,10 +2337,15 @@ export default function App() {
   // ── Derived data ───────────────────────────────────────────────────────────
   const rawGanttItems = buildGanttItems(projects, assignments);
   // The shared buildGanttItems helper may skip mobilizations that have no
-  // named resources (PM/Super/FC/FE/Safety all blank) but DO have crews
-  // attached. Those crew-only mobs still belong on the Project Gantt and the
-  // Crew Gantt. Detect missing mob ids and append synthetic items so they
-  // show up everywhere downstream.
+  // named resources at the mob level but DO have crews attached. Those
+  // crew-only mobs still belong on the Project Gantt and the Crew Gantt.
+  // Detect missing mob ids and append synthetic items so they show up
+  // everywhere downstream.
+  //
+  // We check mob-level role fields only. The assignment-level roles always
+  // carry over and would make EVERY mob look "named" even when the actual
+  // mobilization itself has no per-mob people assigned. The whole point of
+  // crew-only mobs is that they delegate roles to crews on a per-mob basis.
   const existingMobIds = new Set(rawGanttItems.map((it) => it.mobilizationId).filter(Boolean));
   const crewOnlyExtras = [];
   assignments.forEach((assignment) => {
@@ -2349,10 +2354,8 @@ export default function App() {
     (assignment.mobilizations || []).forEach((mob) => {
       if (!mob.start || !mob.end) return;
       if (existingMobIds.has(mob.id)) return;
-      const namedAnyone = [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety, mob.projectManager, mob.superintendent, mob.fieldCoordinator, mob.fieldEngineer, mob.safety].some((v) => v && String(v).trim());
-      if (namedAnyone) return; // Helper would have already produced this item
       const crewIds = getAssignmentCrewIds(assignment);
-      if (!crewIds.length) return; // Mob has neither people nor crews; skip
+      if (!crewIds.length) return; // No crew either; skip
       crewOnlyExtras.push({
         id: `crewmob-${assignment.id}-${mob.id}`,
         mobilizationId: mob.id,
