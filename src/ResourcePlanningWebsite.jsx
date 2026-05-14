@@ -2363,11 +2363,6 @@ export default function App() {
 
   // ── Derived data ───────────────────────────────────────────────────────────
   const rawGanttItems = buildGanttItems(projects, assignments);
-  // The shared buildGanttItems helper skips mobilizations that have no
-  // named resources. We synthesize items for ANY mob the helper omitted
-  // (regardless of whether it has crews) so nothing falls through the
-  // cracks. Items get `isCrewOnly: true` so the bar renderer can apply a
-  // square-hatched pattern in the project's division color.
   const existingMobIds = new Set(rawGanttItems.map((it) => it.mobilizationId).filter(Boolean));
   const crewOnlyExtras = [];
   const debugSkipped = [];
@@ -2376,7 +2371,7 @@ export default function App() {
     if (!project) { debugSkipped.push({ reason: "no project", assignmentId: assignment.id, projectId: assignment.projectId }); return; }
     (assignment.mobilizations || []).forEach((mob) => {
       if (!mob.start || !mob.end) { debugSkipped.push({ reason: "no dates", projectName: project.name, mobId: mob.id, start: mob.start, end: mob.end }); return; }
-      if (existingMobIds.has(mob.id)) return; // Helper already produced this
+      if (existingMobIds.has(mob.id)) return;
       crewOnlyExtras.push({
         id: `crewmob-${assignment.id}-${mob.id}`,
         mobilizationId: mob.id,
@@ -2388,10 +2383,22 @@ export default function App() {
       });
     });
   });
-  if (typeof window !== "undefined" && (crewOnlyExtras.length || debugSkipped.length)) {
-    console.log("[Gantt augmentation] Synthesized crew-only items:", crewOnlyExtras.map((x) => ({ project: x.project.projectNumber + " " + x.project.name, start: x.start, end: x.end })));
-    console.log("[Gantt augmentation] Skipped:", debugSkipped);
-    console.log("[Gantt augmentation] Helper produced", rawGanttItems.length, "items, totalling", rawGanttItems.length + crewOnlyExtras.length, "after augmentation");
+  if (typeof window !== "undefined") {
+    // Always log so we can see the state regardless of whether anything synth'd
+    console.log("[Gantt diag] rawGanttItems count:", rawGanttItems.length);
+    console.log("[Gantt diag] Synthesized:", crewOnlyExtras.length, crewOnlyExtras.map((x) => `${x.project.projectNumber} ${x.project.name} (${x.start} – ${x.end})`));
+    console.log("[Gantt diag] Skipped:", debugSkipped);
+    // Find J-Bond specifically
+    const jbondProject = projects.find((p) => (p.name || "").toLowerCase().includes("j-bond") || (p.name || "").toLowerCase().includes("j bond"));
+    if (jbondProject) {
+      console.log("[Gantt diag] J-Bond project:", { id: jbondProject.id, projectNumber: jbondProject.projectNumber, name: jbondProject.name, division: jbondProject.division, status: jbondProject.status });
+      const jbondAssignments = assignments.filter((a) => a.projectId === jbondProject.id);
+      console.log("[Gantt diag] J-Bond assignments:", jbondAssignments.map((a) => ({ id: a.id, pm: a.projectManager, super: a.superintendent, mobs: (a.mobilizations || []).map((m) => ({ id: m.id, start: m.start, end: m.end, crewOnly: m.crewOnly })) })));
+      const jbondRawItems = rawGanttItems.filter((it) => it.project && it.project.id === jbondProject.id);
+      console.log("[Gantt diag] J-Bond items from helper:", jbondRawItems.length, jbondRawItems.map((it) => ({ mobId: it.mobilizationId, start: it.start, end: it.end })));
+    } else {
+      console.log("[Gantt diag] Could not find J-Bond project by name search");
+    }
   }
   const ganttItems = crewOnlyExtras.length ? [...rawGanttItems, ...crewOnlyExtras] : rawGanttItems;
 
