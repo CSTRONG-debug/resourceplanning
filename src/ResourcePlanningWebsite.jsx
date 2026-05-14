@@ -2391,11 +2391,11 @@ export default function App() {
     // Find J-Bond specifically
     const jbondProject = projects.find((p) => (p.name || "").toLowerCase().includes("j-bond") || (p.name || "").toLowerCase().includes("j bond"));
     if (jbondProject) {
-      console.log("[Gantt diag] J-Bond project:", { id: jbondProject.id, projectNumber: jbondProject.projectNumber, name: jbondProject.name, division: jbondProject.division, status: jbondProject.status });
+      console.log("[Gantt diag] J-Bond project FULL:", JSON.parse(JSON.stringify(jbondProject)));
       const jbondAssignments = assignments.filter((a) => a.projectId === jbondProject.id);
-      console.log("[Gantt diag] J-Bond assignments:", jbondAssignments.map((a) => ({ id: a.id, pm: a.projectManager, super: a.superintendent, mobs: (a.mobilizations || []).map((m) => ({ id: m.id, start: m.start, end: m.end, crewOnly: m.crewOnly })) })));
+      console.log("[Gantt diag] J-Bond assignments FULL:", JSON.parse(JSON.stringify(jbondAssignments)));
       const jbondRawItems = rawGanttItems.filter((it) => it.project && it.project.id === jbondProject.id);
-      console.log("[Gantt diag] J-Bond items from helper:", jbondRawItems.length, jbondRawItems.map((it) => ({ mobId: it.mobilizationId, start: it.start, end: it.end })));
+      console.log("[Gantt diag] J-Bond raw item FULL:", JSON.parse(JSON.stringify(jbondRawItems)));
     } else {
       console.log("[Gantt diag] Could not find J-Bond project by name search");
     }
@@ -2431,6 +2431,41 @@ export default function App() {
   const timelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, timeline));
   const resourceTimelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, resourceTimeline));
   const crewTimelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, crewTimeline));
+
+  // Diagnostic: trace J-Bond through the filter pipeline
+  if (typeof window !== "undefined") {
+    const jbondProject2 = projects.find((p) => (p.name || "").toLowerCase().includes("j-bond") || (p.name || "").toLowerCase().includes("j bond"));
+    if (jbondProject2) {
+      const inGantt = ganttItems.filter((it) => it.project?.id === jbondProject2.id);
+      const inVisible = visibleItems.filter((it) => it.project?.id === jbondProject2.id);
+      const inTimelineVisible = timelineVisibleItems.filter((it) => it.project?.id === jbondProject2.id);
+      console.log("[Gantt trace] J-Bond filter pipeline:", {
+        ganttItems: inGantt.length,
+        visibleItems: inVisible.length,
+        timelineVisibleItems: inTimelineVisible.length,
+        divisionInFilter: divisionFilter.includes(jbondProject2.division),
+        statusInFilter: statusFilter.includes(jbondProject2.status),
+        divisionValue: jbondProject2.division,
+        statusValue: jbondProject2.status,
+        divisionFilter: [...divisionFilter],
+        statusFilter: [...statusFilter],
+        timelineMin: timeline?.minDate?.toString(),
+        timelineMax: timeline?.maxDate?.toString(),
+      });
+      if (inGantt.length && !inVisible.length) {
+        // Item exists in ganttItems but gets dropped — find out which filter killed it
+        const item = inGantt[0];
+        const passDivision = divisionFilter.includes(item.project.division);
+        const passStatus = statusFilter.includes(item.project.status);
+        const passResourceType = assignmentMatchesDashboardResourceType(item.assignment);
+        console.log("[Gantt trace] J-Bond filter checks:", { passDivision, passStatus, passResourceType, item: JSON.parse(JSON.stringify(item)) });
+      }
+      if (inVisible.length && !inTimelineVisible.length) {
+        const item = inVisible[0];
+        console.log("[Gantt trace] J-Bond DROPPED by timeline overlap:", { itemStart: item.start, itemEnd: item.end, timelineMin: timeline?.minDate?.toString(), timelineMax: timeline?.maxDate?.toString() });
+      }
+    }
+  }
   function getUnassignedNeedsForItem(item) {
     const direct = normalizeUnassignedNeeds(item.assignment?.unassignedNeeds || item.assignment?._unassignedNeeds);
     if (direct.length) return direct;
