@@ -163,7 +163,14 @@ function mapAssignmentFromDbLocal(assignment, mobilizations) {
   const byId = new Map(rawMobs.map((m) => [m.id, m]));
   const enrichedMobs = (mapped.mobilizations || []).map((mob) => {
     const raw = byId.get(mob.id) || rawMobs.find((m) => m.start_date === mob.start && m.end_date === mob.end) || {};
-    return { ...mob, unassignedNeeds: normalizeUnassignedNeeds(raw.unassigned_needs || mob.unassignedNeeds) };
+    return {
+      ...mob,
+      unassignedNeeds: normalizeUnassignedNeeds(raw.unassigned_needs || mob.unassignedNeeds),
+      // Pull crew_only flag back from DB so the toggle's state survives
+      // page reload and crew-only items can be identified by the
+      // ganttItems augmentation.
+      crewOnly: raw.crew_only != null ? !!raw.crew_only : !!mob.crewOnly,
+    };
   });
   // Sort by start date so the earliest mobilization is always first. Mobs
   // without a start date sort to the bottom. This keeps the assignment form
@@ -183,6 +190,7 @@ function mobilizationToDbLocal(mobilization, assignmentId) {
   return {
     ...mobilizationToDb(mobilization, assignmentId),
     unassigned_needs: normalizeUnassignedNeeds(mobilization.unassignedNeeds),
+    crew_only: !!mobilization.crewOnly,
   };
 }
 
@@ -1680,16 +1688,24 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
     });
   }
 
+  // Square-hatch overlay for crew-only mobs. Keeps the division color as
+  // the bar background and lays a checker pattern on top so the user can
+  // tell at a glance that the mobilization has no named roles, just crews.
+  const crewOnlyOverlayStyle = item.isCrewOnly ? {
+    backgroundImage: "repeating-linear-gradient(0deg, transparent 0 6px, rgba(255,255,255,0.35) 6px 8px), repeating-linear-gradient(90deg, transparent 0 6px, rgba(255,255,255,0.35) 6px 8px)",
+    backgroundSize: "14px 14px, 14px 14px",
+  } : null;
+
   return (
     <div
       ref={containerRef}
       className={`absolute top-0 h-7 overflow-visible rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm text-white ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
-      style={{ left: `${left}px`, width: `${width}px`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none" }}
+      style={{ left: `${left}px`, width: `${width}px`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none", ...(crewOnlyOverlayStyle || {}) }}
       onPointerDown={(e) => onPointerDown("middle", e)}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      title={`${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nDrag bar to shift • Drag edges to resize`}
+      title={item.isCrewOnly ? `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nCrew-only mobilization (no named roles)\nDrag bar to shift • Drag edges to resize` : `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nDrag bar to shift • Drag edges to resize`}
     >
       {/* Left edge handle — narrower so the bar's middle has a bigger hit
           zone. Visible on hover so the user knows it's grabbable. */}
@@ -1756,15 +1772,26 @@ export function ProjectGanttRow({ assignment, project, items, timeline, crews, o
         </div>
       </button>
       <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
-        {items.map((item) => (
-          <DraggableGanttBar
-            key={item.id}
-            item={item}
-            timeline={timeline}
-            label={item.isUnassignedNeed ? `${item.unassignedAbbreviation} - Unassigned` : getAssignmentPeopleLabel(item.assignment, crews)}
-            onDragEnd={onDragEnd}
-          />
-        ))}
+        {items.map((item) => {
+          let label;
+          if (item.isUnassignedNeed) {
+            label = `${item.unassignedAbbreviation} - Unassigned`;
+          } else if (item.isCrewOnly) {
+            const crewNames = getAssignmentCrewDisplayNames(item.assignment, crews);
+            label = crewNames.length ? `Crew Only · ${crewNames.join(", ")}` : "Crew Only";
+          } else {
+            label = getAssignmentPeopleLabel(item.assignment, crews);
+          }
+          return (
+            <DraggableGanttBar
+              key={item.id}
+              item={item}
+              timeline={timeline}
+              label={label}
+              onDragEnd={onDragEnd}
+            />
+          );
+        })}
       </div>
     </div>
   );
@@ -2336,16 +2363,15 @@ export default function App() {
 
   // ── Derived data ───────────────────────────────────────────────────────────
   const rawGanttItems = buildGanttItems(projects, assignments);
-  // The shared buildGanttItems helper may skip mobilizations that have no
-  // named resources at the mob level but DO have crews attached. Those
-  // crew-only mobs still belong on the Project Gantt and the Crew Gantt.
-  // Detect missing mob ids and append synthetic items so they show up
-  // everywhere downstream.
+  // The shared buildGanttItems helper skips mobilizations that have no
+  // named resources (which can happen when `mob.crewOnly` is true — the
+  // user explicitly toggles on the assignment form to indicate that this
+  // mobilization is staffed by crews only, no individual roles). These
+  // crew-only mobs still need to show on the Project Gantt; we synthesize
+  // items for them here.
   //
-  // We check mob-level role fields only. The assignment-level roles always
-  // carry over and would make EVERY mob look "named" even when the actual
-  // mobilization itself has no per-mob people assigned. The whole point of
-  // crew-only mobs is that they delegate roles to crews on a per-mob basis.
+  // Items get `isCrewOnly: true` so the bar renderer can apply a square-
+  // hatched pattern in the project's division color.
   const existingMobIds = new Set(rawGanttItems.map((it) => it.mobilizationId).filter(Boolean));
   const crewOnlyExtras = [];
   assignments.forEach((assignment) => {
@@ -2354,8 +2380,12 @@ export default function App() {
     (assignment.mobilizations || []).forEach((mob) => {
       if (!mob.start || !mob.end) return;
       if (existingMobIds.has(mob.id)) return;
-      const crewIds = getAssignmentCrewIds(assignment);
-      if (!crewIds.length) return; // No crew either; skip
+      // Synth conditions: either the user explicitly toggled `crewOnly`
+      // on this mob OR the mob has crews attached but no named roles.
+      const mobLevelCrewIds = Array.isArray(mob.crewIds) ? mob.crewIds.filter(Boolean) : [];
+      const assignmentLevelCrewIds = getAssignmentCrewIds(assignment);
+      const hasCrews = mobLevelCrewIds.length > 0 || assignmentLevelCrewIds.length > 0;
+      if (!hasCrews) return;
       crewOnlyExtras.push({
         id: `crewmob-${assignment.id}-${mob.id}`,
         mobilizationId: mob.id,
@@ -2363,6 +2393,7 @@ export default function App() {
         assignment,
         start: mob.start,
         end: mob.end,
+        isCrewOnly: true,
       });
     });
   });
