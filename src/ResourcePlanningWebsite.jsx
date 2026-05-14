@@ -2364,28 +2364,19 @@ export default function App() {
   // ── Derived data ───────────────────────────────────────────────────────────
   const rawGanttItems = buildGanttItems(projects, assignments);
   // The shared buildGanttItems helper skips mobilizations that have no
-  // named resources (which can happen when `mob.crewOnly` is true — the
-  // user explicitly toggles on the assignment form to indicate that this
-  // mobilization is staffed by crews only, no individual roles). These
-  // crew-only mobs still need to show on the Project Gantt; we synthesize
-  // items for them here.
-  //
-  // Items get `isCrewOnly: true` so the bar renderer can apply a square-
-  // hatched pattern in the project's division color.
+  // named resources. We synthesize items for ANY mob the helper omitted
+  // (regardless of whether it has crews) so nothing falls through the
+  // cracks. Items get `isCrewOnly: true` so the bar renderer can apply a
+  // square-hatched pattern in the project's division color.
   const existingMobIds = new Set(rawGanttItems.map((it) => it.mobilizationId).filter(Boolean));
   const crewOnlyExtras = [];
+  const debugSkipped = [];
   assignments.forEach((assignment) => {
     const project = findProject(projects, assignment.projectId);
-    if (!project) return;
+    if (!project) { debugSkipped.push({ reason: "no project", assignmentId: assignment.id, projectId: assignment.projectId }); return; }
     (assignment.mobilizations || []).forEach((mob) => {
-      if (!mob.start || !mob.end) return;
-      if (existingMobIds.has(mob.id)) return;
-      // Synth conditions: either the user explicitly toggled `crewOnly`
-      // on this mob OR the mob has crews attached but no named roles.
-      const mobLevelCrewIds = Array.isArray(mob.crewIds) ? mob.crewIds.filter(Boolean) : [];
-      const assignmentLevelCrewIds = getAssignmentCrewIds(assignment);
-      const hasCrews = mobLevelCrewIds.length > 0 || assignmentLevelCrewIds.length > 0;
-      if (!hasCrews) return;
+      if (!mob.start || !mob.end) { debugSkipped.push({ reason: "no dates", projectName: project.name, mobId: mob.id, start: mob.start, end: mob.end }); return; }
+      if (existingMobIds.has(mob.id)) return; // Helper already produced this
       crewOnlyExtras.push({
         id: `crewmob-${assignment.id}-${mob.id}`,
         mobilizationId: mob.id,
@@ -2397,6 +2388,11 @@ export default function App() {
       });
     });
   });
+  if (typeof window !== "undefined" && (crewOnlyExtras.length || debugSkipped.length)) {
+    console.log("[Gantt augmentation] Synthesized crew-only items:", crewOnlyExtras.map((x) => ({ project: x.project.projectNumber + " " + x.project.name, start: x.start, end: x.end })));
+    console.log("[Gantt augmentation] Skipped:", debugSkipped);
+    console.log("[Gantt augmentation] Helper produced", rawGanttItems.length, "items, totalling", rawGanttItems.length + crewOnlyExtras.length, "after augmentation");
+  }
   const ganttItems = crewOnlyExtras.length ? [...rawGanttItems, ...crewOnlyExtras] : rawGanttItems;
 
   const assignmentMatchesDashboardResourceType = (assignment) => {
