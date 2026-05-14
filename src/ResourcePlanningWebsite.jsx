@@ -2363,14 +2363,17 @@ export default function App() {
 
   // ── Derived data ───────────────────────────────────────────────────────────
   const rawGanttItems = buildGanttItems(projects, assignments);
+  // The shared buildGanttItems helper may skip mobilizations that have no
+  // named resources. We synthesize items for any mob the helper omitted so
+  // nothing is lost. Crew-only mobs (flagged via mob.crewOnly) get an
+  // isCrewOnly tag so the bar renderer can apply a hatched overlay.
   const existingMobIds = new Set(rawGanttItems.map((it) => it.mobilizationId).filter(Boolean));
   const crewOnlyExtras = [];
-  const debugSkipped = [];
   assignments.forEach((assignment) => {
     const project = findProject(projects, assignment.projectId);
-    if (!project) { debugSkipped.push({ reason: "no project", assignmentId: assignment.id, projectId: assignment.projectId }); return; }
+    if (!project) return;
     (assignment.mobilizations || []).forEach((mob) => {
-      if (!mob.start || !mob.end) { debugSkipped.push({ reason: "no dates", projectName: project.name, mobId: mob.id, start: mob.start, end: mob.end }); return; }
+      if (!mob.start || !mob.end) return;
       if (existingMobIds.has(mob.id)) return;
       crewOnlyExtras.push({
         id: `crewmob-${assignment.id}-${mob.id}`,
@@ -2383,29 +2386,34 @@ export default function App() {
       });
     });
   });
-  if (typeof window !== "undefined") {
-    // Always log so we can see the state regardless of whether anything synth'd
-    console.log("[Gantt diag] rawGanttItems count:", rawGanttItems.length);
-    console.log("[Gantt diag] Synthesized:", crewOnlyExtras.length, crewOnlyExtras.map((x) => `${x.project.projectNumber} ${x.project.name} (${x.start} – ${x.end})`));
-    console.log("[Gantt diag] Skipped:", debugSkipped);
-    // Find J-Bond specifically
-    const jbondProject = projects.find((p) => (p.name || "").toLowerCase().includes("j-bond") || (p.name || "").toLowerCase().includes("j bond"));
-    if (jbondProject) {
-      console.log("[Gantt diag] J-Bond project FULL:", JSON.parse(JSON.stringify(jbondProject)));
-      const jbondAssignments = assignments.filter((a) => a.projectId === jbondProject.id);
-      console.log("[Gantt diag] J-Bond assignments FULL:", JSON.parse(JSON.stringify(jbondAssignments)));
-      const jbondRawItems = rawGanttItems.filter((it) => it.project && it.project.id === jbondProject.id);
-      console.log("[Gantt diag] J-Bond raw item FULL:", JSON.parse(JSON.stringify(jbondRawItems)));
-    } else {
-      console.log("[Gantt diag] Could not find J-Bond project by name search");
-    }
-  }
-  const ganttItems = crewOnlyExtras.length ? [...rawGanttItems, ...crewOnlyExtras] : rawGanttItems;
+  const ganttItems = (() => {
+    const augmented = crewOnlyExtras.length ? [...rawGanttItems, ...crewOnlyExtras] : [...rawGanttItems];
+    // Also flag any helper-produced items whose mob is marked crewOnly,
+    // so the bar renderer applies the hatched overlay regardless of
+    // whether the item came from the helper or our synth.
+    return augmented.map((item) => {
+      if (item.isCrewOnly) return item;
+      if (!item.assignment || !item.mobilizationId) return item;
+      const sourceMob = (item.assignment.mobilizations || []).find((m) => m.id === item.mobilizationId);
+      if (sourceMob && sourceMob.crewOnly) {
+        return { ...item, isCrewOnly: true };
+      }
+      return item;
+    });
+  })();
 
   const assignmentMatchesDashboardResourceType = (assignment) => {
     const names = [assignment.projectManager, assignment.superintendent, assignment.fieldCoordinator, assignment.fieldEngineer, assignment.safety].filter(Boolean);
-    // Crew-only mobilization — no named resources, always show
+    // Crew-only assignment — no named resources, always show
     if (!names.length) return true;
+    // If ANY mobilization on this assignment is flagged crewOnly, always
+    // show. The assignment-level role fields (Nate Chancey as PM, etc.)
+    // are inherited defaults — but a per-mob `crewOnly: true` says
+    // "this specific mob is staffed by crews, ignore the inherited
+    // names." Without this, the resource-type filter could drop
+    // crew-only mobs because their PM doesn't match the filter.
+    const hasCrewOnlyMob = (assignment.mobilizations || []).some((mob) => !!mob.crewOnly);
+    if (hasCrewOnlyMob) return true;
     // Always show assignments that have at least one mobilization with an
     // unassigned need (so mob holes always appear on the Gantt regardless
     // of which roles are currently filtered).
@@ -2431,41 +2439,6 @@ export default function App() {
   const timelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, timeline));
   const resourceTimelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, resourceTimeline));
   const crewTimelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, crewTimeline));
-
-  // Diagnostic: trace J-Bond through the filter pipeline
-  if (typeof window !== "undefined") {
-    const jbondProject2 = projects.find((p) => (p.name || "").toLowerCase().includes("j-bond") || (p.name || "").toLowerCase().includes("j bond"));
-    if (jbondProject2) {
-      const inGantt = ganttItems.filter((it) => it.project?.id === jbondProject2.id);
-      const inVisible = visibleItems.filter((it) => it.project?.id === jbondProject2.id);
-      const inTimelineVisible = timelineVisibleItems.filter((it) => it.project?.id === jbondProject2.id);
-      console.log("[Gantt trace] J-Bond filter pipeline:", {
-        ganttItems: inGantt.length,
-        visibleItems: inVisible.length,
-        timelineVisibleItems: inTimelineVisible.length,
-        divisionInFilter: divisionFilter.includes(jbondProject2.division),
-        statusInFilter: statusFilter.includes(jbondProject2.status),
-        divisionValue: jbondProject2.division,
-        statusValue: jbondProject2.status,
-        divisionFilter: [...divisionFilter],
-        statusFilter: [...statusFilter],
-        timelineMin: timeline?.minDate?.toString(),
-        timelineMax: timeline?.maxDate?.toString(),
-      });
-      if (inGantt.length && !inVisible.length) {
-        // Item exists in ganttItems but gets dropped — find out which filter killed it
-        const item = inGantt[0];
-        const passDivision = divisionFilter.includes(item.project.division);
-        const passStatus = statusFilter.includes(item.project.status);
-        const passResourceType = assignmentMatchesDashboardResourceType(item.assignment);
-        console.log("[Gantt trace] J-Bond filter checks:", { passDivision, passStatus, passResourceType, item: JSON.parse(JSON.stringify(item)) });
-      }
-      if (inVisible.length && !inTimelineVisible.length) {
-        const item = inVisible[0];
-        console.log("[Gantt trace] J-Bond DROPPED by timeline overlap:", { itemStart: item.start, itemEnd: item.end, timelineMin: timeline?.minDate?.toString(), timelineMax: timeline?.maxDate?.toString() });
-      }
-    }
-  }
   function getUnassignedNeedsForItem(item) {
     const direct = normalizeUnassignedNeeds(item.assignment?.unassignedNeeds || item.assignment?._unassignedNeeds);
     if (direct.length) return direct;
