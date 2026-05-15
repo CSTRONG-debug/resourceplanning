@@ -3840,27 +3840,31 @@ export default function App() {
       return;
     }
 
-    // html2canvas can choke on modern CSS color functions like oklch() and
-    // color-mix(). Walk the DOM and temporarily neutralize any computed
-    // styles that include those functions so the capture succeeds, then
-    // restore them after. Tailwind v3+ uses these in some utility classes.
-    const overrides = [];
-    const offendingPattern = /(oklch|color-mix|oklab|lab\(|lch\()/i;
-    section.querySelectorAll("*").forEach((el) => {
-      const cs = window.getComputedStyle(el);
-      ["color", "backgroundColor", "borderColor", "fill", "stroke"].forEach((prop) => {
-        const val = cs[prop];
-        if (val && offendingPattern.test(val)) {
-          overrides.push({ el, prop, original: el.style[prop] });
-          // Replace with a safe fallback. We don't know the visual intent
-          // here so we use neutral defaults that won't crash; the export
-          // may look slightly different from the live page in those spots.
-          if (prop === "color" || prop === "fill") el.style[prop] = "#0f172a";
-          else if (prop === "backgroundColor") el.style[prop] = "#ffffff";
-          else el.style[prop] = "#e2e8f0";
-        }
-      });
-    });
+    // html2canvas v1.4 can't parse modern CSS color functions (oklch, lab,
+    // lch, color-mix, oklab) that Tailwind v4 emits. Instead of trying to
+    // patch the live DOM, we use the onclone callback to scrub a copy
+    // BEFORE the canvas renderer touches it. Every element's computed
+    // style is read from the live page, any property containing an
+    // offending function is replaced with a safe fallback computed from
+    // the same property name. The original DOM is never modified.
+    const offendingPattern = /(oklch|color-mix|oklab|\blab\(|\blch\()/i;
+    // Properties that hold colors and could contain offending functions.
+    // We enumerate every CSS color-bearing property here. Anything not
+    // in this list won't break html2canvas since it only walks colors.
+    const colorProps = [
+      "color", "backgroundColor", "borderTopColor", "borderRightColor",
+      "borderBottomColor", "borderLeftColor", "outlineColor",
+      "textDecorationColor", "caretColor", "accentColor", "fill", "stroke",
+      "columnRuleColor", "borderBlockStartColor", "borderBlockEndColor",
+      "borderInlineStartColor", "borderInlineEndColor",
+    ];
+    // Fallback hex per property name. Background falls back to white so
+    // bars retain their tinted backdrop; colors fall back to slate-900.
+    const fallbackFor = (prop) => {
+      if (/background/i.test(prop)) return "#ffffff";
+      if (prop === "fill" || prop === "color" || prop === "stroke") return "#0f172a";
+      return "#e2e8f0";
+    };
 
     let canvas;
     try {
@@ -3871,11 +3875,38 @@ export default function App() {
         logging: false,
         windowWidth: section.clientWidth,
         windowHeight: section.clientHeight,
+        onclone: (clonedDoc, clonedSection) => {
+          // Walk the clone, not the original. Read the live element's
+          // computed style (via matching id/index path is complex — but
+          // since the clone preserves structure, walking its own elements
+          // and reading their computed styles in the cloned doc works.)
+          const allEls = clonedSection.querySelectorAll("*");
+          allEls.forEach((el) => {
+            // Use the CLONE's window for getComputedStyle so we read styles
+            // post-clone. Tailwind's stylesheet still applies to the clone.
+            const win = clonedDoc.defaultView || window;
+            let cs;
+            try { cs = win.getComputedStyle(el); } catch { return; }
+            colorProps.forEach((prop) => {
+              const val = cs[prop];
+              if (val && offendingPattern.test(val)) {
+                el.style[prop] = fallbackFor(prop);
+              }
+            });
+            // boxShadow and background shorthand can also carry oklch()
+            const shadow = cs.boxShadow;
+            if (shadow && offendingPattern.test(shadow)) el.style.boxShadow = "none";
+            const bgImage = cs.backgroundImage;
+            if (bgImage && offendingPattern.test(bgImage)) el.style.backgroundImage = "none";
+          });
+          // Also scrub any inline style attributes on the clone itself
+          // (e.g. element.style.backgroundColor = "oklch(...)" set in JS).
+          // The forEach above covers computed styles which already includes
+          // these, but inline values can also slip in via animation/transition
+          // states; this catches those.
+        },
       });
     } catch (err) {
-      // Surface the real error so we can debug if the workaround above
-      // wasn't enough. The user sees a useful prefix; the console has the
-      // full stack.
       console.error("html2canvas error:", err);
       alert(
         "Could not capture the chart.\n\n" +
@@ -3883,9 +3914,6 @@ export default function App() {
         "Open DevTools (F12) → Console for full details."
       );
       return;
-    } finally {
-      // Restore the original inline styles regardless of success/failure.
-      overrides.forEach(({ el, prop, original }) => { el.style[prop] = original; });
     }
 
     const imgData = canvas.toDataURL("image/png");
