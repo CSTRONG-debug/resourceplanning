@@ -3841,30 +3841,13 @@ export default function App() {
     }
 
     // html2canvas v1.4 can't parse modern CSS color functions (oklch, lab,
-    // lch, color-mix, oklab) that Tailwind v4 emits. Instead of trying to
-    // patch the live DOM, we use the onclone callback to scrub a copy
-    // BEFORE the canvas renderer touches it. Every element's computed
-    // style is read from the live page, any property containing an
-    // offending function is replaced with a safe fallback computed from
-    // the same property name. The original DOM is never modified.
-    const offendingPattern = /(oklch|color-mix|oklab|\blab\(|\blch\()/i;
-    // Properties that hold colors and could contain offending functions.
-    // We enumerate every CSS color-bearing property here. Anything not
-    // in this list won't break html2canvas since it only walks colors.
-    const colorProps = [
-      "color", "backgroundColor", "borderTopColor", "borderRightColor",
-      "borderBottomColor", "borderLeftColor", "outlineColor",
-      "textDecorationColor", "caretColor", "accentColor", "fill", "stroke",
-      "columnRuleColor", "borderBlockStartColor", "borderBlockEndColor",
-      "borderInlineStartColor", "borderInlineEndColor",
-    ];
-    // Fallback hex per property name. Background falls back to white so
-    // bars retain their tinted backdrop; colors fall back to slate-900.
-    const fallbackFor = (prop) => {
-      if (/background/i.test(prop)) return "#ffffff";
-      if (prop === "fill" || prop === "color" || prop === "stroke") return "#0f172a";
-      return "#e2e8f0";
-    };
+    // lch, color-mix, oklab) that Tailwind v4 emits. The sanitization runs
+    // inside the onclone callback below — see comments there for the
+    // strategy. Brief version: scan stylesheets for variables containing
+    // oklch, resolve each to a hex via a temp probe element, then inject a
+    // <style> into the clone that overrides those variables with hex
+    // equivalents. A backstop walks every element to catch anything not
+    // driven by variables.
 
     let canvas;
     try {
@@ -3876,34 +3859,96 @@ export default function App() {
         windowWidth: section.clientWidth,
         windowHeight: section.clientHeight,
         onclone: (clonedDoc, clonedSection) => {
-          // Walk the clone, not the original. Read the live element's
-          // computed style (via matching id/index path is complex — but
-          // since the clone preserves structure, walking its own elements
-          // and reading their computed styles in the cloned doc works.)
+          // Tailwind v4 stores colors in CSS custom properties using oklch()
+          // (e.g. --color-emerald-700: oklch(...)). Per-element style
+          // overrides don't help because Tailwind utilities reference these
+          // variables. The reliable fix is to override the variables
+          // themselves on :root in the clone, so every utility resolves to
+          // a safe hex before html2canvas walks the DOM.
+          //
+          // We dynamically build the override by scanning the live document's
+          // stylesheets for any CSS variable whose value contains oklch/lab/
+          // lch/color-mix, then computing a hex fallback by reading the
+          // browser's actual rendered color via a probe element. This way
+          // the export keeps the right colors (Tailwind's intent), just
+          // expressed in legacy syntax html2canvas understands.
+          const offending = /(oklch|color-mix|oklab|\blab\(|\blch\()/i;
+          const varOverrides = new Map();
+          // Collect every --custom-property declared anywhere in the page's
+          // stylesheets that has an offending value.
+          try {
+            for (const sheet of Array.from(document.styleSheets)) {
+              let rules;
+              try { rules = sheet.cssRules; } catch { continue; } // cross-origin
+              if (!rules) continue;
+              for (const rule of Array.from(rules)) {
+                if (!rule.style) continue;
+                for (let i = 0; i < rule.style.length; i++) {
+                  const prop = rule.style[i];
+                  if (!prop.startsWith("--")) continue;
+                  const value = rule.style.getPropertyValue(prop);
+                  if (offending.test(value)) varOverrides.set(prop, value);
+                }
+              }
+            }
+          } catch (e) {
+            console.warn("Could not scan stylesheets for oklch vars:", e);
+          }
+          // For each offending variable, compute a hex fallback by setting
+          // it as a color on a temp probe element and reading back the
+          // computed RGB value (the browser resolves oklch internally).
+          const probe = document.createElement("div");
+          probe.style.position = "absolute";
+          probe.style.visibility = "hidden";
+          probe.style.left = "-9999px";
+          document.body.appendChild(probe);
+          const hexOverrides = {};
+          for (const [varName, varValue] of varOverrides) {
+            probe.style.color = "";
+            probe.style.color = varValue;
+            const resolved = window.getComputedStyle(probe).color;
+            // resolved is in rgb()/rgba() form, which html2canvas handles
+            hexOverrides[varName] = resolved && !offending.test(resolved) ? resolved : "rgb(15,23,42)";
+          }
+          document.body.removeChild(probe);
+          // Inject a <style> into the clone that redefines these variables
+          // on :root with their resolved rgb() values.
+          const overrideCss = `:root, html, body, *, *::before, *::after {
+${Object.entries(hexOverrides).map(([k, v]) => `  ${k}: ${v} !important;`).join("\n")}
+}`;
+          const styleEl = clonedDoc.createElement("style");
+          styleEl.textContent = overrideCss;
+          clonedDoc.head.appendChild(styleEl);
+
+          // Backstop: also walk every element in the clone and replace any
+          // inline style / computed style that still contains oklch with a
+          // safe fallback. This catches anything not driven by variables.
+          const colorProps = [
+            "color", "backgroundColor", "borderTopColor", "borderRightColor",
+            "borderBottomColor", "borderLeftColor", "outlineColor",
+            "textDecorationColor", "caretColor", "accentColor", "fill", "stroke",
+            "columnRuleColor", "borderBlockStartColor", "borderBlockEndColor",
+            "borderInlineStartColor", "borderInlineEndColor",
+          ];
+          const fallbackFor = (prop) => {
+            if (/background/i.test(prop)) return "#ffffff";
+            if (prop === "fill" || prop === "color" || prop === "stroke") return "#0f172a";
+            return "#e2e8f0";
+          };
           const allEls = clonedSection.querySelectorAll("*");
           allEls.forEach((el) => {
-            // Use the CLONE's window for getComputedStyle so we read styles
-            // post-clone. Tailwind's stylesheet still applies to the clone.
             const win = clonedDoc.defaultView || window;
             let cs;
             try { cs = win.getComputedStyle(el); } catch { return; }
             colorProps.forEach((prop) => {
               const val = cs[prop];
-              if (val && offendingPattern.test(val)) {
-                el.style[prop] = fallbackFor(prop);
-              }
+              if (val && offending.test(val)) el.style[prop] = fallbackFor(prop);
             });
-            // boxShadow and background shorthand can also carry oklch()
             const shadow = cs.boxShadow;
-            if (shadow && offendingPattern.test(shadow)) el.style.boxShadow = "none";
+            if (shadow && offending.test(shadow)) el.style.boxShadow = "none";
             const bgImage = cs.backgroundImage;
-            if (bgImage && offendingPattern.test(bgImage)) el.style.backgroundImage = "none";
+            if (bgImage && offending.test(bgImage)) el.style.backgroundImage = "none";
           });
-          // Also scrub any inline style attributes on the clone itself
-          // (e.g. element.style.backgroundColor = "oklch(...)" set in JS).
-          // The forEach above covers computed styles which already includes
-          // these, but inline values can also slip in via animation/transition
-          // states; this catches those.
         },
       });
     } catch (err) {
