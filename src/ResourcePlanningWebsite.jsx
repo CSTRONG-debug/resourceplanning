@@ -3801,9 +3801,9 @@ export default function App() {
   // for the session, so subsequent exports are instant.
   function loadScreenshotLibs() {
     return new Promise((resolve, reject) => {
-      const needHtml2Canvas = typeof window.html2canvas === "undefined";
+      const needHtmlToImage = typeof window.htmlToImage === "undefined";
       const needJsPdf = typeof window.jspdf === "undefined";
-      if (!needHtml2Canvas && !needJsPdf) return resolve();
+      if (!needHtmlToImage && !needJsPdf) return resolve();
 
       const loadScript = (src) => new Promise((res, rej) => {
         const s = document.createElement("script");
@@ -3815,7 +3815,11 @@ export default function App() {
       });
 
       Promise.all([
-        needHtml2Canvas ? loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js") : Promise.resolve(),
+        // html-to-image natively handles oklch(), color-mix(), lab(), and
+        // every other modern CSS function because it uses the browser's
+        // own rendering engine via SVG foreignObject. Unlike html2canvas,
+        // there is no internal CSS parser to choke on new color syntax.
+        needHtmlToImage ? loadScript("https://cdn.jsdelivr.net/npm/html-to-image@1.11.2/dist/html-to-image.min.js") : Promise.resolve(),
         needJsPdf ? loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js") : Promise.resolve(),
       ]).then(resolve).catch(reject);
     });
@@ -3840,119 +3844,35 @@ export default function App() {
       return;
     }
 
-    // html2canvas v1.4 can't parse modern CSS color functions (oklch, lab,
-    // lch, color-mix, oklab) that Tailwind v4 emits. The sanitization runs
-    // inside the onclone callback below — see comments there for the
-    // strategy. Brief version: scan stylesheets for variables containing
-    // oklch, resolve each to a hex via a temp probe element, then inject a
-    // <style> into the clone that overrides those variables with hex
-    // equivalents. A backstop walks every element to catch anything not
-    // driven by variables.
+    // html-to-image uses SVG foreignObject + the browser's own rendering
+    // engine, so modern CSS color functions (oklch, color-mix, lab, lch)
+    // work natively — no sanitization needed.
 
-    let canvas;
+    let imgData, capturedWidth, capturedHeight;
     try {
-      canvas = await window.html2canvas(section, {
-        scale: 2,
-        useCORS: true,
+      // Capture at 2x scale for crisp PDFs. html-to-image uses pixelRatio.
+      const pixelRatio = 2;
+      imgData = await window.htmlToImage.toPng(section, {
+        pixelRatio,
         backgroundColor: "#ffffff",
-        logging: false,
-        windowWidth: section.clientWidth,
-        windowHeight: section.clientHeight,
-        onclone: (clonedDoc, clonedSection) => {
-          // Tailwind v4 stores colors in CSS custom properties using oklch()
-          // (e.g. --color-emerald-700: oklch(...)). Per-element style
-          // overrides don't help because Tailwind utilities reference these
-          // variables. The reliable fix is to override the variables
-          // themselves on :root in the clone, so every utility resolves to
-          // a safe hex before html2canvas walks the DOM.
-          //
-          // We dynamically build the override by scanning the live document's
-          // stylesheets for any CSS variable whose value contains oklch/lab/
-          // lch/color-mix, then computing a hex fallback by reading the
-          // browser's actual rendered color via a probe element. This way
-          // the export keeps the right colors (Tailwind's intent), just
-          // expressed in legacy syntax html2canvas understands.
-          const offending = /(oklch|color-mix|oklab|\blab\(|\blch\()/i;
-          const varOverrides = new Map();
-          // Collect every --custom-property declared anywhere in the page's
-          // stylesheets that has an offending value.
-          try {
-            for (const sheet of Array.from(document.styleSheets)) {
-              let rules;
-              try { rules = sheet.cssRules; } catch { continue; } // cross-origin
-              if (!rules) continue;
-              for (const rule of Array.from(rules)) {
-                if (!rule.style) continue;
-                for (let i = 0; i < rule.style.length; i++) {
-                  const prop = rule.style[i];
-                  if (!prop.startsWith("--")) continue;
-                  const value = rule.style.getPropertyValue(prop);
-                  if (offending.test(value)) varOverrides.set(prop, value);
-                }
-              }
-            }
-          } catch (e) {
-            console.warn("Could not scan stylesheets for oklch vars:", e);
-          }
-          // For each offending variable, compute a hex fallback by setting
-          // it as a color on a temp probe element and reading back the
-          // computed RGB value (the browser resolves oklch internally).
-          const probe = document.createElement("div");
-          probe.style.position = "absolute";
-          probe.style.visibility = "hidden";
-          probe.style.left = "-9999px";
-          document.body.appendChild(probe);
-          const hexOverrides = {};
-          for (const [varName, varValue] of varOverrides) {
-            probe.style.color = "";
-            probe.style.color = varValue;
-            const resolved = window.getComputedStyle(probe).color;
-            // resolved is in rgb()/rgba() form, which html2canvas handles
-            hexOverrides[varName] = resolved && !offending.test(resolved) ? resolved : "rgb(15,23,42)";
-          }
-          document.body.removeChild(probe);
-          // Inject a <style> into the clone that redefines these variables
-          // on :root with their resolved rgb() values.
-          const overrideCss = `:root, html, body, *, *::before, *::after {
-${Object.entries(hexOverrides).map(([k, v]) => `  ${k}: ${v} !important;`).join("\n")}
-}`;
-          const styleEl = clonedDoc.createElement("style");
-          styleEl.textContent = overrideCss;
-          clonedDoc.head.appendChild(styleEl);
-
-          // Backstop: also walk every element in the clone and replace any
-          // inline style / computed style that still contains oklch with a
-          // safe fallback. This catches anything not driven by variables.
-          const colorProps = [
-            "color", "backgroundColor", "borderTopColor", "borderRightColor",
-            "borderBottomColor", "borderLeftColor", "outlineColor",
-            "textDecorationColor", "caretColor", "accentColor", "fill", "stroke",
-            "columnRuleColor", "borderBlockStartColor", "borderBlockEndColor",
-            "borderInlineStartColor", "borderInlineEndColor",
-          ];
-          const fallbackFor = (prop) => {
-            if (/background/i.test(prop)) return "#ffffff";
-            if (prop === "fill" || prop === "color" || prop === "stroke") return "#0f172a";
-            return "#e2e8f0";
-          };
-          const allEls = clonedSection.querySelectorAll("*");
-          allEls.forEach((el) => {
-            const win = clonedDoc.defaultView || window;
-            let cs;
-            try { cs = win.getComputedStyle(el); } catch { return; }
-            colorProps.forEach((prop) => {
-              const val = cs[prop];
-              if (val && offending.test(val)) el.style[prop] = fallbackFor(prop);
-            });
-            const shadow = cs.boxShadow;
-            if (shadow && offending.test(shadow)) el.style.boxShadow = "none";
-            const bgImage = cs.backgroundImage;
-            if (bgImage && offending.test(bgImage)) el.style.backgroundImage = "none";
-          });
-        },
+        // Skip the same node-walking issues html2canvas had with iframes,
+        // foreign content, and external images by allowing CORS images
+        // through and treating embedded fonts as inline.
+        cacheBust: true,
+        skipFonts: false,
       });
+      // Build an Image to read the actual pixel dimensions so the PDF
+      // scaling math below has accurate width/height to work with.
+      const probe = await new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = rej;
+        img.src = imgData;
+      });
+      capturedWidth = probe.width;
+      capturedHeight = probe.height;
     } catch (err) {
-      console.error("html2canvas error:", err);
+      console.error("html-to-image error:", err);
       alert(
         "Could not capture the chart.\n\n" +
         "Reason: " + (err && err.message ? err.message : String(err)) + "\n\n" +
@@ -3961,7 +3881,6 @@ ${Object.entries(hexOverrides).map(([k, v]) => `  ${k}: ${v} !important;`).join(
       return;
     }
 
-    const imgData = canvas.toDataURL("image/png");
     const { jsPDF } = window.jspdf;
 
     // Landscape page sized to the captured image's aspect ratio so we don't
@@ -3978,7 +3897,7 @@ ${Object.entries(hexOverrides).map(([k, v]) => `  ${k}: ${v} !important;`).join(
     const availableHeight = pageHeight - titleStripHeight - footerStripHeight;
 
     // Scale image to fit available area while preserving aspect ratio.
-    const imgRatio = canvas.width / canvas.height;
+    const imgRatio = capturedWidth / capturedHeight;
     let drawWidth = availableWidth;
     let drawHeight = drawWidth / imgRatio;
     if (drawHeight > availableHeight) {
