@@ -2181,11 +2181,17 @@ export default function App() {
   const [demandResourceTypeFilter, setDemandResourceTypeFilter] = useState(demandResourceTypeOptions);
   const [demandZoom, setDemandZoom] = useState("Weeks");
   const [expandedView, setExpandedView] = useState(null);
-  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
+  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
+  const [authMode, setAuthMode] = useState("signin"); // "signin" | "signup"
+  const [authMessage, setAuthMessage] = useState(null);
+  const [authBusy, setAuthBusy] = useState(false);
   const [showClaude, setShowClaude] = useState(false);
-  const [currentUser, setCurrentUser] = useState(() => sessionStorage.getItem("ggc_current_user") || "");
+  const [session, setSession] = useState(null);
+  const [currentUser, setCurrentUser] = useState("");
+  const [userRole, setUserRole] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [showUserSettings, setShowUserSettings] = useState(false);
-  const [newUserForm, setNewUserForm] = useState({ username: "", password: "" });
+  const [newUserForm, setNewUserForm] = useState({ email: "", password: "" });
   const [appUsers, setAppUsers] = useState([]);
   const [crewGanttFilter, setCrewGanttFilter] = useState([]);
   const [focusedResource, setFocusedResource] = useState(null);
@@ -3699,23 +3705,59 @@ export default function App() {
     });
   }
 
-  // ── Auth ───────────────────────────────────────────────────────────────────
+  // ── Auth (Supabase Auth) ─────────────────────────────────────────────────
+  // Fetch the role from the profiles table for a given user id.
+  async function fetchUserRole(userId) {
+    if (!supabase || !userId) { setUserRole(null); return; }
+    const { data, error } = await supabase.from("profiles").select("role").eq("id", userId).single();
+    if (error) { console.error("Could not load role:", error); setUserRole(null); return; }
+    setUserRole(data?.role || "viewer");
+  }
+
+  // Establish the session on mount and subscribe to auth changes.
+  useEffect(() => {
+    if (!supabase) { setAuthLoading(false); return; }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setCurrentUser(session?.user?.email || "");
+      if (session?.user) fetchUserRole(session.user.id);
+      setAuthLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setCurrentUser(session?.user?.email || "");
+      if (session?.user) fetchUserRole(session.user.id);
+      else setUserRole(null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
   async function handleLogin(event) {
     event.preventDefault();
     if (!supabase) { alert("Supabase is not connected."); return; }
-    const { data, error } = await supabase.rpc("authenticate_app_user", { input_username: loginForm.username, input_password: loginForm.password });
-    if (error) { console.error(error); alert("Login setup is missing. Run the user SQL block in Supabase."); return; }
-    if (!data) { alert("Invalid username or password."); return; }
-    sessionStorage.setItem("ggc_current_user", loginForm.username);
-    setCurrentUser(loginForm.username);
-    setLoginForm({ username: "", password: "" });
-    await loadAppUsers();
+    setAuthBusy(true);
+    setAuthMessage(null);
+    const { email, password } = loginForm;
+    const fn = authMode === "signin"
+      ? supabase.auth.signInWithPassword({ email, password })
+      : supabase.auth.signUp({ email, password });
+    const { error } = await fn;
+    setAuthBusy(false);
+    if (error) { setAuthMessage({ type: "error", text: error.message }); return; }
+    if (authMode === "signup") {
+      setAuthMessage({ type: "ok", text: "Account created. You can sign in now." });
+      setAuthMode("signin");
+      setLoginForm((c) => ({ ...c, password: "" }));
+      return;
+    }
+    setLoginForm({ email: "", password: "" });
+    // onAuthStateChange handles setting session/user/role.
   }
 
   async function loadAppUsers() {
     if (!supabase) return;
-    const { data, error } = await supabase.rpc("list_app_users");
-    if (error) { console.error("Could not load app users:", error); return; }
+    const { data, error } = await supabase.from("profiles").select("id, email, role, created_at").order("created_at", { ascending: true });
+    if (error) { console.error("Could not load users:", error); return; }
     setAppUsers(data || []);
   }
 
@@ -3726,25 +3768,30 @@ export default function App() {
     if (data?.length) setProjectTypes(data.map((row) => row.name));
   }
 
-  async function addAppUser() {
-    if (!newUserForm.username.trim() || !newUserForm.password.trim()) { alert("Username and password are required."); return; }
+  // New users self-serve via the login screen's "Sign up" toggle. The User
+  // Settings modal can change a user's role and delete their profile row.
+  async function updateUserRole(userId, role) {
     if (!supabase) { alert("Supabase is not connected."); return; }
-    const { error } = await supabase.rpc("create_app_user", { input_username: newUserForm.username, input_password: newUserForm.password });
-    if (error) { console.error(error); alert("Could not create user."); return; }
-    setNewUserForm({ username: "", password: "" });
+    const { error } = await supabase.from("profiles").update({ role }).eq("id", userId);
+    if (error) { console.error(error); alert("Could not update role. (Admins only — check RLS policies.)"); return; }
     await loadAppUsers();
   }
 
-  async function deleteAppUser(username) {
-    if (username === currentUser) { alert("You cannot delete the user currently signed in."); return; }
-    if (!confirm(`Delete login user ${username}?`)) return;
+  async function deleteAppUser(userId, email) {
+    if (email === currentUser) { alert("You cannot delete the user currently signed in."); return; }
+    if (!confirm(`Delete login user ${email}? This removes their profile/role. To fully revoke access, also delete them under Authentication → Users in Supabase.`)) return;
     if (!supabase) { alert("Supabase is not connected."); return; }
-    const { error } = await supabase.rpc("delete_app_user", { input_username: username });
+    const { error } = await supabase.from("profiles").delete().eq("id", userId);
     if (error) { console.error(error); alert("Could not delete user."); return; }
     await loadAppUsers();
   }
 
-  function logout() { sessionStorage.removeItem("ggc_current_user"); setCurrentUser(""); }
+  async function logout() {
+    if (supabase) await supabase.auth.signOut();
+    setSession(null);
+    setCurrentUser("");
+    setUserRole(null);
+  }
 
   function parseYesNo(value) {
     const text = String(value ?? "").trim().toLowerCase();
@@ -4051,25 +4098,39 @@ export default function App() {
     });
   }
 
+  // ── Loading gate ─────────────────────────────────────────────────────────
+  if (authLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-100">
+        <p className="text-sm font-semibold text-slate-500">Loading…</p>
+      </main>
+    );
+  }
+
   // ── Login Screen ───────────────────────────────────────────────────────────
-  if (!currentUser) {
+  if (!session) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
         <div className="w-full max-w-md">
           <form onSubmit={handleLogin} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
             <div className="h-1 w-24 rounded-full bg-emerald-700" />
             <h1 className="mt-4 text-2xl font-bold text-slate-900">GGC Resource Planning</h1>
-            <p className="mt-1 text-sm text-slate-500">Sign in to access the scheduling system.</p>
+            <p className="mt-1 text-sm text-slate-500">{authMode === "signin" ? "Sign in to access the scheduling system." : "Create an account to request access."}</p>
             <label className="mt-6 block space-y-1">
-              <span className="text-sm font-semibold text-slate-700">Username</span>
-              <input value={loginForm.username} onChange={(e) => setLoginForm((c) => ({ ...c, username: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
+              <span className="text-sm font-semibold text-slate-700">Email</span>
+              <input type="email" autoComplete="email" value={loginForm.email} onChange={(e) => setLoginForm((c) => ({ ...c, email: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
             </label>
             <label className="mt-4 block space-y-1">
               <span className="text-sm font-semibold text-slate-700">Password</span>
-              <input type="password" value={loginForm.password} onChange={(e) => setLoginForm((c) => ({ ...c, password: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
+              <input type="password" autoComplete={authMode === "signin" ? "current-password" : "new-password"} value={loginForm.password} onChange={(e) => setLoginForm((c) => ({ ...c, password: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
             </label>
+            {authMessage && (
+              <p className={`mt-3 text-sm font-semibold ${authMessage.type === "error" ? "text-red-700" : "text-emerald-700"}`}>{authMessage.text}</p>
+            )}
             <div className="mt-6 flex gap-2">
-              <button type="submit" className="flex-1 rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800">Log In</button>
+              <button type="submit" disabled={authBusy} className="flex-1 rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800 disabled:bg-slate-300">
+                {authBusy ? "Working…" : authMode === "signin" ? "Log In" : "Sign Up"}
+              </button>
               <button
                 type="button"
                 onClick={() => setShowClaude(true)}
@@ -4079,6 +4140,9 @@ export default function App() {
                 <Sparkles size={16} /> Claude
               </button>
             </div>
+            <button type="button" onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthMessage(null); }} className="mt-4 w-full text-center text-sm font-semibold text-emerald-700 hover:underline">
+              {authMode === "signin" ? "Need an account? Sign up" : "Already have an account? Sign in"}
+            </button>
             <p className="mt-3 text-center text-xs text-slate-400">
               Claude is optional. Requires your own paid Anthropic API key.
             </p>
@@ -5428,20 +5492,30 @@ export default function App() {
               <div><h2 className="text-xl font-bold">User Settings</h2><p className="text-sm text-slate-500">Add users who can log in to this system.</p></div>
               <button onClick={() => setShowUserSettings(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
             </div>
-            <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-              <input placeholder="Username" value={newUserForm.username} onChange={(e) => setNewUserForm((c) => ({ ...c, username: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
-              <input placeholder="Password" type="password" value={newUserForm.password} onChange={(e) => setNewUserForm((c) => ({ ...c, password: e.target.value }))} className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" />
-              <button onClick={addAppUser} className="rounded-xl bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800">Add User</button>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              New users create their own account using <strong>Sign up</strong> on the login screen. They start as <strong>viewer</strong>. Promote them to manager or admin below.
             </div>
             <div className="mt-5 rounded-xl border border-slate-200">
               <table className="w-full text-left text-sm">
-                <thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Username</th><th className="p-3">Created</th><th className="p-3 text-right">Action</th></tr></thead>
+                <thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">Email</th><th className="p-3">Role</th><th className="p-3">Created</th><th className="p-3 text-right">Action</th></tr></thead>
                 <tbody>
                   {appUsers.map((user) => (
-                    <tr key={user.username} className="border-t border-slate-200">
-                      <td className="p-3 font-semibold">{user.username}</td>
+                    <tr key={user.id} className="border-t border-slate-200">
+                      <td className="p-3 font-semibold">{user.email}</td>
+                      <td className="p-3">
+                        <select
+                          value={user.role}
+                          onChange={(e) => updateUserRole(user.id, e.target.value)}
+                          disabled={userRole !== "admin"}
+                          className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600 disabled:bg-slate-100 disabled:text-slate-400"
+                        >
+                          <option value="viewer">viewer</option>
+                          <option value="manager">manager</option>
+                          <option value="admin">admin</option>
+                        </select>
+                      </td>
                       <td className="p-3">{user.created_at ? formatDate(user.created_at) : ""}</td>
-                      <td className="p-3 text-right"><button onClick={() => deleteAppUser(user.username)} className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50">Delete</button></td>
+                      <td className="p-3 text-right"><button onClick={() => deleteAppUser(user.id, user.email)} disabled={userRole !== "admin"} className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50 disabled:opacity-40">Delete</button></td>
                     </tr>
                   ))}
                 </tbody>
