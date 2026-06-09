@@ -2579,6 +2579,15 @@ export default function App() {
 
   const activeCrews = crews.filter((c) => !isCrewDeactivated(c));
 
+  // ── Role-based UI gating ───────────────────────────────────────────────────
+  // canWrite = manager or admin (can create/edit/delete data).
+  // isAdmin  = admin only (can manage users/roles).
+  // Viewers get read-only: write controls are hidden. The database also
+  // enforces this via RLS, so this is purely to avoid showing buttons that
+  // would fail.
+  const canWrite = userRole === "manager" || userRole === "admin";
+  const isAdmin = userRole === "admin";
+
   function toggleSort(setter, key) {
     setter((current) => ({ key, direction: current.key === key && current.direction === "asc" ? "desc" : "asc" }));
   }
@@ -4177,7 +4186,7 @@ export default function App() {
             </button>
             <div className="flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
               <span className="max-w-[180px] truncate">{currentUser}</span>
-              <button onClick={() => setShowUserSettings(true)} className="rounded-lg p-1 hover:bg-slate-200" title="User settings"><Settings size={16} /></button>
+              {isAdmin && <button onClick={() => setShowUserSettings(true)} className="rounded-lg p-1 hover:bg-slate-200" title="User settings"><Settings size={16} /></button>}
               <button onClick={logout} className="rounded-lg px-2 py-1 text-xs text-red-700 hover:bg-red-50">Logout</button>
             </div>
           </div>
@@ -4202,15 +4211,15 @@ export default function App() {
               ))}
             </nav>
             <div className="flex shrink-0 items-center gap-2">
-              {page === "projectDash" && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><ClipboardCheck size={18} /> Assign</button>}
-              {page === "setup" && setupTab === "projects" && (
+              {page === "projectDash" && canWrite && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><ClipboardCheck size={18} /> Assign</button>}
+              {page === "setup" && setupTab === "projects" && canWrite && (
                 <>
                   <CmicPullProjects projects={projects} onApplied={() => loadSupabaseData()} />
                   <button onClick={openAddProjectForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Project</button>
                 </>
               )}
-              {page === "setup" && setupTab === "resources" && <button onClick={openAddResourceForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Resource</button>}
-              {page === "setup" && setupTab === "crews" && <button onClick={openAddCrewForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Crew</button>}
+              {page === "setup" && setupTab === "resources" && canWrite && <button onClick={openAddResourceForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Resource</button>}
+              {page === "setup" && setupTab === "crews" && canWrite && <button onClick={openAddCrewForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> Add Crew</button>}
             </div>
           </div>
         </div>
@@ -4238,8 +4247,8 @@ export default function App() {
                   <input className="outline-none text-sm w-44" placeholder="Search crews…" value={crewSearch} onChange={(e) => setCrewSearch(e.target.value)} />
                 </div>
                 <button onClick={exportCrewsExcel} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button>
-                <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importCrewsCsv} className="hidden" /></label>
-                <button onClick={openAddCrewForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><Plus size={17} /> Add Crew</button>
+                {canWrite && <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importCrewsCsv} className="hidden" /></label>}
+                {canWrite && <button onClick={openAddCrewForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><Plus size={17} /> Add Crew</button>}
               </div>
             </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -4255,7 +4264,7 @@ export default function App() {
                 </thead>
                 <tbody>
                   {sortedCrews.map((crew) => (
-                    <tr key={crew.id} onClick={() => openEditCrewForm(crew)} className="cursor-pointer border-t border-slate-200 align-top hover:bg-emerald-50">
+                    <tr key={crew.id} onClick={() => canWrite && openEditCrewForm(crew)} className={`border-t border-slate-200 align-top ${canWrite ? "cursor-pointer hover:bg-emerald-50" : ""}`}>
                       <td className="p-3 font-medium">{crew.crewName}</td>
                       <td className="p-3">{crew.foremanName}</td>
                       <td className="p-3 text-center font-semibold">{crew.totalMembers || <span className="text-slate-300">—</span>}</td>
@@ -4292,9 +4301,9 @@ export default function App() {
               <div><h2 className="text-2xl font-bold">Resources</h2><p className="text-sm text-slate-500">Master resource list used by Dashboard assignment dropdowns.</p></div>
               <div className="flex flex-wrap gap-3">
                 <button onClick={exportResourcesExcel} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button>
-                <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importResourcesCsv} className="hidden" /></label>
-                <button onClick={() => setShowCertSettings((c) => !c)} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"><Settings size={17} /> Certification Settings</button>
-                <button onClick={openAddResourceForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><Plus size={17} /> Add Resource</button>
+                {canWrite && <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importResourcesCsv} className="hidden" /></label>}
+                {canWrite && <button onClick={() => setShowCertSettings((c) => !c)} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"><Settings size={17} /> Certification Settings</button>}
+                {canWrite && <button onClick={openAddResourceForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><Plus size={17} /> Add Resource</button>}
               </div>
             </div>
             {showCertSettings && (
@@ -4345,7 +4354,7 @@ export default function App() {
                 </thead>
                 <tbody>
                   {sortedResources.map((resource) => (
-                    <tr key={resource.id} onClick={() => openEditResourceForm(resource)} className="cursor-pointer border-t border-slate-200 align-top hover:bg-emerald-50">
+                    <tr key={resource.id} onClick={() => canWrite && openEditResourceForm(resource)} className={`border-t border-slate-200 align-top ${canWrite ? "cursor-pointer hover:bg-emerald-50" : ""}`}>
                       <td className="p-3 font-medium">{resource.name}</td>
                       <td className="p-3">{resource.resourceType}</td>
                       <td className="p-3">{resource.homeDivision}</td>
@@ -4379,9 +4388,9 @@ export default function App() {
               <div><h2 className="text-2xl font-bold">Projects</h2><p className="text-sm text-slate-500">Create and edit projects here only. Resource assignments happen on the Dashboard.</p></div>
               <div className="flex flex-wrap gap-3">
                 <button onClick={exportProjectsExcel} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button>
-                <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importProjectsCsv} className="hidden" /></label>
-                <button onClick={() => setShowProjectTypeSettings((c) => !c)} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"><Settings size={17} /> Project Type Settings</button>
-                <button onClick={openAddProjectForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><Plus size={17} /> Add Project</button>
+                {canWrite && <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importProjectsCsv} className="hidden" /></label>}
+                {canWrite && <button onClick={() => setShowProjectTypeSettings((c) => !c)} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"><Settings size={17} /> Project Type Settings</button>}
+                {canWrite && <button onClick={openAddProjectForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><Plus size={17} /> Add Project</button>}
               </div>
             </div>
             {showProjectTypeSettings && (
@@ -4423,7 +4432,7 @@ export default function App() {
                 </thead>
                 <tbody>
                   {sortedProjectsForTab.map((project) => (
-                    <tr key={project.id} onClick={() => openEditProjectForm(project)} className="cursor-pointer border-t border-slate-200 align-top hover:bg-emerald-50">
+                    <tr key={project.id} onClick={() => canWrite && openEditProjectForm(project)} className={`border-t border-slate-200 align-top ${canWrite ? "cursor-pointer hover:bg-emerald-50" : ""}`}>
                       <td className="p-3 font-medium">{project.projectNumber}</td>
                       <td className="p-3 font-medium">
                         <span className="inline-flex items-center gap-2">
@@ -4527,7 +4536,7 @@ export default function App() {
                         timeline={timeline}
                         crews={crews}
                         onLabelClick={() => openEditAssignmentForm(row.assignment)}
-                        onDragEnd={handleProjectGanttDragEnd}
+                        onDragEnd={canWrite ? handleProjectGanttDragEnd : undefined}
                       />
                     </div>
                   ))}
@@ -4542,8 +4551,8 @@ export default function App() {
               <div><h2 className="text-xl font-bold">Assignments</h2><p className="text-sm text-slate-500">Assign existing projects to resources and crews.</p></div>
               <div className="flex flex-wrap gap-3">
                 <button onClick={() => setShowAssignments((c) => !c)} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">{showAssignments ? "Collapse" : "Expand"}</button>
-                <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importAssignmentsCsv} className="hidden" /></label>
-                <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><ClipboardCheck size={17} /> Assign</button>
+                {canWrite && <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importAssignmentsCsv} className="hidden" /></label>}
+                {canWrite && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><ClipboardCheck size={17} /> Assign</button>}
               </div>
             </div>
             {showAssignments && (
@@ -4566,8 +4575,12 @@ export default function App() {
                           <td className="p-3">{getAssignmentCrewDisplayNames(assignment, crews).join(", ")}</td>
                           <td className="p-3">{(assignment.mobilizations || []).map((m, i) => `#${i + 1}: ${formatDate(m.start)} - ${formatDate(m.end)}`).join("; ")}</td>
                           <td className="p-3 text-right">
-                            <button onClick={() => openEditAssignmentForm(assignment)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button>
-                            <button onClick={() => deleteAssignment(assignment.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button>
+                            {canWrite ? (
+                              <>
+                                <button onClick={() => openEditAssignmentForm(assignment)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Edit</button>
+                                <button onClick={() => deleteAssignment(assignment.id)} className="rounded-lg border border-red-200 px-3 py-1.5 font-medium text-red-700 hover:bg-red-50">Delete</button>
+                              </>
+                            ) : <span className="text-xs text-slate-400">View only</span>}
                           </td>
                         </tr>
                       );
@@ -5422,7 +5435,7 @@ export default function App() {
                             timeline={timeline}
                             crews={crews}
                             onLabelClick={() => openEditAssignmentForm(row.assignment)}
-                            onDragEnd={handleProjectGanttDragEnd}
+                            onDragEnd={canWrite ? handleProjectGanttDragEnd : undefined}
                           />
                         </div>
                       ))}
@@ -5613,11 +5626,11 @@ export default function App() {
               </div>
               <button onClick={exportForecastCsv} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">Export CSV</button>
               <button onClick={exportForecastPdf} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">Export PDF</button>
-              <CmicRefreshContracts projects={projects} forecastData={forecastData} onApplied={() => loadSupabaseData()} />
-              <button onClick={recalculateAll} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 shadow-sm">↻ Recalculate</button>
-              <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm cursor-pointer">
+              {canWrite && <CmicRefreshContracts projects={projects} forecastData={forecastData} onApplied={() => loadSupabaseData()} />}
+              {canWrite && <button onClick={recalculateAll} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 shadow-sm">↻ Recalculate</button>}
+              {canWrite && <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm cursor-pointer">
                 Import CSV<input type="file" accept=".csv" onChange={importForecastCsv} className="hidden" />
-              </label>
+              </label>}
               <button onClick={() => setShowForecastSettings(true)} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">
                 <Settings size={16} /> Settings {globalLockThrough ? `· 🔒 ${globalLockThrough}` : ""}
               </button>
