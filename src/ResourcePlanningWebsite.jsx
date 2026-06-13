@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from "react";
-import { Plus, Trash2, Users, BriefcaseBusiness, X, ZoomIn, Settings, FolderKanban, ClipboardCheck, Search, Sparkles } from "lucide-react";
+import { Plus, Trash2, Users, BriefcaseBusiness, X, ZoomIn, Settings, FolderKanban, ClipboardCheck, Search, Sparkles, AlertTriangle, BadgeCheck, Calendar } from "lucide-react";
 import { supabase } from "./lib/supabase";
 import ClaudeAssistant from "./components/ClaudeAssistant";
 import CmicPullProjects from "./components/CmicPullProjects";
@@ -2492,6 +2492,14 @@ export default function App() {
   const [showUnassignedNeedRows, setShowUnassignedNeedRows] = useState(false);
   const [certAlertModal, setCertAlertModal] = useState(null);
 
+  // ── Saved views + summary banner state ─────────────────────────────────────
+  const [savedViews, setSavedViews] = useState([]);
+  const [activeSavedViewId, setActiveSavedViewId] = useState(null);
+  const [showSaveViewModal, setShowSaveViewModal] = useState(false);
+  const [newViewName, setNewViewName] = useState("");
+  const [summaryBannerDismissed, setSummaryBannerDismissed] = useState(false);
+  const [conflictModal, setConflictModal] = useState(null); // 'conflicts' | 'pto' | null
+
   // ── Forecast state ─────────────────────────────────────────────────────────
   const [forecastData, setForecastData] = useState({});
   const [globalLockThrough, setGlobalLockThrough] = useState(null);
@@ -2590,7 +2598,7 @@ export default function App() {
   useSupabaseRealtime({ setProjects, setResources, setCrews, setAssignments, setCertifications });
 
   // ── Load app users after login ─────────────────────────────────────────────
-  useEffect(() => { if (currentUser) { loadAppUsers(); loadProjectTypes(); } }, [currentUser]);
+  useEffect(() => { if (currentUser) { loadAppUsers(); loadProjectTypes(); loadSavedViews(); } }, [currentUser]);
 
   useEffect(() => {
     localStorage.setItem("ggc_project_types", JSON.stringify(projectTypes));
@@ -2897,6 +2905,100 @@ export default function App() {
   );
   const expiringCertificationRows = certificationAlertRows.filter((row) => row.status === "expiring").sort((a, b) => new Date(a.cert.expiration) - new Date(b.cert.expiration));
   const expiredCertificationRows = certificationAlertRows.filter((row) => row.status === "expired").sort((a, b) => new Date(a.cert.expiration) - new Date(b.cert.expiration));
+
+  // ── Attention rollups (feed the summary banner + conflict/PTO modal) ────────
+  // Computed from the UNFILTERED gantt item set so the banner reflects the true
+  // state of the schedule regardless of which dashboard filters are active.
+  const ROLE_FIELDS = ["projectManager", "superintendent", "fieldCoordinator", "fieldEngineer", "safety"];
+  // (reuses the resourceByName Map declared above)
+
+  // Group every scheduled item by the resource(s) staffing it.
+  const itemsByResourceName = (() => {
+    const m = new Map();
+    ganttItems.forEach((item) => {
+      if (!item.assignment || !item.start || !item.end) return;
+      ROLE_FIELDS.forEach((field) => {
+        const name = item.assignment[field];
+        if (!name) return;
+        if (!m.has(name)) m.set(name, []);
+        m.get(name).push({ item, role: field });
+      });
+    });
+    return m;
+  })();
+
+  // #1 Conflicts: a resource double-booked across two time-overlapping items.
+  const conflictRows = (() => {
+    const rows = [];
+    itemsByResourceName.forEach((entries, name) => {
+      const sorted = [...entries].sort((a, b) => toDate(a.item.start) - toDate(b.item.start));
+      for (let i = 0; i < sorted.length; i++) {
+        for (let j = i + 1; j < sorted.length; j++) {
+          const a = sorted[i].item, b = sorted[j].item;
+          // Skip two roles on the SAME mobilization (not a real conflict).
+          if (a.mobilizationId && b.mobilizationId && a.mobilizationId === b.mobilizationId) continue;
+          if (rangesOverlap(toDate(a.start), addDays(toDate(a.end), 1), toDate(b.start), addDays(toDate(b.end), 1))) {
+            rows.push({
+              resourceName: name,
+              resource: resourceByName.get(name) || null,
+              a, b,
+              roleA: sorted[i].role, roleB: sorted[j].role,
+            });
+          }
+        }
+      }
+    });
+    return rows;
+  })();
+
+  // #2 PTO collisions: a resource assigned to work during their own PTO window.
+  const ptoCollisionRows = (() => {
+    const rows = [];
+    itemsByResourceName.forEach((entries, name) => {
+      const res = resourceByName.get(name);
+      const ptoWindows = (res?.pto || []).filter((p) => p.start && p.end);
+      if (!ptoWindows.length) return;
+      entries.forEach(({ item, role }) => {
+        ptoWindows.forEach((pto) => {
+          if (rangesOverlap(toDate(item.start), addDays(toDate(item.end), 1), toDate(pto.start), addDays(toDate(pto.end), 1))) {
+            rows.push({ resourceName: name, resource: res, item, role, pto });
+          }
+        });
+      });
+    });
+    return rows;
+  })();
+
+  // Mobs starting this week / next week (Sunday-based weeks).
+  const mobWeekCounts = (() => {
+    const today = new Date();
+    const thisWeekStart = startOfWeek(today);
+    const nextWeekStart = addDays(thisWeekStart, 7);
+    const weekAfterStart = addDays(thisWeekStart, 14);
+    let thisWeek = 0, nextWeek = 0;
+    ganttItems.forEach((item) => {
+      if (!item.start || !item.mobilizationId) return;
+      const s = toDate(item.start);
+      if (s >= thisWeekStart && s < nextWeekStart) thisWeek++;
+      else if (s >= nextWeekStart && s < weekAfterStart) nextWeek++;
+    });
+    return { thisWeek, nextWeek };
+  })();
+
+  // Unassigned needs: total open role-slots across all mobilizations.
+  const unassignedNeedCount = assignments.reduce((sum, a) =>
+    sum + (a.mobilizations || []).reduce((s, mob) =>
+      s + normalizeUnassignedNeeds(mob.unassignedNeeds || mob._unassignedNeeds).length, 0), 0);
+
+  const attentionCounts = {
+    conflicts: conflictRows.length,
+    pto: ptoCollisionRows.length,
+    certs: expiringCertificationRows.length,
+    mobsThisWeek: mobWeekCounts.thisWeek,
+    mobsNextWeek: mobWeekCounts.nextWeek,
+    unassigned: unassignedNeedCount,
+  };
+  const attentionTotal = attentionCounts.conflicts + attentionCounts.pto + attentionCounts.certs + attentionCounts.unassigned;
   const sortedCrews = [...crews].filter((c) => {
     if (!crewSearch) return true;
     const q = crewSearch.toLowerCase();
@@ -4055,6 +4157,86 @@ export default function App() {
     setAppUsers(data || []);
   }
 
+  // ── Saved views ────────────────────────────────────────────────────────────
+  // A saved view captures the current page's filter + zoom + sort state so a
+  // user can flip between e.g. 'My Hardscape board' and 'Pending awards only'.
+  // Stored per-user in Supabase (RLS: each user sees only their own rows).
+  async function loadSavedViews() {
+    if (!supabase) return;
+    const { data, error } = await supabase.from("saved_views").select("*").order("created_at", { ascending: true });
+    if (error) { console.warn("Could not load saved views:", error); return; }
+    setSavedViews(data || []);
+  }
+
+  // Snapshot the filter/zoom/sort state relevant to the current page.
+  function captureViewConfig() {
+    return {
+      page,
+      divisionFilter, statusFilter,
+      zoom, resourceZoom, crewZoom, demandZoom,
+      dashboardResourceTypeFilter,
+      resourceTypeFilter,
+      projectTabDivisionFilter,
+      demandHomeDivisionFilter, demandResourceTypeFilter,
+      forecastDivisionFilter,
+      projectGanttSort, resourceGanttSort, crewGanttSort,
+      showUnassignedNeedRows,
+    };
+  }
+
+  // Apply a saved config back onto state. Guards each key so an older saved
+  // view missing a field doesn't blow away current state with undefined.
+  function applyViewConfig(cfg) {
+    if (!cfg) return;
+    if (cfg.page) setPage(cfg.page);
+    if (Array.isArray(cfg.divisionFilter)) setDivisionFilter(cfg.divisionFilter);
+    if (Array.isArray(cfg.statusFilter)) setStatusFilter(cfg.statusFilter);
+    if (cfg.zoom) setZoom(cfg.zoom);
+    if (cfg.resourceZoom) setResourceZoom(cfg.resourceZoom);
+    if (cfg.crewZoom) setCrewZoom(cfg.crewZoom);
+    if (cfg.demandZoom) setDemandZoom(cfg.demandZoom);
+    if (Array.isArray(cfg.dashboardResourceTypeFilter)) setDashboardResourceTypeFilter(cfg.dashboardResourceTypeFilter);
+    if (Array.isArray(cfg.resourceTypeFilter)) setResourceTypeFilter(cfg.resourceTypeFilter);
+    if (Array.isArray(cfg.projectTabDivisionFilter)) setProjectTabDivisionFilter(cfg.projectTabDivisionFilter);
+    if (Array.isArray(cfg.demandHomeDivisionFilter)) setDemandHomeDivisionFilter(cfg.demandHomeDivisionFilter);
+    if (Array.isArray(cfg.demandResourceTypeFilter)) setDemandResourceTypeFilter(cfg.demandResourceTypeFilter);
+    if (Array.isArray(cfg.forecastDivisionFilter)) setForecastDivisionFilter(cfg.forecastDivisionFilter);
+    if (cfg.projectGanttSort) setProjectGanttSort(cfg.projectGanttSort);
+    if (cfg.resourceGanttSort) setResourceGanttSort(cfg.resourceGanttSort);
+    if (cfg.crewGanttSort) setCrewGanttSort(cfg.crewGanttSort);
+    if (typeof cfg.showUnassignedNeedRows === "boolean") setShowUnassignedNeedRows(cfg.showUnassignedNeedRows);
+  }
+
+  async function saveCurrentView() {
+    const name = newViewName.trim();
+    if (!name) { alert("Give the view a name."); return; }
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    const config = captureViewConfig();
+    const { data, error } = await supabase.from("saved_views").insert({ name, page, config }).select().single();
+    if (error) { console.error(error); alert("Could not save view."); return; }
+    setSavedViews((cur) => [...cur, data]);
+    setActiveSavedViewId(data.id);
+    setShowSaveViewModal(false);
+    setNewViewName("");
+  }
+
+  function applySavedView(id) {
+    const v = savedViews.find((x) => x.id === id);
+    if (!v) { setActiveSavedViewId(null); return; }
+    applyViewConfig(v.config);
+    setActiveSavedViewId(id);
+  }
+
+  async function deleteSavedView(id) {
+    if (!supabase) return;
+    const v = savedViews.find((x) => x.id === id);
+    if (!confirm(`Delete saved view "${v?.name || "this view"}"?`)) return;
+    const { error } = await supabase.from("saved_views").delete().eq("id", id);
+    if (error) { console.error(error); alert("Could not delete view."); return; }
+    setSavedViews((cur) => cur.filter((x) => x.id !== id));
+    if (activeSavedViewId === id) setActiveSavedViewId(null);
+  }
+
   async function loadProjectTypes() {
     if (!supabase) return;
     const { data, error } = await supabase.from("project_types").select("name").order("name", { ascending: true });
@@ -4496,6 +4678,23 @@ export default function App() {
               ))}
             </nav>
             <div className="flex shrink-0 items-center gap-2">
+              {["projectDash", "resourceDash", "crewDash"].includes(page) && (
+                <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5">
+                  <select
+                    value={activeSavedViewId || ""}
+                    onChange={(e) => { const v = e.target.value; if (v) applySavedView(v); else setActiveSavedViewId(null); }}
+                    title="Saved views"
+                    className="max-w-[160px] rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600"
+                  >
+                    <option value="">Saved views…</option>
+                    {savedViews.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                  </select>
+                  {activeSavedViewId && (
+                    <button onClick={() => deleteSavedView(activeSavedViewId)} title="Delete this view" className="rounded-lg p-1 text-red-600 hover:bg-red-50"><Trash2 size={15} /></button>
+                  )}
+                  <button onClick={() => { setNewViewName(""); setShowSaveViewModal(true); }} title="Save current filters as a view" className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm font-semibold text-slate-700 hover:bg-slate-100">Save view</button>
+                </div>
+              )}
               {page === "projectDash" && canWrite && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><ClipboardCheck size={18} /> Assign</button>}
               {page === "setup" && setupTab === "projects" && canWrite && (
                 <>
@@ -4509,6 +4708,49 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* ── Attention banner + saved views (dashboard pages only) ── */}
+      {["projectDash", "resourceDash", "crewDash"].includes(page) && !summaryBannerDismissed && (
+        <div className="border-b border-amber-200 bg-amber-50">
+          <div className="mx-auto flex max-w-[1700px] flex-wrap items-center gap-2 px-4 py-2.5">
+            <span className="mr-1 text-xs font-bold uppercase tracking-wide text-amber-800">Needs attention</span>
+            {attentionCounts.conflicts > 0 && (
+              <button onClick={() => setConflictModal("conflicts")} className="flex items-center gap-1.5 rounded-full border border-red-300 bg-red-100 px-3 py-1 text-xs font-semibold text-red-800 hover:bg-red-200">
+                <AlertTriangle size={13} /> {attentionCounts.conflicts} conflict{attentionCounts.conflicts === 1 ? "" : "s"}
+              </button>
+            )}
+            {attentionCounts.pto > 0 && (
+              <button onClick={() => setConflictModal("pto")} className="flex items-center gap-1.5 rounded-full border border-orange-300 bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-800 hover:bg-orange-200">
+                <AlertTriangle size={13} /> {attentionCounts.pto} PTO collision{attentionCounts.pto === 1 ? "" : "s"}
+              </button>
+            )}
+            {attentionCounts.certs > 0 && (
+              <button onClick={() => { setPage("resourceDash"); setCertAlertModal("expiring"); }} className="flex items-center gap-1.5 rounded-full border border-yellow-300 bg-yellow-100 px-3 py-1 text-xs font-semibold text-yellow-800 hover:bg-yellow-200">
+                <BadgeCheck size={13} /> {attentionCounts.certs} cert{attentionCounts.certs === 1 ? "" : "s"} expiring
+              </button>
+            )}
+            {attentionCounts.mobsThisWeek > 0 && (
+              <span className="flex items-center gap-1.5 rounded-full border border-sky-300 bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-800">
+                <Calendar size={13} /> {attentionCounts.mobsThisWeek} mob{attentionCounts.mobsThisWeek === 1 ? "" : "s"} this week
+              </span>
+            )}
+            {attentionCounts.mobsNextWeek > 0 && (
+              <span className="flex items-center gap-1.5 rounded-full border border-indigo-300 bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800">
+                <Calendar size={13} /> {attentionCounts.mobsNextWeek} next week
+              </span>
+            )}
+            {attentionCounts.unassigned > 0 && (
+              <span className="flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                <Users size={13} /> {attentionCounts.unassigned} unassigned need{attentionCounts.unassigned === 1 ? "" : "s"}
+              </span>
+            )}
+            {attentionTotal === 0 && attentionCounts.mobsThisWeek === 0 && attentionCounts.mobsNextWeek === 0 && (
+              <span className="text-xs font-medium text-emerald-700">All clear — no conflicts, collisions, or expiring certs.</span>
+            )}
+            <button onClick={() => setSummaryBannerDismissed(true)} title="Dismiss" className="ml-auto rounded-lg p-1 text-amber-700 hover:bg-amber-200"><X size={15} /></button>
+          </div>
+        </div>
+      )}
 
       {/* ── Setup: Crews ── */}
       {page === "setup" && setupTab === "crews" && (
@@ -6099,6 +6341,91 @@ export default function App() {
           </div>
         );
       })()}
+
+      {/* ── Conflict / PTO collision detail modal ── */}
+      {conflictModal && (() => {
+        const isPto = conflictModal === "pto";
+        const title = isPto ? "PTO Collisions" : "Scheduling Conflicts";
+        const subtitle = isPto
+          ? "Resources assigned to work during their own approved PTO."
+          : "Resources double-booked across two overlapping assignments.";
+        const roleLabel = (f) => ({ projectManager: "PM", superintendent: "Super", fieldCoordinator: "Field Coord", fieldEngineer: "Field Eng", safety: "Safety" }[f] || f);
+        const itemDesc = (it) => `${it.project?.projectNumber ? it.project.projectNumber + " · " : ""}${it.project?.name || "—"}`;
+        return (
+          <div className="fixed inset-0 z-[88] flex items-center justify-center bg-slate-950/60 p-4">
+            <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="flex items-center justify-between border-b border-slate-200 p-5">
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900">{title}</h2>
+                  <p className="text-sm text-slate-500">{subtitle}</p>
+                </div>
+                <button onClick={() => setConflictModal(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
+              </div>
+              <div className="overflow-auto p-5">
+                {isPto ? (
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-100 text-slate-600">
+                      <tr><th className="p-3">Resource</th><th className="p-3">Role</th><th className="p-3">Assignment</th><th className="p-3">Assignment Dates</th><th className="p-3">PTO Window</th></tr>
+                    </thead>
+                    <tbody>
+                      {ptoCollisionRows.map((row, i) => (
+                        <tr key={i} className="border-t border-slate-200">
+                          <td className="p-3 font-semibold text-slate-900">{row.resourceName}</td>
+                          <td className="p-3">{roleLabel(row.role)}</td>
+                          <td className="p-3">{itemDesc(row.item)}</td>
+                          <td className="p-3 whitespace-nowrap">{formatDate(row.item.start)} – {formatDate(row.item.end)}</td>
+                          <td className="p-3 whitespace-nowrap text-orange-700 font-semibold">{formatDate(row.pto.start)} – {formatDate(row.pto.end)}</td>
+                        </tr>
+                      ))}
+                      {ptoCollisionRows.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400">No PTO collisions.</td></tr>}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-100 text-slate-600">
+                      <tr><th className="p-3">Resource</th><th className="p-3">Assignment A</th><th className="p-3">Dates A</th><th className="p-3">Assignment B</th><th className="p-3">Dates B</th></tr>
+                    </thead>
+                    <tbody>
+                      {conflictRows.map((row, i) => (
+                        <tr key={i} className="border-t border-slate-200">
+                          <td className="p-3 font-semibold text-slate-900">{row.resourceName}</td>
+                          <td className="p-3">{itemDesc(row.a)} <span className="text-slate-400">({roleLabel(row.roleA)})</span></td>
+                          <td className="p-3 whitespace-nowrap">{formatDate(row.a.start)} – {formatDate(row.a.end)}</td>
+                          <td className="p-3">{itemDesc(row.b)} <span className="text-slate-400">({roleLabel(row.roleB)})</span></td>
+                          <td className="p-3 whitespace-nowrap text-red-700 font-semibold">{formatDate(row.b.start)} – {formatDate(row.b.end)}</td>
+                        </tr>
+                      ))}
+                      {conflictRows.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400">No conflicts.</td></tr>}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Save current view modal ── */}
+      {showSaveViewModal && (
+        <div className="fixed inset-0 z-[112] flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-slate-900">Save current view</h2>
+            <p className="mt-1 text-sm text-slate-500">Captures the current filters, zoom, and sort on this dashboard so you can return to it later.</p>
+            <input
+              autoFocus
+              value={newViewName}
+              onChange={(e) => setNewViewName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") saveCurrentView(); }}
+              placeholder="View name (e.g. My Hardscape board)"
+              className="mt-4 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-600"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => { setShowSaveViewModal(false); setNewViewName(""); }} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Cancel</button>
+              <button onClick={saveCurrentView} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Forms */}
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} onDelete={() => deleteProject(editingProjectId)} editing={Boolean(editingProjectId)} certifications={certifications} projectTypes={projectTypes} />}
