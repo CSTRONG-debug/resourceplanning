@@ -684,9 +684,16 @@ export function SearchableResourceSelect({ value, onChange, resources, resourceT
   useCloseDropdown(setOpen, containerRef);
   useEffect(() => setQuery(value || ""), [value]);
 
+  // resourceType may be a single type string or an array of accepted
+  // types (e.g. Superintendent + General Superintendent share one slot).
+  const typeMatches = (r) => {
+    if (!resourceType) return true;
+    return Array.isArray(resourceType)
+      ? resourceType.includes(r.resourceType)
+      : r.resourceType === resourceType;
+  };
   const filtered = resources.filter(
-    (r) => (resourceType ? r.resourceType === resourceType : true) &&
-      r.name.toLowerCase().includes(query.toLowerCase())
+    (r) => typeMatches(r) && r.name.toLowerCase().includes(query.toLowerCase())
   );
 
   return (
@@ -1162,7 +1169,7 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, onDelete, edit
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className="space-y-1">
                         <span className="text-xs font-medium text-slate-600">Superintendent</span>
-                        <SearchableResourceSelect value={mob.superintendent || ""} onChange={(v) => updateMobilization(mob.id, "superintendent", v)} resources={resources} resourceType="Superintendent" placeholder="Search superintendent..." />
+                        <SearchableResourceSelect value={mob.superintendent || ""} onChange={(v) => updateMobilization(mob.id, "superintendent", v)} resources={resources} resourceType={["Superintendent", "General Superintendent"]} placeholder="Search superintendent / general super..." />
                       </label>
                       <label className="space-y-1">
                         <span className="text-xs font-medium text-slate-600">Field Coordinator</span>
