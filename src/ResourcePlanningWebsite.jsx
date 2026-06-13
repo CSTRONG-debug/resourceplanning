@@ -1408,7 +1408,7 @@ export function GanttHeader({ timeline, zoom }) {
   const todayLeft = getTodayLeftPx(timeline);
   return (
     <div
-      className="flex border-b border-slate-200 pb-2"
+      className="sticky top-0 z-40 flex border-b border-slate-200 bg-white pb-2"
       style={{ width: `${timeline.width + 260}px` }}
     >
       <div className="sticky left-0 z-30 h-10 w-[320px] shrink-0 bg-white" />
@@ -1603,9 +1603,23 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
   }
 
   const project = item.project;
-  const colorClass = project.status === "Pending Award"
-    ? pendingDivisionStyles[project.division] || "bg-slate-300"
-    : divisionStyles[project.division] || "bg-slate-700";
+
+  // Per-mobilization crew presence. getAssignmentCrewIds prefers the
+  // mob-level _crewIds array that buildGanttItems sets, so this is scoped
+  // to THIS mobilization, not the whole assignment.
+  const mobCrewIds = getAssignmentCrewIds(item.assignment || {});
+  const hasSuper = !!(item.assignment?.superintendent && String(item.assignment.superintendent).trim());
+  // "Needs crew": a normal (non crew-only) mob that has a superintendent
+  // but no crew assigned on this mobilization. Rendered with border + dark
+  // square hatch and NO division fill, so it reads as "staffed but missing
+  // a crew" — the visual inverse of a crew-only bar (which keeps its fill).
+  const needsCrew = !item.isCrewOnly && hasSuper && mobCrewIds.length === 0;
+
+  const colorClass = needsCrew
+    ? "bg-transparent"
+    : project.status === "Pending Award"
+      ? pendingDivisionStyles[project.division] || "bg-slate-300"
+      : divisionStyles[project.division] || "bg-slate-700";
 
   const [dragState, setDragState] = React.useState(null); // null | {mode, startPxX, origStart, origEnd, currStart, currEnd}
   const containerRef = React.useRef(null);
@@ -1625,14 +1639,17 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
     setDragState({
       mode,
       startPxX,
+      pointerId: e.pointerId,
       origStart: item.start,
       origEnd: item.end,
       currStart: item.start,
       currEnd: item.end,
     });
 
-    // Capture pointer so dragging continues even if the cursor leaves the bar.
-    e.currentTarget.setPointerCapture?.(e.pointerId);
+    // ALWAYS capture on the root container (which owns onPointerMove/Up),
+    // never on the small edge-handle children. This makes middle-drag and
+    // edge-drag behave identically — move/up events route to the root.
+    containerRef.current?.setPointerCapture?.(e.pointerId);
   }
 
   function onPointerMove(e) {
@@ -1669,6 +1686,7 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
 
   function onPointerUp(e) {
     if (!dragState) return;
+    containerRef.current?.releasePointerCapture?.(dragState.pointerId ?? e.pointerId);
     const moved = dragState.currStart !== dragState.origStart || dragState.currEnd !== dragState.origEnd;
     const finalState = { ...dragState };
     setDragState(null);
@@ -1696,16 +1714,33 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
     backgroundSize: "14px 14px, 14px 14px",
   } : null;
 
+  // Super-but-no-crew: transparent fill + division-colored border + dark
+  // square hatch. Uses the division SVG color so the border/hatch still
+  // reads as the right division. Falls back to slate.
+  const needsCrewColor = divisionSvgColors[project.division] || "#475569";
+  const needsCrewOverlayStyle = needsCrew ? {
+    border: `2px solid ${needsCrewColor}`,
+    backgroundColor: "transparent",
+    backgroundImage: `repeating-linear-gradient(0deg, transparent 0 6px, ${needsCrewColor}59 6px 8px), repeating-linear-gradient(90deg, transparent 0 6px, ${needsCrewColor}59 6px 8px)`,
+    backgroundSize: "14px 14px, 14px 14px",
+  } : null;
+
   return (
     <div
       ref={containerRef}
-      className={`absolute top-0 h-7 overflow-visible rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm text-white ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
-      style={{ left: `${left}px`, width: `${width}px`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none", ...(crewOnlyOverlayStyle || {}) }}
+      className={`absolute top-0 h-7 overflow-visible rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm ${needsCrew ? "text-slate-900" : "text-white"} ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
+      style={{ left: `${left}px`, width: `${width}px`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none", ...(crewOnlyOverlayStyle || {}), ...(needsCrewOverlayStyle || {}) }}
       onPointerDown={(e) => onPointerDown("middle", e)}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      title={item.isCrewOnly ? `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nCrew-only mobilization (no named roles)\nDrag bar to shift • Drag edges to resize` : `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nDrag bar to shift • Drag edges to resize`}
+      title={
+        item.isCrewOnly
+          ? `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nCrew-only mobilization (no named roles)\nDrag bar to shift • Drag edges to resize`
+          : needsCrew
+            ? `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nSuperintendent assigned • NO CREW on this mobilization\nDrag bar to shift • Drag edges to resize`
+            : `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nDrag bar to shift • Drag edges to resize`
+      }
     >
       {/* Left edge handle — narrower so the bar's middle has a bigger hit
           zone. Visible on hover so the user knows it's grabbable. */}
@@ -1728,7 +1763,7 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
         </span>
       ) : (
         <span
-          className="block overflow-hidden whitespace-nowrap px-2.5"
+          className="pointer-events-none block overflow-hidden whitespace-nowrap px-2.5"
           style={left < 0 ? { paddingLeft: `${-left + 10}px` } : undefined}
         >
           {label || "Unassigned"}
@@ -4516,7 +4551,7 @@ export default function App() {
                 <p className="mt-1 text-xs text-slate-500">Pending Awards always stay at the bottom.</p>
               </label>
             </div>
-            <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
+            <div className="overflow-auto rounded-xl border border-slate-200 p-4 max-h-[70vh]">
               <GanttHeader timeline={timeline} zoom={zoom} />
               <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
                 {/* Backdrop: weekend bands + today line. Offset 260px to skip sticky label column. */}
@@ -4657,7 +4692,7 @@ export default function App() {
                 <button onClick={() => exportSectionScreenshotPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
               </div>
             </div>
-            <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
+            <div className="overflow-auto rounded-xl border border-slate-200 p-4 max-h-[70vh]">
               <GanttHeader timeline={resourceTimeline} zoom={resourceZoom} />
               <div className="relative mt-3" style={{ minWidth: `${resourceTimeline.width + 340}px` }}>
                 <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${resourceTimeline.width}px` }}>
@@ -4789,7 +4824,7 @@ export default function App() {
                 </select>
               </div>
             </div>
-            <div className="overflow-x-auto rounded-xl border border-slate-200 p-4">
+            <div className="overflow-auto rounded-xl border border-slate-200 p-4 max-h-[70vh]">
               <GanttHeader timeline={crewTimeline} zoom={crewZoom} />
               <div className="relative mt-3" style={{ minWidth: `${crewTimeline.width + 340}px` }}>
                 <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${crewTimeline.width}px` }}>
@@ -5912,3 +5947,4 @@ export default function App() {
     </main>
   );
 }
+
