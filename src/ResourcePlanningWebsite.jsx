@@ -2933,6 +2933,8 @@ export default function App() {
   const CONFLICT_ROLES = new Set(["superintendent", "fieldCoordinator"]);
   const conflictRows = (() => {
     const rows = [];
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     itemsByResourceName.forEach((entries, name) => {
       const sorted = [...entries].filter((e) => CONFLICT_ROLES.has(e.role)).sort((a, b) => toDate(a.item.start) - toDate(b.item.start));
       for (let i = 0; i < sorted.length; i++) {
@@ -2941,6 +2943,11 @@ export default function App() {
           // Skip two roles on the SAME mobilization (not a real conflict).
           if (a.mobilizationId && b.mobilizationId && a.mobilizationId === b.mobilizationId) continue;
           if (rangesOverlap(toDate(a.start), addDays(toDate(a.end), 1), toDate(b.start), addDays(toDate(b.end), 1))) {
+            // Skip conflicts whose overlap has already fully passed — only
+            // surface ones still active or upcoming. The overlap ends at the
+            // EARLIER of the two end dates; if that's before today, it's done.
+            const overlapEnd = toDate(a.end) < toDate(b.end) ? toDate(a.end) : toDate(b.end);
+            if (overlapEnd < todayStart) continue;
             rows.push({
               resourceName: name,
               resource: resourceByName.get(name) || null,
@@ -4224,9 +4231,11 @@ export default function App() {
     const name = newViewName.trim();
     if (!name) { alert("Give the view a name."); return; }
     if (!supabase) { alert("Supabase is not connected."); return; }
+    const userId = session?.user?.id;
+    if (!userId) { alert("You must be signed in to save a view."); return; }
     const config = captureViewConfig();
-    const { data, error } = await supabase.from("saved_views").insert({ name, page, config }).select().single();
-    if (error) { console.error(error); alert("Could not save view."); return; }
+    const { data, error } = await supabase.from("saved_views").insert({ user_id: userId, name, page, config }).select().single();
+    if (error) { console.error(error); alert(`Could not save view: ${error.message}`); return; }
     setSavedViews((cur) => [...cur, data]);
     setActiveSavedViewId(data.id);
     setShowSaveViewModal(false);
