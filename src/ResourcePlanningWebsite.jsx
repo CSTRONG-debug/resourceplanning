@@ -1675,7 +1675,7 @@ export function PtoOverlayBar({ pto, timeline }) {
 // whose `id` doesn't correspond to a real DB mobilization. Falls back to a
 // plain GanttSegmentBar in those cases.
 
-export function DraggableGanttBar({ item, timeline, label, fullLabel, laneTop = 0, onDragEnd }) {
+export function DraggableGanttBar({ item, timeline, label, fullLabel, showLabel = true, laneTop = 0, onDragEnd }) {
   // Skip drag wiring entirely for unassigned-need rows or when no callback
   // was provided (= drag disabled by parent).
   if (!onDragEnd || item.isUnassignedNeed || !item.mobilizationId) {
@@ -1845,25 +1845,17 @@ export function DraggableGanttBar({ item, timeline, label, fullLabel, laneTop = 
           new mobilization begins. Sits above the fill, below the label. */}
       <div className="pointer-events-none absolute left-0 top-0 z-10 h-full w-px bg-slate-900/40" />
       <div className="pointer-events-none absolute right-0 top-0 z-10 h-full w-px bg-slate-900/40" />
-      {/* Label is never clipped by bar width or a neighboring bar. We
-          render it overflow-visible; when the text is wider than the bar
-          it spills past the right edge over a subtle white pill so it
-          stays legible against whatever is behind it. Full (un-abbreviated)
-          name is on the title tooltip. Narrow bars push the label to start
-          just inside the left edge; off-screen-left bars pull it into view. */}
-      <span
-        className="pointer-events-none absolute top-0 left-0 z-20 max-w-[60vw] whitespace-nowrap rounded px-2.5 leading-7"
-        style={{
-          paddingLeft: left < 0 ? `${-left + 10}px` : undefined,
-          // When the label is likely wider than a very narrow bar, give it
-          // a translucent backdrop so the overflow stays readable.
-          background: width < 90 ? "rgba(255,255,255,0.92)" : "transparent",
-          color: width < 90 ? "#334155" : undefined,
-          boxShadow: width < 90 ? "0 1px 2px rgba(0,0,0,0.08)" : undefined,
-        }}
-      >
-        {label || "Unassigned"}
-      </span>
+      {/* On-bar label — only shown when the parent decided it FITS inside
+          the bar (showLabel). Otherwise the label is rendered in a stacked
+          row beneath the bar by ProjectGanttRow, so we render nothing here
+          and let that below-row + leader line carry it. Clipped to the bar. */}
+      {showLabel && (
+        <span
+          className="pointer-events-none absolute inset-0 z-20 overflow-hidden whitespace-nowrap px-2.5 leading-7"
+        >
+          {label || "Unassigned"}
+        </span>
+      )}
       {/* Live tooltip while dragging — positions above the bar */}
       {dragState && (
         <div className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-white shadow-lg">
@@ -1888,11 +1880,11 @@ function toIsoDate(d) {
 // ─── ProjectGanttRow ──────────────────────────────────────────────────────────
 
 // Approx pixel width of a bar label at the 11px semibold gantt font. Used to
-// reserve horizontal space when packing bars into lanes so labels that spill
-// past a short bar don't collide with a neighboring bar's label.
+// decide whether a label fits inside its bar; if not, it drops to a label
+// row beneath the bar with a leader line pointing to where it belongs.
 const GANTT_LABEL_PX_PER_CHAR = 6.2;
 function estimateLabelWidthPx(label) {
-  return Math.ceil(String(label || "").length * GANTT_LABEL_PX_PER_CHAR) + 12;
+  return Math.ceil(String(label || "").length * GANTT_LABEL_PX_PER_CHAR) + 16;
 }
 
 // Build the on-bar (abbreviated) and hover (full) labels for one item.
@@ -1920,40 +1912,39 @@ function buildItemLabels(item, crews) {
   };
 }
 
-// Lane height in px (bar is h-7 = 28px; add 2px breathing room between lanes).
-const GANTT_LANE_PX = 30;
+// Heights for the single-track project row + stacked below-label rows.
+const GANTT_BAR_PX = 28;        // the one bar track
+const GANTT_BELOW_ROW_PX = 22;  // each stacked label-below row
 
 export function ProjectGanttRow({ assignment, project, items, timeline, crews, onDragEnd, onLabelClick }) {
-  // Pack items into lanes so labels never stack on top of each other. An
-  // item reserves the WIDER of its bar width or its label width, starting at
-  // its left edge — so a 1-day mob with a long label still claims the space
-  // its label needs. Anything that would collide drops to the next lane down,
-  // which makes the row taller. Same idea as the Crew Gantt's lane logic, but
-  // collision is tested on label-aware pixel spans, not just date overlap.
-  const placed = items.map((item) => {
+  // ONE bar per project row. Every mobilization bar sits on the same track.
+  // For each bar we decide whether its label fits inside the bar width; if
+  // it does, the label rides on the bar. If it does NOT fit, the label drops
+  // to a row beneath the bar with a leader line pointing up to the bar's
+  // left edge. Multiple non-fitting labels stack on successive below-rows so
+  // they never overlap each other.
+  const prepared = items.map((item) => {
     const labels = buildItemLabels(item, crews);
     const span = timelineSpanPixels(item.start, item.end, timeline);
-    const left = span.left;
-    const reserved = Math.max(span.width, estimateLabelWidthPx(labels.label));
-    return { item, labels, left, right: left + reserved, barWidth: span.width };
+    const labelW = estimateLabelWidthPx(labels.label);
+    // Fits if the bar is wide enough to hold the label with padding. Narrow
+    // bars (off-screen-left or 1-day) never fit and go below.
+    const fits = span.width >= labelW && span.left >= 0;
+    return { item, labels, span, fits };
   });
-  // Sort by left edge for stable greedy packing.
-  placed.sort((a, b) => a.left - b.left);
-  const laneRights = []; // right edge currently occupied in each lane
-  placed.forEach((p) => {
-    let laneIndex = laneRights.findIndex((r) => p.left >= r + 6);
-    if (laneIndex === -1) { laneIndex = laneRights.length; laneRights.push(0); }
-    laneRights[laneIndex] = p.right;
-    p.lane = laneIndex;
-  });
-  const laneCount = Math.max(1, laneRights.length);
-  const rowHeight = laneCount * GANTT_LANE_PX;
+
+  // Assign each non-fitting label to a stacked below-row index, ordered by
+  // bar left edge so the leaders don't cross.
+  const belowItems = prepared.filter((p) => !p.fits).sort((a, b) => a.span.left - b.span.left);
+  belowItems.forEach((p, idx) => { p.belowRow = idx; });
+  const belowCount = belowItems.length;
+  const rowHeight = GANTT_BAR_PX + belowCount * GANTT_BELOW_ROW_PX + (belowCount ? 6 : 0);
 
   return (
     <div className="grid grid-cols-[320px_1fr] items-start gap-0">
       <button
         onClick={onLabelClick}
-        className="sticky left-0 z-20 bg-white pr-3 text-left hover:bg-slate-50 overflow-hidden flex items-center"
+        className="sticky left-0 z-20 bg-white pr-3 text-left hover:bg-slate-50 overflow-hidden flex items-start pt-1"
         style={{ height: `${rowHeight}px` }}
       >
         <div className="flex items-center gap-2">
@@ -1964,17 +1955,47 @@ export function ProjectGanttRow({ assignment, project, items, timeline, crews, o
         </div>
       </button>
       <div className="relative rounded-md" style={{ width: `${timeline.width}px`, height: `${rowHeight}px` }}>
-        {placed.map((p) => (
+        {/* The single bar track */}
+        {prepared.map((p) => (
           <DraggableGanttBar
             key={p.item.id}
             item={p.item}
             timeline={timeline}
             label={p.labels.label}
             fullLabel={p.labels.fullLabel}
-            laneTop={p.lane * GANTT_LANE_PX}
+            showLabel={p.fits}
+            laneTop={0}
             onDragEnd={onDragEnd}
           />
         ))}
+        {/* Stacked label rows below the bar, each with a leader line up to
+            the bar segment it describes. Positioned so the label box starts
+            at (or clamped into view from) its bar's left edge. */}
+        {belowItems.map((p) => {
+          const barLeft = Math.max(0, p.span.left);
+          const rowTop = GANTT_BAR_PX + 6 + p.belowRow * GANTT_BELOW_ROW_PX;
+          return (
+            <div key={`below-${p.item.id}`}>
+              {/* leader: vertical drop from bar bottom to this row, then a
+                  short stub to the label */}
+              <div
+                className="pointer-events-none absolute z-10 border-l border-slate-400"
+                style={{ left: `${barLeft}px`, top: `${GANTT_BAR_PX}px`, height: `${rowTop - GANTT_BAR_PX + 8}px` }}
+              />
+              <div
+                className="pointer-events-none absolute z-10 border-t border-slate-400"
+                style={{ left: `${barLeft}px`, top: `${rowTop + 8}px`, width: "10px" }}
+              />
+              <span
+                className="pointer-events-auto absolute z-10 whitespace-nowrap rounded bg-white px-1.5 text-[11px] font-semibold leading-[18px] text-slate-700 shadow-sm ring-1 ring-slate-200"
+                style={{ left: `${barLeft + 12}px`, top: `${rowTop}px` }}
+                title={p.labels.fullLabel}
+              >
+                {p.labels.label}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
