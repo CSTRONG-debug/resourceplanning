@@ -2928,10 +2928,13 @@ export default function App() {
   })();
 
   // #1 Conflicts: a resource double-booked across two time-overlapping items.
+  // Only Superintendents and Field Coordinators count — PMs, Safety, and Field
+  // Engineers routinely span multiple jobs at once, so overlaps there are normal.
+  const CONFLICT_ROLES = new Set(["superintendent", "fieldCoordinator"]);
   const conflictRows = (() => {
     const rows = [];
     itemsByResourceName.forEach((entries, name) => {
-      const sorted = [...entries].sort((a, b) => toDate(a.item.start) - toDate(b.item.start));
+      const sorted = [...entries].filter((e) => CONFLICT_ROLES.has(e.role)).sort((a, b) => toDate(a.item.start) - toDate(b.item.start));
       for (let i = 0; i < sorted.length; i++) {
         for (let j = i + 1; j < sorted.length; j++) {
           const a = sorted[i].item, b = sorted[j].item;
@@ -2951,52 +2954,62 @@ export default function App() {
     return rows;
   })();
 
-  // #2 PTO collisions: a resource assigned to work during their own PTO window.
+  // #2 Upcoming PTO: any resource PTO window that STARTS within the next 60 days.
   const ptoCollisionRows = (() => {
     const rows = [];
-    itemsByResourceName.forEach((entries, name) => {
-      const res = resourceByName.get(name);
-      const ptoWindows = (res?.pto || []).filter((p) => p.start && p.end);
-      if (!ptoWindows.length) return;
-      entries.forEach(({ item, role }) => {
-        ptoWindows.forEach((pto) => {
-          if (rangesOverlap(toDate(item.start), addDays(toDate(item.end), 1), toDate(pto.start), addDays(toDate(pto.end), 1))) {
-            rows.push({ resourceName: name, resource: res, item, role, pto });
-          }
-        });
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const horizon = addDays(todayStart, 60);
+    resources.forEach((res) => {
+      (res.pto || []).filter((p) => p.start && p.end).forEach((pto) => {
+        const s = toDate(pto.start);
+        if (s >= todayStart && s <= horizon) {
+          rows.push({ resourceName: res.name, resource: res, pto });
+        }
       });
     });
+    rows.sort((a, b) => toDate(a.pto.start) - toDate(b.pto.start));
     return rows;
   })();
 
-  // Mobs starting this week / next week (Sunday-based weeks).
-  const mobWeekCounts = (() => {
+  // Mobs starting this week / next week (Sunday-based weeks). Keep the actual
+  // item rows so the banner chips can open a breakdown.
+  const mobWeekRows = (() => {
     const today = new Date();
     const thisWeekStart = startOfWeek(today);
     const nextWeekStart = addDays(thisWeekStart, 7);
     const weekAfterStart = addDays(thisWeekStart, 14);
-    let thisWeek = 0, nextWeek = 0;
+    const thisWeek = [], nextWeek = [];
     ganttItems.forEach((item) => {
       if (!item.start || !item.mobilizationId) return;
       const s = toDate(item.start);
-      if (s >= thisWeekStart && s < nextWeekStart) thisWeek++;
-      else if (s >= nextWeekStart && s < weekAfterStart) nextWeek++;
+      if (s >= thisWeekStart && s < nextWeekStart) thisWeek.push(item);
+      else if (s >= nextWeekStart && s < weekAfterStart) nextWeek.push(item);
     });
+    const byStart = (a, b) => toDate(a.start) - toDate(b.start);
+    thisWeek.sort(byStart); nextWeek.sort(byStart);
     return { thisWeek, nextWeek };
   })();
 
-  // Unassigned needs: total open role-slots across all mobilizations.
-  const unassignedNeedCount = assignments.reduce((sum, a) =>
-    sum + (a.mobilizations || []).reduce((s, mob) =>
-      s + normalizeUnassignedNeeds(mob.unassignedNeeds || mob._unassignedNeeds).length, 0), 0);
+  // Unassigned needs: every open role-slot across all mobilizations, with context.
+  const unassignedNeedRows = assignments.flatMap((a) => {
+    const project = findProject(projects, a.projectId) || null;
+    return (a.mobilizations || []).flatMap((mob) =>
+      normalizeUnassignedNeeds(mob.unassignedNeeds || mob._unassignedNeeds).map((division) => ({
+        project, assignment: a, mob, division,
+        start: mob.start || "",
+        end: mob.end || "",
+      }))
+    );
+  });
 
   const attentionCounts = {
     conflicts: conflictRows.length,
     pto: ptoCollisionRows.length,
     certs: expiringCertificationRows.length,
-    mobsThisWeek: mobWeekCounts.thisWeek,
-    mobsNextWeek: mobWeekCounts.nextWeek,
-    unassigned: unassignedNeedCount,
+    mobsThisWeek: mobWeekRows.thisWeek.length,
+    mobsNextWeek: mobWeekRows.nextWeek.length,
+    unassigned: unassignedNeedRows.length,
   };
   const attentionTotal = attentionCounts.conflicts + attentionCounts.pto + attentionCounts.certs + attentionCounts.unassigned;
   const sortedCrews = [...crews].filter((c) => {
@@ -4721,7 +4734,7 @@ export default function App() {
             )}
             {attentionCounts.pto > 0 && (
               <button onClick={() => setConflictModal("pto")} className="flex items-center gap-1.5 rounded-full border border-orange-300 bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-800 hover:bg-orange-200">
-                <AlertTriangle size={13} /> {attentionCounts.pto} PTO collision{attentionCounts.pto === 1 ? "" : "s"}
+                <Calendar size={13} /> {attentionCounts.pto} PTO upcoming (60d)
               </button>
             )}
             {attentionCounts.certs > 0 && (
@@ -4730,19 +4743,19 @@ export default function App() {
               </button>
             )}
             {attentionCounts.mobsThisWeek > 0 && (
-              <span className="flex items-center gap-1.5 rounded-full border border-sky-300 bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-800">
+              <button onClick={() => setConflictModal("mobsThisWeek")} className="flex items-center gap-1.5 rounded-full border border-sky-300 bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-800 hover:bg-sky-200">
                 <Calendar size={13} /> {attentionCounts.mobsThisWeek} mob{attentionCounts.mobsThisWeek === 1 ? "" : "s"} this week
-              </span>
+              </button>
             )}
             {attentionCounts.mobsNextWeek > 0 && (
-              <span className="flex items-center gap-1.5 rounded-full border border-indigo-300 bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800">
+              <button onClick={() => setConflictModal("mobsNextWeek")} className="flex items-center gap-1.5 rounded-full border border-indigo-300 bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800 hover:bg-indigo-200">
                 <Calendar size={13} /> {attentionCounts.mobsNextWeek} next week
-              </span>
+              </button>
             )}
             {attentionCounts.unassigned > 0 && (
-              <span className="flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+              <button onClick={() => setConflictModal("unassigned")} className="flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200">
                 <Users size={13} /> {attentionCounts.unassigned} unassigned need{attentionCounts.unassigned === 1 ? "" : "s"}
-              </span>
+              </button>
             )}
             {attentionTotal === 0 && attentionCounts.mobsThisWeek === 0 && attentionCounts.mobsNextWeek === 0 && (
               <span className="text-xs font-medium text-emerald-700">All clear — no conflicts, collisions, or expiring certs.</span>
@@ -6344,45 +6357,50 @@ export default function App() {
 
       {/* ── Conflict / PTO collision detail modal ── */}
       {conflictModal && (() => {
-        const isPto = conflictModal === "pto";
-        const title = isPto ? "PTO Collisions" : "Scheduling Conflicts";
-        const subtitle = isPto
-          ? "Resources assigned to work during their own approved PTO."
-          : "Resources double-booked across two overlapping assignments.";
         const roleLabel = (f) => ({ projectManager: "PM", superintendent: "Super", fieldCoordinator: "Field Coord", fieldEngineer: "Field Eng", safety: "Safety" }[f] || f);
         const itemDesc = (it) => `${it.project?.projectNumber ? it.project.projectNumber + " · " : ""}${it.project?.name || "—"}`;
+        const mobItemDesc = (it) => `${it.project?.projectNumber ? it.project.projectNumber + " · " : ""}${it.project?.name || "—"}`;
+        const titles = {
+          conflicts: ["Scheduling Conflicts", "Superintendents and Field Coordinators double-booked across overlapping assignments."],
+          pto: ["Upcoming PTO (next 60 days)", "Approved PTO windows starting within the next 60 days."],
+          mobsThisWeek: ["Mobilizations Starting This Week", "Mobs with a start date in the current week."],
+          mobsNextWeek: ["Mobilizations Starting Next Week", "Mobs with a start date in the coming week."],
+          unassigned: ["Unassigned Needs", "Open role slots across all mobilizations."],
+        };
+        const [title, subtitle] = titles[conflictModal] || ["", ""];
+        const mobRows = conflictModal === "mobsThisWeek" ? mobWeekRows.thisWeek : conflictModal === "mobsNextWeek" ? mobWeekRows.nextWeek : [];
         return (
           <div className="fixed inset-0 z-[88] flex items-center justify-center bg-slate-950/60 p-4">
-            <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl">
-              <div className="flex items-center justify-between border-b border-slate-200 p-5">
+            <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="flex shrink-0 items-center justify-between border-b border-slate-200 p-5">
                 <div>
                   <h2 className="text-2xl font-bold text-slate-900">{title}</h2>
                   <p className="text-sm text-slate-500">{subtitle}</p>
                 </div>
                 <button onClick={() => setConflictModal(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
               </div>
-              <div className="overflow-auto p-5">
-                {isPto ? (
+              <div className="min-h-0 flex-1 overflow-auto p-5">
+                {conflictModal === "pto" && (
                   <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-100 text-slate-600">
-                      <tr><th className="p-3">Resource</th><th className="p-3">Role</th><th className="p-3">Assignment</th><th className="p-3">Assignment Dates</th><th className="p-3">PTO Window</th></tr>
+                    <thead className="sticky top-0 bg-slate-100 text-slate-600">
+                      <tr><th className="p-3">Resource</th><th className="p-3">Type</th><th className="p-3">PTO ID</th><th className="p-3">PTO Window</th></tr>
                     </thead>
                     <tbody>
                       {ptoCollisionRows.map((row, i) => (
                         <tr key={i} className="border-t border-slate-200">
                           <td className="p-3 font-semibold text-slate-900">{row.resourceName}</td>
-                          <td className="p-3">{roleLabel(row.role)}</td>
-                          <td className="p-3">{itemDesc(row.item)}</td>
-                          <td className="p-3 whitespace-nowrap">{formatDate(row.item.start)} – {formatDate(row.item.end)}</td>
+                          <td className="p-3">{row.resource?.resourceType || "—"}</td>
+                          <td className="p-3">{row.pto.ptoId || <span className="text-slate-300">—</span>}</td>
                           <td className="p-3 whitespace-nowrap text-orange-700 font-semibold">{formatDate(row.pto.start)} – {formatDate(row.pto.end)}</td>
                         </tr>
                       ))}
-                      {ptoCollisionRows.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400">No PTO collisions.</td></tr>}
+                      {ptoCollisionRows.length === 0 && <tr><td colSpan={4} className="p-8 text-center text-slate-400">No upcoming PTO in the next 60 days.</td></tr>}
                     </tbody>
                   </table>
-                ) : (
+                )}
+                {conflictModal === "conflicts" && (
                   <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-100 text-slate-600">
+                    <thead className="sticky top-0 bg-slate-100 text-slate-600">
                       <tr><th className="p-3">Resource</th><th className="p-3">Assignment A</th><th className="p-3">Dates A</th><th className="p-3">Assignment B</th><th className="p-3">Dates B</th></tr>
                     </thead>
                     <tbody>
@@ -6396,6 +6414,43 @@ export default function App() {
                         </tr>
                       ))}
                       {conflictRows.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400">No conflicts.</td></tr>}
+                    </tbody>
+                  </table>
+                )}
+                {(conflictModal === "mobsThisWeek" || conflictModal === "mobsNextWeek") && (
+                  <table className="w-full text-left text-sm">
+                    <thead className="sticky top-0 bg-slate-100 text-slate-600">
+                      <tr><th className="p-3">Project</th><th className="p-3">Division</th><th className="p-3">Start</th><th className="p-3">End</th><th className="p-3">Staffing</th></tr>
+                    </thead>
+                    <tbody>
+                      {mobRows.map((it, i) => (
+                        <tr key={i} className="border-t border-slate-200">
+                          <td className="p-3 font-semibold text-slate-900">{mobItemDesc(it)}</td>
+                          <td className="p-3">{it.project?.division || "—"}</td>
+                          <td className="p-3 whitespace-nowrap font-semibold text-sky-700">{formatDate(it.start)}</td>
+                          <td className="p-3 whitespace-nowrap">{formatDate(it.end)}</td>
+                          <td className="p-3 text-slate-600">{it.label || "—"}</td>
+                        </tr>
+                      ))}
+                      {mobRows.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400">No mobilizations in this window.</td></tr>}
+                    </tbody>
+                  </table>
+                )}
+                {conflictModal === "unassigned" && (
+                  <table className="w-full text-left text-sm">
+                    <thead className="sticky top-0 bg-slate-100 text-slate-600">
+                      <tr><th className="p-3">Project</th><th className="p-3">Unassigned Division</th><th className="p-3">Mob Start</th><th className="p-3">Mob End</th></tr>
+                    </thead>
+                    <tbody>
+                      {unassignedNeedRows.map((row, i) => (
+                        <tr key={i} className="border-t border-slate-200">
+                          <td className="p-3 font-semibold text-slate-900">{row.project?.projectNumber ? row.project.projectNumber + " · " : ""}{row.project?.name || "—"}</td>
+                          <td className="p-3"><span className="rounded-full bg-slate-200 px-2 py-1 text-xs font-bold text-slate-700">{row.division}</span></td>
+                          <td className="p-3 whitespace-nowrap">{row.start ? formatDate(row.start) : <span className="text-slate-300">—</span>}</td>
+                          <td className="p-3 whitespace-nowrap">{row.end ? formatDate(row.end) : <span className="text-slate-300">—</span>}</td>
+                        </tr>
+                      ))}
+                      {unassignedNeedRows.length === 0 && <tr><td colSpan={4} className="p-8 text-center text-slate-400">No unassigned needs.</td></tr>}
                     </tbody>
                   </table>
                 )}
