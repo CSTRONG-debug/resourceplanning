@@ -1675,7 +1675,7 @@ export function PtoOverlayBar({ pto, timeline }) {
 // whose `id` doesn't correspond to a real DB mobilization. Falls back to a
 // plain GanttSegmentBar in those cases.
 
-export function DraggableGanttBar({ item, timeline, label, fullLabel, onDragEnd }) {
+export function DraggableGanttBar({ item, timeline, label, fullLabel, laneTop = 0, onDragEnd }) {
   // Skip drag wiring entirely for unassigned-need rows or when no callback
   // was provided (= drag disabled by parent).
   if (!onDragEnd || item.isUnassignedNeed || !item.mobilizationId) {
@@ -1808,8 +1808,8 @@ export function DraggableGanttBar({ item, timeline, label, fullLabel, onDragEnd 
   return (
     <div
       ref={containerRef}
-      className={`absolute top-0 h-7 overflow-visible rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm ${needsCrew ? "text-slate-900" : "text-white"} ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
-      style={{ left: `${left}px`, width: `${width}px`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none", ...(crewOnlyOverlayStyle || {}), ...(needsCrewOverlayStyle || {}) }}
+      className={`absolute h-7 overflow-visible rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm ${needsCrew ? "text-slate-900" : "text-white"} ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
+      style={{ left: `${left}px`, top: `${laneTop}px`, width: `${width}px`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none", ...(crewOnlyOverlayStyle || {}), ...(needsCrewOverlayStyle || {}) }}
       onPointerDown={(e) => onPointerDown("middle", e)}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -1839,6 +1839,12 @@ export function DraggableGanttBar({ item, timeline, label, fullLabel, onDragEnd 
           When the bar starts to the LEFT of the visible area, push the
           label inward so it remains readable until the bar exits right.
           When the bar is too narrow, render the label OUTSIDE on the right. */}
+      {/* Mobilization boundary markers — a thin vertical line at the start
+          and end edges of this mobilization so a mid-run change (e.g. a crew
+          added partway through a project) is visible as a divider where the
+          new mobilization begins. Sits above the fill, below the label. */}
+      <div className="pointer-events-none absolute left-0 top-0 z-10 h-full w-px bg-slate-900/40" />
+      <div className="pointer-events-none absolute right-0 top-0 z-10 h-full w-px bg-slate-900/40" />
       {/* Label is never clipped by bar width or a neighboring bar. We
           render it overflow-visible; when the text is wider than the bar
           it spills past the right edge over a subtle white pill so it
@@ -1881,12 +1887,74 @@ function toIsoDate(d) {
 
 // ─── ProjectGanttRow ──────────────────────────────────────────────────────────
 
+// Approx pixel width of a bar label at the 11px semibold gantt font. Used to
+// reserve horizontal space when packing bars into lanes so labels that spill
+// past a short bar don't collide with a neighboring bar's label.
+const GANTT_LABEL_PX_PER_CHAR = 6.2;
+function estimateLabelWidthPx(label) {
+  return Math.ceil(String(label || "").length * GANTT_LABEL_PX_PER_CHAR) + 12;
+}
+
+// Build the on-bar (abbreviated) and hover (full) labels for one item.
+function buildItemLabels(item, crews) {
+  if (item.isUnassignedNeed) {
+    return {
+      label: `${item.unassignedAbbreviation} - Unassigned`,
+      fullLabel: `${item.unassignedDivision || item.unassignedAbbreviation} - Unassigned`,
+    };
+  }
+  if (item.isCrewOnly) {
+    const crewNamesAbbr = getAssignmentCrewIds(item.assignment)
+      .map((id) => crews.find((c) => c.id === id))
+      .filter(Boolean)
+      .map((crew) => buildCrewChunk(crew, item.assignment, { abbreviate: true }));
+    const crewNamesFull = getAssignmentCrewDisplayNames(item.assignment, crews);
+    return {
+      label: crewNamesAbbr.length ? `Crew Only · ${crewNamesAbbr.join(", ")}` : "Crew Only",
+      fullLabel: crewNamesFull.length ? `Crew Only · ${crewNamesFull.join(", ")}` : "Crew Only",
+    };
+  }
+  return {
+    label: buildGanttBarLabel(item.assignment, crews),
+    fullLabel: buildGanttBarFullLabel(item.assignment, crews),
+  };
+}
+
+// Lane height in px (bar is h-7 = 28px; add 2px breathing room between lanes).
+const GANTT_LANE_PX = 30;
+
 export function ProjectGanttRow({ assignment, project, items, timeline, crews, onDragEnd, onLabelClick }) {
+  // Pack items into lanes so labels never stack on top of each other. An
+  // item reserves the WIDER of its bar width or its label width, starting at
+  // its left edge — so a 1-day mob with a long label still claims the space
+  // its label needs. Anything that would collide drops to the next lane down,
+  // which makes the row taller. Same idea as the Crew Gantt's lane logic, but
+  // collision is tested on label-aware pixel spans, not just date overlap.
+  const placed = items.map((item) => {
+    const labels = buildItemLabels(item, crews);
+    const span = timelineSpanPixels(item.start, item.end, timeline);
+    const left = span.left;
+    const reserved = Math.max(span.width, estimateLabelWidthPx(labels.label));
+    return { item, labels, left, right: left + reserved, barWidth: span.width };
+  });
+  // Sort by left edge for stable greedy packing.
+  placed.sort((a, b) => a.left - b.left);
+  const laneRights = []; // right edge currently occupied in each lane
+  placed.forEach((p) => {
+    let laneIndex = laneRights.findIndex((r) => p.left >= r + 6);
+    if (laneIndex === -1) { laneIndex = laneRights.length; laneRights.push(0); }
+    laneRights[laneIndex] = p.right;
+    p.lane = laneIndex;
+  });
+  const laneCount = Math.max(1, laneRights.length);
+  const rowHeight = laneCount * GANTT_LANE_PX;
+
   return (
-    <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
+    <div className="grid grid-cols-[320px_1fr] items-start gap-0">
       <button
         onClick={onLabelClick}
-        className="sticky left-0 z-20 h-7 bg-white pr-3 text-left hover:bg-slate-50 overflow-hidden"
+        className="sticky left-0 z-20 bg-white pr-3 text-left hover:bg-slate-50 overflow-hidden flex items-center"
+        style={{ height: `${rowHeight}px` }}
       >
         <div className="flex items-center gap-2">
           <span className={`shrink-0 h-2.5 w-2.5 rounded-full ${project.status === "Pending Award" ? pendingDivisionStyles[project.division] : divisionStyles[project.division] || "bg-slate-600"}`} />
@@ -1895,36 +1963,18 @@ export function ProjectGanttRow({ assignment, project, items, timeline, crews, o
           </p>
         </div>
       </button>
-      <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
-        {items.map((item) => {
-          let label;
-          let fullLabel;
-          if (item.isUnassignedNeed) {
-            label = `${item.unassignedAbbreviation} - Unassigned`;
-            fullLabel = `${item.unassignedDivision || item.unassignedAbbreviation} - Unassigned`;
-          } else if (item.isCrewOnly) {
-            const crewNamesAbbr = getAssignmentCrewIds(item.assignment)
-              .map((id) => crews.find((c) => c.id === id))
-              .filter(Boolean)
-              .map((crew) => buildCrewChunk(crew, item.assignment, { abbreviate: true }));
-            label = crewNamesAbbr.length ? `Crew Only · ${crewNamesAbbr.join(", ")}` : "Crew Only";
-            const crewNamesFull = getAssignmentCrewDisplayNames(item.assignment, crews);
-            fullLabel = crewNamesFull.length ? `Crew Only · ${crewNamesFull.join(", ")}` : "Crew Only";
-          } else {
-            label = buildGanttBarLabel(item.assignment, crews);
-            fullLabel = buildGanttBarFullLabel(item.assignment, crews);
-          }
-          return (
-            <DraggableGanttBar
-              key={item.id}
-              item={item}
-              timeline={timeline}
-              label={label}
-              fullLabel={fullLabel}
-              onDragEnd={onDragEnd}
-            />
-          );
-        })}
+      <div className="relative rounded-md" style={{ width: `${timeline.width}px`, height: `${rowHeight}px` }}>
+        {placed.map((p) => (
+          <DraggableGanttBar
+            key={p.item.id}
+            item={p.item}
+            timeline={timeline}
+            label={p.labels.label}
+            fullLabel={p.labels.fullLabel}
+            laneTop={p.lane * GANTT_LANE_PX}
+            onDragEnd={onDragEnd}
+          />
+        ))}
       </div>
     </div>
   );
