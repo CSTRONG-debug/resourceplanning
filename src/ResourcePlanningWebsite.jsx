@@ -1628,7 +1628,6 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
             className={conflict ? "rounded bg-white/90 px-1.5 py-0.5 font-bold text-red-700" : ""}
             style={labelOffset ? { paddingLeft: `${labelOffset}px` } : undefined}
           >{label || "Unassigned"}</span>
-          {isUnassigned && <span className="ml-2 rounded bg-white/80 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-900">unassigned</span>}
           {conflict && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-white">conflict</span>}
         </>
       )}
@@ -1865,7 +1864,14 @@ export function DraggableGanttBar({ item, timeline, label, fullLabel, showLabel 
           and let that below-row + leader line carry it. Clipped to the bar. */}
       {showLabel && (
         <span
-          className="pointer-events-none absolute inset-0 z-20 overflow-hidden whitespace-nowrap px-2.5 leading-7"
+          className="pointer-events-none absolute inset-y-0 right-0 z-20 overflow-hidden whitespace-nowrap px-2.5 leading-7"
+          style={{
+            // When the bar starts before the visible window (left < 0), the
+            // bar's own left edge is off-screen. Push the label's left start
+            // in by -left so the text begins at TODAY (the visible edge)
+            // instead of scrolling out of view. Otherwise sit at the edge.
+            left: left < 0 ? `${-left}px` : 0,
+          }}
         >
           {label || "Unassigned"}
         </span>
@@ -1947,17 +1953,32 @@ export function ProjectGanttRow({ assignment, project, items, timeline, crews, o
     const bs = toDate(b.start)?.getTime() ?? 0;
     return as - bs;
   });
+  // Lanes are driven ONLY by real mobilization bars. Unassigned-need
+  // placeholders share a mob's exact dates, so they must NOT count as an
+  // overlap that forces a new lane — instead they inherit the lane of the
+  // mobilization they were synthesized from (matched by mobilizationId, then
+  // by identical start/end). This keeps the hatched unassigned bar in the
+  // SAME lane as its mob rather than breaking it onto a new row.
   const laneEnds = []; // last end-date (ms) currently occupying each lane
   const laneOf = new Map();
-  byStart.forEach((item) => {
+  const laneByMobId = new Map();
+  const realBars = byStart.filter((it) => !it.isUnassignedNeed);
+  realBars.forEach((item) => {
     const s = toDate(item.start);
     const e = toDate(item.end);
     const sMs = s ? s.getTime() : 0;
     const eMs = e ? e.getTime() : sMs;
-    // First lane whose last occupant ended before this bar starts (no overlap).
     let lane = laneEnds.findIndex((end) => sMs > end);
     if (lane === -1) { lane = laneEnds.length; laneEnds.push(eMs); }
     else { laneEnds[lane] = Math.max(laneEnds[lane], eMs); }
+    laneOf.set(item.id, lane);
+    if (item.mobilizationId != null) laneByMobId.set(item.mobilizationId, lane);
+  });
+  // Unassigned placeholders adopt their parent mob's lane (fallback: lane 0).
+  byStart.filter((it) => it.isUnassignedNeed).forEach((item) => {
+    const lane = (item.mobilizationId != null && laneByMobId.has(item.mobilizationId))
+      ? laneByMobId.get(item.mobilizationId)
+      : 0;
     laneOf.set(item.id, lane);
   });
   const barLaneCount = Math.max(1, laneEnds.length);
