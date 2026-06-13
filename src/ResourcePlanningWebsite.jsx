@@ -143,6 +143,86 @@ function getCertificationStatus(cert) {
 }
 
 
+// ─── Gantt label abbreviation helpers ───────────────────────────────────────
+//
+// Bar labels were getting clipped/overlapping. We now abbreviate so more
+// labels fit, render them overflow-visible (never truncated by bar width or a
+// neighboring bar), and expose the FULL un-abbreviated text on hover.
+//
+//   - People (PM / superintendent / etc.): "First L." (full first name +
+//     last-name initial). Single-word names pass through unchanged.
+//   - Crews: FIRST NAME ONLY of the crew name (e.g. "Cruz Elite" -> "Cruz").
+//   - Each crew also shows men / % allocation, where % = men on this
+//     assignment ÷ that crew's total members. Format: "Cruz (4/40%)".
+
+function abbreviatePersonName(name) {
+  const full = String(name || "").trim();
+  if (!full) return "";
+  const parts = full.split(/\s+/);
+  if (parts.length === 1) return parts[0];
+  const last = parts[parts.length - 1];
+  return `${parts.slice(0, -1).join(" ")} ${last.charAt(0).toUpperCase()}.`;
+}
+
+function firstNameOnly(name) {
+  const full = String(name || "").trim();
+  if (!full) return "";
+  return full.split(/\s+/)[0];
+}
+
+// Pull the per-mobilization men count for a crew from whichever field the
+// synthetic assignment carries (_crewMenCounts is set by buildGanttItems;
+// crewMenCounts is the raw mob field).
+function getMenForCrewOnItem(assignment, crewId) {
+  const counts = assignment?._crewMenCounts || assignment?.crewMenCounts || {};
+  const v = counts[crewId];
+  return v === undefined || v === null || v === "" ? null : Number(v) || 0;
+}
+
+// Build one crew chunk like "Cruz (4/40%)". men = men on this assignment,
+// % = men ÷ crew.totalMembers (0 total -> omit %). Falls back to crew total
+// if no per-mob men count is recorded.
+function buildCrewChunk(crew, assignment, { abbreviate = true } = {}) {
+  if (!crew) return "";
+  const name = abbreviate ? firstNameOnly(crew.crewName) : getCrewDisplayName(crew);
+  const total = Number(crew.totalMembers) || 0;
+  const recorded = getMenForCrewOnItem(assignment, crew.id);
+  const men = recorded != null ? recorded : total;
+  if (!men && !total) return name;
+  const pct = total > 0 ? Math.round((men / total) * 100) : null;
+  return pct != null ? `${name} (${men}/${pct}%)` : `${name} (${men})`;
+}
+
+// The abbreviated label shown ON the bar: "Armando C. • Cruz (4/40%)".
+function buildGanttBarLabel(assignment, crews = []) {
+  if (!assignment) return "";
+  const person = abbreviatePersonName(assignment.superintendent);
+  const crewChunks = getAssignmentCrewIds(assignment)
+    .map((id) => crews.find((c) => c.id === id))
+    .filter(Boolean)
+    .map((crew) => buildCrewChunk(crew, assignment, { abbreviate: true }));
+  return [person, ...crewChunks].filter(Boolean).join(" • ");
+}
+
+// The FULL label shown on hover: "Armando Camacho • Cruz Elite (4 men / 40%)".
+function buildGanttBarFullLabel(assignment, crews = []) {
+  if (!assignment) return "";
+  const person = String(assignment.superintendent || "").trim();
+  const crewChunks = getAssignmentCrewIds(assignment)
+    .map((id) => crews.find((c) => c.id === id))
+    .filter(Boolean)
+    .map((crew) => {
+      const total = Number(crew.totalMembers) || 0;
+      const recorded = getMenForCrewOnItem(assignment, crew.id);
+      const men = recorded != null ? recorded : total;
+      const pct = total > 0 ? Math.round((men / total) * 100) : null;
+      const display = getCrewDisplayName(crew);
+      if (!men && !total) return display;
+      return pct != null ? `${display} (${men} men / ${pct}%)` : `${display} (${men} men)`;
+    });
+  return [person, ...crewChunks].filter(Boolean).join(" • ");
+}
+
 // Division abbreviations used for explicit unassigned needs on mobilizations.
 function getDivisionAbbreviation(division) {
   const text = String(division || "").toLowerCase();
@@ -1595,7 +1675,7 @@ export function PtoOverlayBar({ pto, timeline }) {
 // whose `id` doesn't correspond to a real DB mobilization. Falls back to a
 // plain GanttSegmentBar in those cases.
 
-export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
+export function DraggableGanttBar({ item, timeline, label, fullLabel, onDragEnd }) {
   // Skip drag wiring entirely for unassigned-need rows or when no callback
   // was provided (= drag disabled by parent).
   if (!onDragEnd || item.isUnassignedNeed || !item.mobilizationId) {
@@ -1735,11 +1815,13 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       title={
-        item.isCrewOnly
-          ? `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nCrew-only mobilization (no named roles)\nDrag bar to shift • Drag edges to resize`
-          : needsCrew
-            ? `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nSuperintendent assigned • NO CREW on this mobilization\nDrag bar to shift • Drag edges to resize`
-            : `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nDrag bar to shift • Drag edges to resize`
+        (fullLabel ? `${fullLabel}\n` : "") + (
+          item.isCrewOnly
+            ? `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nCrew-only mobilization (no named roles)\nDrag bar to shift • Drag edges to resize`
+            : needsCrew
+              ? `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nSuperintendent assigned • NO CREW on this mobilization\nDrag bar to shift • Drag edges to resize`
+              : `${formatDate(effectiveStart)} - ${formatDate(effectiveEnd)}\nDrag bar to shift • Drag edges to resize`
+        )
       }
     >
       {/* Left edge handle — narrower so the bar's middle has a bigger hit
@@ -1757,18 +1839,25 @@ export function DraggableGanttBar({ item, timeline, label, onDragEnd }) {
           When the bar starts to the LEFT of the visible area, push the
           label inward so it remains readable until the bar exits right.
           When the bar is too narrow, render the label OUTSIDE on the right. */}
-      {width < 70 ? (
-        <span className="pointer-events-none absolute left-full top-0 ml-1 whitespace-nowrap rounded bg-white/95 px-1.5 leading-7 text-slate-700 shadow-sm">
-          {label || "Unassigned"}
-        </span>
-      ) : (
-        <span
-          className="pointer-events-none block overflow-hidden whitespace-nowrap px-2.5"
-          style={left < 0 ? { paddingLeft: `${-left + 10}px` } : undefined}
-        >
-          {label || "Unassigned"}
-        </span>
-      )}
+      {/* Label is never clipped by bar width or a neighboring bar. We
+          render it overflow-visible; when the text is wider than the bar
+          it spills past the right edge over a subtle white pill so it
+          stays legible against whatever is behind it. Full (un-abbreviated)
+          name is on the title tooltip. Narrow bars push the label to start
+          just inside the left edge; off-screen-left bars pull it into view. */}
+      <span
+        className="pointer-events-none absolute top-0 left-0 z-20 max-w-[60vw] whitespace-nowrap rounded px-2.5 leading-7"
+        style={{
+          paddingLeft: left < 0 ? `${-left + 10}px` : undefined,
+          // When the label is likely wider than a very narrow bar, give it
+          // a translucent backdrop so the overflow stays readable.
+          background: width < 90 ? "rgba(255,255,255,0.92)" : "transparent",
+          color: width < 90 ? "#334155" : undefined,
+          boxShadow: width < 90 ? "0 1px 2px rgba(0,0,0,0.08)" : undefined,
+        }}
+      >
+        {label || "Unassigned"}
+      </span>
       {/* Live tooltip while dragging — positions above the bar */}
       {dragState && (
         <div className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-white shadow-lg">
@@ -1809,13 +1898,21 @@ export function ProjectGanttRow({ assignment, project, items, timeline, crews, o
       <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
         {items.map((item) => {
           let label;
+          let fullLabel;
           if (item.isUnassignedNeed) {
             label = `${item.unassignedAbbreviation} - Unassigned`;
+            fullLabel = `${item.unassignedDivision || item.unassignedAbbreviation} - Unassigned`;
           } else if (item.isCrewOnly) {
-            const crewNames = getAssignmentCrewDisplayNames(item.assignment, crews);
-            label = crewNames.length ? `Crew Only · ${crewNames.join(", ")}` : "Crew Only";
+            const crewNamesAbbr = getAssignmentCrewIds(item.assignment)
+              .map((id) => crews.find((c) => c.id === id))
+              .filter(Boolean)
+              .map((crew) => buildCrewChunk(crew, item.assignment, { abbreviate: true }));
+            label = crewNamesAbbr.length ? `Crew Only · ${crewNamesAbbr.join(", ")}` : "Crew Only";
+            const crewNamesFull = getAssignmentCrewDisplayNames(item.assignment, crews);
+            fullLabel = crewNamesFull.length ? `Crew Only · ${crewNamesFull.join(", ")}` : "Crew Only";
           } else {
-            label = getAssignmentPeopleLabel(item.assignment, crews);
+            label = buildGanttBarLabel(item.assignment, crews);
+            fullLabel = buildGanttBarFullLabel(item.assignment, crews);
           }
           return (
             <DraggableGanttBar
@@ -1823,6 +1920,7 @@ export function ProjectGanttRow({ assignment, project, items, timeline, crews, o
               item={item}
               timeline={timeline}
               label={label}
+              fullLabel={fullLabel}
               onDragEnd={onDragEnd}
             />
           );
@@ -5947,4 +6045,3 @@ export default function App() {
     </main>
   );
 }
-
