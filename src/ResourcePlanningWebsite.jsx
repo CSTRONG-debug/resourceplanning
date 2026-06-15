@@ -597,7 +597,7 @@ export function StaffRequestForm({ form, setForm, roles, onSave, onCancel, busy 
 // Lists pending crew + staff requests. Clicking one opens the Assign tool
 // (handled by parent) and shows an availability recommendation for its window.
 
-export function RequestsModal({ requests, activeRequest, availability, requestedTypes, onPick, onDelete, onAssignResource, onAssignCrew, onClose }) {
+export function RequestsModal({ requests, activeRequest, availability, requestedTypes, laborManagement, onPick, onDelete, onAssignResource, onAssignCrew, onClose }) {
   return (
     <div className="fixed inset-0 z-[86] flex items-center justify-center bg-slate-950/50 p-4">
       <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
@@ -648,6 +648,11 @@ export function RequestsModal({ requests, activeRequest, availability, requested
               <>
                 <h3 className="mb-2 text-sm font-bold text-slate-900">Available for this window</h3>
                 <p className="mb-3 text-xs text-slate-500">Not booked on another project (and not on PTO) during the request’s dates. Click to assign.</p>
+                {activeRequest && activeRequest.kind === "crew" && laborManagement && laborManagement !== "None" && (
+                  <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800">
+                    Labor management requested: {laborManagement}. Assign {laborManagement === "Both" ? "a superintendent and a field coordinator" : `a ${laborManagement.toLowerCase()}`} to this mobilization as well.
+                  </div>
+                )}
                 {activeRequest && activeRequest.kind === "crew" && (requestedTypes || []).length > 0 && (
                   <div className="mb-3 flex items-center gap-3 text-[11px] font-semibold">
                     <span className="flex items-center gap-1"><span className="h-3 w-3 rounded-full bg-emerald-500" /> matches all types</span>
@@ -772,6 +777,9 @@ export function TaskCrewRequestRow({ r, isOffice, isPM, taskNameById, crews, onW
       <div className="min-w-0 flex-1">
         <p className="text-sm font-semibold text-slate-900">
           {r.crew_specialty}{r.men_count ? ` · ${r.men_count} men` : ""}
+          {r.labor_management && r.labor_management !== "None" ? (
+            <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-800 align-middle">+ {r.labor_management}</span>
+          ) : null}
           {assignedCrew ? <span className="ml-2 font-normal text-emerald-700">→ {assignedCrew.crewName}</span> : null}
         </p>
         <p className="mt-0.5 text-xs text-slate-500">
@@ -869,7 +877,7 @@ export function TaskForm({ form, setForm, tasks, editingTaskId, onSave, onCancel
 
 // ─── TaskCrewRequestForm (request a crew TYPE across one or more tasks) ───────
 
-export function TaskCrewRequestForm({ form, setForm, tasks, crewTypeOptions, resources, onSave, onCancel, busy }) {
+export function TaskCrewRequestForm({ form, setForm, tasks, crewTypeOptions, onSave, onCancel, busy }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
   function toggleType(t) {
     setForm((c) => {
@@ -918,14 +926,21 @@ export function TaskCrewRequestForm({ form, setForm, tasks, crewTypeOptions, res
             <input type="number" min="0" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.menCount} onChange={(e) => updateField("menCount", e.target.value)} placeholder="0" />
           </label>
 
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Superintendent <span className="font-normal text-slate-400">(optional)</span></span>
-            <SearchableResourceSelect value={form.superintendent || ""} onChange={(v) => updateField("superintendent", v)} resources={resources || []} resourceType={["Superintendent", "General Superintendent"]} placeholder="Request a superintendent..." />
-          </label>
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Field Coordinator <span className="font-normal text-slate-400">(optional)</span></span>
-            <SearchableResourceSelect value={form.fieldCoordinator || ""} onChange={(v) => updateField("fieldCoordinator", v)} resources={resources || []} resourceType="Field Coordinator" placeholder="Request a field coordinator..." />
-          </label>
+          <div className="space-y-1 md:col-span-2">
+            <span className="text-sm font-medium text-slate-700">Labor Management Request</span>
+            <div className="flex flex-wrap gap-2">
+              {["None", "Super", "Field Coordinator", "Both"].map((opt) => {
+                const active = (form.laborManagement || "None") === opt;
+                return (
+                  <button key={opt} type="button" onClick={() => updateField("laborManagement", opt)}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${active ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"}`}>
+                    {opt}
+                  </button>
+                );
+              })}
+            </div>
+            <span className="text-xs text-slate-500">Whether this crew also needs a superintendent and/or field coordinator. The office assigns the actual person.</span>
+          </div>
 
           <div className="space-y-1 md:col-span-2">
             <span className="text-sm font-medium text-slate-700">Tasks this crew is for</span>
@@ -3389,7 +3404,7 @@ export default function App() {
   const [taskForm, setTaskForm] = useState({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS" });
 
   const [showTaskRequestForm, setShowTaskRequestForm] = useState(false);
-  const [taskRequestForm, setTaskRequestForm] = useState({ crewSpecialty: "", crewTypes: [], menCount: "", notes: "", superintendent: "", fieldCoordinator: "", taskIds: [] });
+  const [taskRequestForm, setTaskRequestForm] = useState({ crewSpecialty: "", crewTypes: [], menCount: "", notes: "", laborManagement: "None", taskIds: [] });
   const [taskRequestBusy, setTaskRequestBusy] = useState(false);
 
   // Load tasks + requests for the selected project.
@@ -3502,7 +3517,7 @@ export default function App() {
   function openTaskRequestForm(preselectTaskId = null) {
     setTaskRequestForm({
       crewSpecialty: "", crewTypes: [], menCount: "", notes: "",
-      superintendent: "", fieldCoordinator: "",
+      laborManagement: "None",
       taskIds: preselectTaskId ? [preselectTaskId] : [],
     });
     setShowTaskRequestForm(true);
@@ -3522,8 +3537,7 @@ export default function App() {
         project_id: schedProjectId,
         crew_specialty: types.join(", "),
         crew_types: types,
-        superintendent: taskRequestForm.superintendent || null,
-        field_coordinator: taskRequestForm.fieldCoordinator || null,
+        labor_management: taskRequestForm.laborManagement || "None",
         men_count: taskRequestForm.menCount ? Number(taskRequestForm.menCount) : 0,
         notes: taskRequestForm.notes || null,
         requested_by: user.id,
@@ -3733,12 +3747,11 @@ export default function App() {
           id: r.id,
           projectId: r.project_id,
           projectLabel: r.projects ? `${r.projects.project_number ? r.projects.project_number + " - " : ""}${r.projects.name}` : "—",
-          label: `${r.crew_specialty}${r.men_count ? ` · ${r.men_count} men` : ""}`,
+          label: `${r.crew_specialty}${r.men_count ? ` · ${r.men_count} men` : ""}${r.labor_management && r.labor_management !== "None" ? ` · +${r.labor_management}` : ""}`,
           specialty: r.crew_specialty,
           crewTypes: Array.isArray(r.crew_types) ? r.crew_types : [],
           menCount: r.men_count || 0,
-          superintendent: r.superintendent || "",
-          fieldCoordinator: r.field_coordinator || "",
+          laborManagement: r.labor_management || "None",
           taskIds: (r.task_crew_request_links || []).map((l) => l.task_id),
           requestedBy: r.requested_by_name,
           start: r.window_start || null, end: r.window_end || null,
@@ -3860,8 +3873,6 @@ export default function App() {
     loadAssignmentTasks(activeRequest.projectId);
     const reqTaskIds = Array.isArray(activeRequest.taskIds) ? activeRequest.taskIds : [];
     const reqMen = Number(activeRequest.menCount) || 0;
-    const reqSuper = activeRequest.superintendent || "";
-    const reqFC = activeRequest.fieldCoordinator || "";
     const existing = assignments.find((a) => a.projectId === activeRequest.projectId);
     const base = existing
       ? { ...blankAssignment, ...existing }
@@ -3879,8 +3890,6 @@ export default function App() {
       crewIds: newCrewIds,
       crewMenCounts: newMen,
       taskIds: mergedTasks,
-      superintendent: m0.superintendent || reqSuper,
-      fieldCoordinator: m0.fieldCoordinator || reqFC,
     };
     base.mobilizations = mobs;
     setEditingAssignmentId(existing ? existing.id : null);
@@ -7819,7 +7828,6 @@ export default function App() {
           setForm={setTaskRequestForm}
           tasks={projectTasks}
           crewTypeOptions={crewTypes}
-          resources={resources}
           onSave={submitTaskRequest}
           onCancel={() => setShowTaskRequestForm(false)}
           busy={taskRequestBusy}
@@ -7841,6 +7849,7 @@ export default function App() {
           activeRequest={activeRequest}
           availability={activeRequest && (activeRequest.start && activeRequest.end) ? computeAvailability(activeRequest.start, activeRequest.end) : null}
           requestedTypes={activeRequest && activeRequest.kind === "crew" ? (activeRequest.crewTypes || []) : []}
+          laborManagement={activeRequest && activeRequest.kind === "crew" ? (activeRequest.laborManagement || "None") : "None"}
           onPick={(req) => startAssignFromRequest(req)}
           onDelete={(req) => (req.kind === "crew" ? deleteTaskRequest(req.id) : deleteStaffRequest(req.id))}
           onAssignResource={(resource) => assignResourceFromModal(resource)}
