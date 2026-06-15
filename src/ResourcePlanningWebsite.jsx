@@ -597,14 +597,52 @@ export function StaffRequestForm({ form, setForm, roles, onSave, onCancel, busy 
 // Lists pending crew + staff requests. Clicking one opens the Assign tool
 // (handled by parent) and shows an availability recommendation for its window.
 
-export function RequestsModal({ requests, activeRequest, availability, requestedTypes, laborManagement, onPick, onDelete, onAssignResource, onAssignCrew, onClose }) {
+export function RequestsModal({ requests, activeRequest, availability, requestedTypes, laborManagement, onPick, onDelete, onContinue, onClose }) {
+  // Staged selections for the active request. Reset whenever the active request
+  // changes so picks don't bleed across requests.
+  const [selCrewIds, setSelCrewIds] = useState([]);
+  const [selPeopleIds, setSelPeopleIds] = useState([]);
+  useEffect(() => { setSelCrewIds([]); setSelPeopleIds([]); }, [activeRequest && activeRequest.id, activeRequest && activeRequest.kind]);
+
+  function toggleCrew(id) {
+    setSelCrewIds((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]);
+  }
+  function togglePerson(id) {
+    setSelPeopleIds((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]);
+  }
+
+  // Which resource types the labor management request allows. None → no people
+  // section (crew-only assist). Super → superintendents (incl. general/asst).
+  // Field Coordinator → field coordinators. Both → either.
+  function personMatchesLabor(resourceType) {
+    const t = String(resourceType || "").toLowerCase();
+    const isSuper = t.includes("super");
+    const isFC = t.includes("field coordinator");
+    if (laborManagement === "Super") return isSuper;
+    if (laborManagement === "Field Coordinator") return isFC;
+    if (laborManagement === "Both") return isSuper || isFC;
+    return false; // "None"
+  }
+
+  const filteredPeople = (availability && availability.freeResources ? availability.freeResources : [])
+    .filter((r) => activeRequest && activeRequest.kind === "crew" ? personMatchesLabor(r.resourceType) : true);
+
+  const selectionCount = selCrewIds.length + selPeopleIds.length;
+
+  function handleContinue() {
+    if (!availability) return;
+    const crews = (availability.freeCrews || []).filter((c) => selCrewIds.includes(c.id));
+    const people = (availability.freeResources || []).filter((r) => selPeopleIds.includes(r.id));
+    onContinue && onContinue({ crews, people });
+  }
+
   return (
     <div className="fixed inset-0 z-[86] flex items-center justify-center bg-slate-950/50 p-4">
       <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 p-5">
           <div>
             <h2 className="text-2xl font-bold text-slate-900">Open Requests</h2>
-            <p className="text-sm text-slate-500">Click a request to open the Assign tool and see who’s available for that window.</p>
+            <p className="text-sm text-slate-500">Pick a request, stage the crews and labor management you want, then continue to the Assign tool.</p>
           </div>
           <button onClick={onClose} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
         </div>
@@ -636,8 +674,9 @@ export function RequestsModal({ requests, activeRequest, availability, requested
               );
             })}
           </div>
-          {/* Right: availability recommendation */}
-          <div className="min-h-0 overflow-auto p-5">
+          {/* Right: availability recommendation + staging */}
+          <div className="flex min-h-0 flex-col">
+            <div className="min-h-0 flex-1 overflow-auto p-5">
             {!activeRequest ? (
               <div className="text-sm text-slate-400">Select a request to see availability.</div>
             ) : !availability ? (
@@ -647,10 +686,10 @@ export function RequestsModal({ requests, activeRequest, availability, requested
             ) : (
               <>
                 <h3 className="mb-2 text-sm font-bold text-slate-900">Available for this window</h3>
-                <p className="mb-3 text-xs text-slate-500">Not booked on another project (and not on PTO) during the request’s dates. Click to assign.</p>
+                <p className="mb-3 text-xs text-slate-500">Not booked on another project (and not on PTO) during the request’s dates. Tap to stage; you can pick several.</p>
                 {activeRequest && activeRequest.kind === "crew" && laborManagement && laborManagement !== "None" && (
                   <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800">
-                    Labor management requested: {laborManagement}. Assign {laborManagement === "Both" ? "a superintendent and a field coordinator" : `a ${laborManagement.toLowerCase()}`} to this mobilization as well.
+                    Labor management requested: {laborManagement}. People below are filtered to {laborManagement === "Both" ? "superintendents and field coordinators" : laborManagement === "Super" ? "superintendents" : "field coordinators"}.
                   </div>
                 )}
                 {activeRequest && activeRequest.kind === "crew" && (requestedTypes || []).length > 0 && (
@@ -668,33 +707,60 @@ export function RequestsModal({ requests, activeRequest, availability, requested
                         const types = Array.isArray(c.crewType) ? c.crewType : [];
                         const needed = (activeRequest && activeRequest.kind === "crew") ? (requestedTypes || []) : [];
                         const matchCount = needed.filter((t) => types.includes(t)).length;
-                        const cls = needed.length === 0
-                          ? "bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
-                          : matchCount === 0
-                            ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                            : matchCount === needed.length
-                              ? "bg-emerald-500 text-white hover:bg-emerald-600"
-                              : "bg-amber-300 text-amber-900 hover:bg-amber-400";
+                        const picked = selCrewIds.includes(c.id);
+                        const cls = picked
+                          ? "bg-emerald-700 text-white ring-2 ring-emerald-900"
+                          : needed.length === 0
+                            ? "bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                            : matchCount === 0
+                              ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                              : matchCount === needed.length
+                                ? "bg-emerald-500 text-white hover:bg-emerald-600"
+                                : "bg-amber-300 text-amber-900 hover:bg-amber-400";
                         return (
-                          <button key={c.id} onClick={() => onAssignCrew && onAssignCrew(c)} title={types.length ? `Types: ${types.join(", ")}` : "No crew type set"}
+                          <button key={c.id} onClick={() => toggleCrew(c.id)} title={types.length ? `Types: ${types.join(", ")}` : "No crew type set"}
                             className={`rounded-full px-2.5 py-1 text-xs font-semibold ${cls}`}>
-                            {c.crewName}{types.length ? ` · ${types.join("/")}` : ""}
+                            {picked ? "✓ " : ""}{c.crewName}{types.length ? ` · ${types.join("/")}` : ""}
                           </button>
                         );
                       })}
                   </div>
                 </div>
-                <div>
-                  <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">People ({availability.freeResources.length})</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {availability.freeResources.length === 0 ? <span className="text-xs text-slate-400">None free</span>
-                      : availability.freeResources.map((r) => (
-                        <button key={r.id} onClick={() => onAssignResource && onAssignResource(r)} title="Assign to matching role"
-                          className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200">{r.name} · {r.resourceType}</button>
-                      ))}
+                {activeRequest && activeRequest.kind === "crew" && laborManagement === "None" ? null : (
+                  <div>
+                    <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">
+                      {activeRequest && activeRequest.kind === "crew" ? "Labor Management" : "People"} ({filteredPeople.length})
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {filteredPeople.length === 0 ? <span className="text-xs text-slate-400">None available for the requested role</span>
+                        : filteredPeople.map((r) => {
+                          const picked = selPeopleIds.includes(r.id);
+                          return (
+                            <button key={r.id} onClick={() => togglePerson(r.id)} title="Stage for assignment"
+                              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${picked ? "bg-sky-700 text-white ring-2 ring-sky-900" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>
+                              {picked ? "✓ " : ""}{r.name} · {r.resourceType}
+                            </button>
+                          );
+                        })}
+                    </div>
                   </div>
-                </div>
+                )}
               </>
+            )}
+            </div>
+            {/* Footer: staged count + continue */}
+            {activeRequest && availability && (
+              <div className="shrink-0 border-t border-slate-200 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-semibold text-slate-500">
+                    {selectionCount === 0 ? "Nothing staged yet" : `${selCrewIds.length} crew${selCrewIds.length === 1 ? "" : "s"}, ${selPeopleIds.length} ${selPeopleIds.length === 1 ? "person" : "people"} staged`}
+                  </span>
+                  <button onClick={handleContinue} disabled={selectionCount === 0}
+                    className="rounded-xl bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:bg-slate-300">
+                    Continue to Assign →
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -3821,26 +3887,6 @@ export default function App() {
     };
   }
 
-  // Click a banner request → preselect its project in the Assign tool and open it.
-  function startAssignFromRequest(req) {
-    setActiveRequest(req);
-    loadAssignmentTasks(req.projectId);
-    // Find an existing assignment for the project, or open a fresh Assign form
-    // with the project preselected.
-    const existing = assignments.find((a) => a.projectId === req.projectId);
-    if (existing) {
-      openEditAssignmentForm(existing);
-    } else {
-      setEditingAssignmentId(null);
-      setAssignmentForm({
-        ...blankAssignment,
-        projectId: req.projectId,
-        mobilizations: [{ id: crypto.randomUUID(), start: req.start || "", durationWeeks: "", end: req.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }],
-      });
-      setShowAssignmentForm(true);
-    }
-  }
-
   // Map a resource type to the assignment form field it fills.
   function roleFieldForResourceType(rt) {
     const t = String(rt || "").toLowerCase();
@@ -3852,41 +3898,15 @@ export default function App() {
     return null;
   }
 
-  // From the Open Requests modal: click an available PERSON to drop them into
-  // the matching role on the Assign form (opening it on the request's project).
-  function assignResourceFromModal(resource) {
+  // From the Open Requests modal: the office stages one or more crews + people,
+  // then clicks "Continue to Assign". We build a single assignment with the
+  // whole selection applied to the first mobilization (crew men counts, super /
+  // field coordinator) and open the Assign tool for final review.
+  function buildAssignmentFromSelection(selection) {
     if (!activeRequest) return;
-    setFulfillingRequest(activeRequest);
-    loadAssignmentTasks(activeRequest.projectId);
-    const field = roleFieldForResourceType(resource.resourceType);
-    const existing = assignments.find((a) => a.projectId === activeRequest.projectId);
-    const base = existing
-      ? { ...blankAssignment, ...existing }
-      : { ...blankAssignment, projectId: activeRequest.projectId,
-          mobilizations: [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }] };
-    // PM / field engineer / safety are assignment-level; super / field coord
-    // live on the first mobilization.
-    if (field === "projectManager" || field === "fieldEngineer" || field === "safety") {
-      base[field] = resource.name;
-    } else if (field === "superintendent" || field === "fieldCoordinator") {
-      const mobs = base.mobilizations && base.mobilizations.length ? [...base.mobilizations] : [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }];
-      mobs[0] = { ...mobs[0], [field]: resource.name };
-      base.mobilizations = mobs;
-    } else {
-      alert(`No matching assignment role for ${resource.resourceType}.`);
-      return;
-    }
-    setEditingAssignmentId(existing ? existing.id : null);
-    setAssignmentForm(base);
-    setShowRequestsModal(false);
-    setShowAssignmentForm(true);
-  }
-
-  // Click an available CREW to add it to the first mobilization of the
-  // request's project assignment. Carries the request's men count, requested
-  // super / field coordinator, and the tasks it was requested for.
-  function assignCrewFromModal(crew) {
-    if (!activeRequest) return;
+    const sel = selection || { crews: [], people: [] };
+    const selCrews = sel.crews || [];
+    const selPeople = sel.people || [];
     setFulfillingRequest(activeRequest);
     loadAssignmentTasks(activeRequest.projectId);
     const reqTaskIds = Array.isArray(activeRequest.taskIds) ? activeRequest.taskIds : [];
@@ -3897,18 +3917,29 @@ export default function App() {
       : { ...blankAssignment, projectId: activeRequest.projectId,
           mobilizations: [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [], taskIds: [] }] };
     const mobs = base.mobilizations && base.mobilizations.length ? [...base.mobilizations] : [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [], taskIds: [] }];
-    const m0 = mobs[0];
-    const firstCrewIds = m0.crewIds || [];
-    const newCrewIds = firstCrewIds.includes(crew.id) ? firstCrewIds : [...firstCrewIds, crew.id];
+    let m0 = { ...mobs[0] };
+
+    // Crews → first mobilization, with the requested men count as a default.
+    const existingCrewIds = m0.crewIds || [];
+    const addCrewIds = selCrews.map((c) => c.id).filter((id) => !existingCrewIds.includes(id));
+    const newCrewIds = [...existingCrewIds, ...addCrewIds];
     const newMen = { ...(m0.crewMenCounts || {}) };
-    if (reqMen && !newMen[crew.id]) newMen[crew.id] = reqMen;
+    selCrews.forEach((c) => { if (reqMen && !newMen[c.id]) newMen[c.id] = reqMen; });
+
+    // People → matching role. PM / field engineer / safety are assignment-level;
+    // super / field coordinator live on the first mobilization.
+    selPeople.forEach((resource) => {
+      const field = roleFieldForResourceType(resource.resourceType);
+      if (field === "projectManager" || field === "fieldEngineer" || field === "safety") {
+        base[field] = resource.name;
+      } else if (field === "superintendent" || field === "fieldCoordinator") {
+        m0[field] = resource.name;
+      }
+    });
+
     const mergedTasks = Array.from(new Set([...(m0.taskIds || []), ...reqTaskIds]));
-    mobs[0] = {
-      ...m0,
-      crewIds: newCrewIds,
-      crewMenCounts: newMen,
-      taskIds: mergedTasks,
-    };
+    m0 = { ...m0, crewIds: newCrewIds, crewMenCounts: newMen, taskIds: mergedTasks };
+    mobs[0] = m0;
     base.mobilizations = mobs;
     setEditingAssignmentId(existing ? existing.id : null);
     setAssignmentForm(base);
@@ -7895,10 +7926,9 @@ export default function App() {
           availability={activeRequest && (activeRequest.start && activeRequest.end) ? computeAvailability(activeRequest.start, activeRequest.end) : null}
           requestedTypes={activeRequest && activeRequest.kind === "crew" ? (activeRequest.crewTypes || []) : []}
           laborManagement={activeRequest && activeRequest.kind === "crew" ? (activeRequest.laborManagement || "None") : "None"}
-          onPick={(req) => startAssignFromRequest(req)}
+          onPick={(req) => setActiveRequest(req)}
           onDelete={(req) => (req.kind === "crew" ? deleteTaskRequest(req.id) : deleteStaffRequest(req.id))}
-          onAssignResource={(resource) => assignResourceFromModal(resource)}
-          onAssignCrew={(crew) => assignCrewFromModal(crew)}
+          onContinue={(selection) => buildAssignmentFromSelection(selection)}
           onClose={() => { setShowRequestsModal(false); setActiveRequest(null); }}
         />
       )}
