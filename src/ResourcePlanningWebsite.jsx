@@ -703,6 +703,14 @@ export function RequestsModal({ requests, activeRequest, availability, requested
   );
 }
 
+// First name + last initial, e.g. "Aaron Poppe" -> "Aaron P."
+function formatShortName(full) {
+  if (!full) return "";
+  const parts = String(full).trim().split(/\s+/);
+  if (parts.length === 1) return parts[0];
+  return `${parts[0]} ${parts[parts.length - 1][0]}.`;
+}
+
 export function TaskGanttRow({ task, timeline, striped, dependsOnName, requests, assigned, onClick }) {
   const span = (task.start_date && task.end_date)
     ? timelineSpanPixels(task.start_date, task.end_date, timeline)
@@ -721,6 +729,12 @@ export function TaskGanttRow({ task, timeline, striped, dependsOnName, requests,
           <p className="truncate text-[12px] font-semibold text-slate-900 hover:text-emerald-700">
             {task.name}
             {dependsOnName ? <span className="ml-1 font-normal text-slate-400">↳ {dependsOnName}</span> : null}
+            {assigned && (() => {
+              const labor = [...assigned.supers, ...assigned.fieldCoords].map(formatShortName).filter(Boolean);
+              const crewBits = assigned.crews.map((c) => `${c.name}${c.men ? ` (${c.men})` : ""}`);
+              const bits = [...labor, ...crewBits];
+              return bits.length ? <span className="ml-1.5 font-normal text-[10px] text-emerald-700">· {bits.join(" · ")}</span> : null;
+            })()}
           </p>
         </button>
         <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
@@ -3526,8 +3540,9 @@ export default function App() {
   async function submitTaskRequest() {
     if (!schedProjectId) { alert("Pick a project first."); return; }
     const types = taskRequestForm.crewTypes || [];
-    if (!types.length) { alert("Choose at least one crew type."); return; }
-    if (!taskRequestForm.taskIds.length) { alert("Select at least one task this crew is for."); return; }
+    const labor = taskRequestForm.laborManagement || "None";
+    if (!types.length && labor === "None") { alert("Select at least one crew type or a labor management request."); return; }
+    if (!taskRequestForm.taskIds.length) { alert("Select at least one task this request is for."); return; }
     if (!supabase) { alert("Supabase is not connected."); return; }
     setTaskRequestBusy(true);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3535,7 +3550,7 @@ export default function App() {
       .from("task_crew_requests")
       .insert({
         project_id: schedProjectId,
-        crew_specialty: types.join(", "),
+        crew_specialty: types.length ? types.join(", ") : (labor !== "None" ? `Labor: ${labor}` : ""),
         crew_types: types,
         labor_management: taskRequestForm.laborManagement || "None",
         men_count: taskRequestForm.menCount ? Number(taskRequestForm.menCount) : 0,
@@ -3651,6 +3666,7 @@ export default function App() {
   // Banner "Requests" modal (Project Dashboard) state.
   const [showRequestsModal, setShowRequestsModal] = useState(false);
   const [activeRequest, setActiveRequest] = useState(null); // request clicked → drives availability panel
+  const [fulfillingRequest, setFulfillingRequest] = useState(null); // request being turned into an assignment (approved on save)
 
   // Load staff requests for the selected scheduling project.
   const loadStaffRequests = React.useCallback(async (projectId) => {
@@ -3840,6 +3856,7 @@ export default function App() {
   // the matching role on the Assign form (opening it on the request's project).
   function assignResourceFromModal(resource) {
     if (!activeRequest) return;
+    setFulfillingRequest(activeRequest);
     loadAssignmentTasks(activeRequest.projectId);
     const field = roleFieldForResourceType(resource.resourceType);
     const existing = assignments.find((a) => a.projectId === activeRequest.projectId);
@@ -3870,6 +3887,7 @@ export default function App() {
   // super / field coordinator, and the tasks it was requested for.
   function assignCrewFromModal(crew) {
     if (!activeRequest) return;
+    setFulfillingRequest(activeRequest);
     loadAssignmentTasks(activeRequest.projectId);
     const reqTaskIds = Array.isArray(activeRequest.taskIds) ? activeRequest.taskIds : [];
     const reqMen = Number(activeRequest.menCount) || 0;
@@ -4532,6 +4550,33 @@ export default function App() {
     };
     if (editingAssignmentId) setAssignments((current) => current.map((a) => (a.id === editingAssignmentId ? mapped : a)));
     else setAssignments((current) => [mapped, ...current]);
+
+    // If this assignment was created to fulfill a crew request, mark that
+    // request approved and record the assigned crew + the saved mobilization.
+    if (fulfillingRequest && fulfillingRequest.kind === "crew" && supabase) {
+      const reqTaskIds = Array.isArray(fulfillingRequest.taskIds) ? fulfillingRequest.taskIds : [];
+      // Find the saved mobilization that covers this request's tasks (fallback: first).
+      const mobForReq = (savedMobs || []).find((m) =>
+        Array.isArray(m.task_ids) && reqTaskIds.some((tid) => m.task_ids.includes(tid))
+      ) || (savedMobs || [])[0];
+      const assignedCrewId = mobForReq && Array.isArray(mobForReq.crew_ids) && mobForReq.crew_ids.length ? mobForReq.crew_ids[0] : null;
+      const { error: apprErr } = await supabase
+        .from("task_crew_requests")
+        .update({
+          status: "approved",
+          assigned_crew_id: assignedCrewId,
+          mobilization_id: mobForReq ? mobForReq.id : null,
+          resolved_by: (await supabase.auth.getUser()).data.user?.id || null,
+          resolved_at: new Date().toISOString(),
+        })
+        .eq("id", fulfillingRequest.id);
+      if (apprErr) console.error("Could not mark request approved:", apprErr);
+      if (schedProjectId) loadProjectSchedule(schedProjectId);
+      loadAllRequests();
+    }
+    setFulfillingRequest(null);
+    setActiveRequest(null);
+
     setShowAssignmentForm(false); setEditingAssignmentId(null);
     setAssignmentTasks([]);
     setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }] });
@@ -7857,7 +7902,7 @@ export default function App() {
           onClose={() => { setShowRequestsModal(false); setActiveRequest(null); }}
         />
       )}
-      {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} onDelete={async () => {
+      {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => { setShowAssignmentForm(false); setFulfillingRequest(null); }} onDelete={async () => {
         if (!editingAssignmentId) return;
         const ok = await deleteAssignment(editingAssignmentId);
         if (ok) {
