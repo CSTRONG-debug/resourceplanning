@@ -778,24 +778,25 @@ function formatShortName(full) {
 }
 
 export function TaskGanttRow({ task, timeline, striped, dependsOnName, requests, assigned, onClick }) {
-  const span = (task.start_date && task.end_date)
-    ? timelineSpanPixels(task.start_date, task.end_date, timeline)
-    : { left: 0, width: 0 };
-  // Crew specialties requested for this task (badges on the bar label).
+  const startD = task.eff_start || task.start_date;
+  const endD = task.eff_end || task.end_date;
+  const span = (startD && endD) ? timelineSpanPixels(startD, endD, timeline) : { left: 0, width: 0 };
   const reqs = (requests || []).filter((r) =>
     (r.task_crew_request_links || []).some((l) => l.task_id === task.id));
   const anyApproved = reqs.some((r) => r.status === "approved");
   const anyPending = reqs.some((r) => r.status === "pending");
   const barColor = anyApproved ? "bg-emerald-700" : anyPending ? "bg-amber-500" : "bg-slate-400";
+  const isHeader = task.isHeader;
+  const depth = task.depth || 0;
 
   return (
-    <div className={`py-0.5 ${striped ? "bg-slate-100/60" : ""}`}>
-      <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
-        <button onClick={onClick} className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden hover:bg-slate-50">
-          <p className="truncate text-[12px] font-semibold text-slate-900 hover:text-emerald-700">
-            {task.name}
+    <div className={`${striped && !isHeader ? "bg-slate-100/60" : ""}`} style={{ height: "32px" }}>
+      <div className="grid grid-cols-[320px_1fr] items-center gap-0" style={{ height: "32px" }}>
+        <button onClick={onClick} className={`sticky left-0 z-20 h-full text-left overflow-hidden ${isHeader ? "bg-slate-200 hover:bg-slate-300" : "bg-white hover:bg-slate-50"}`} style={{ paddingLeft: `${8 + depth * 16}px`, paddingRight: "12px" }}>
+          <p className={`truncate ${isHeader ? "text-[12px] font-extrabold uppercase tracking-wide text-slate-800" : "text-[12px] font-semibold text-slate-900 hover:text-emerald-700"}`}>
+            {isHeader ? "▸ " : ""}{task.name}
             {dependsOnName ? <span className="ml-1 font-normal text-slate-400">↳ {dependsOnName}</span> : null}
-            {assigned && (() => {
+            {!isHeader && assigned && (() => {
               const labor = [...assigned.supers, ...assigned.fieldCoords].map(formatShortName).filter(Boolean);
               const crewBits = assigned.crews.map((c) => `${c.name}${c.men ? ` (${c.men})` : ""}`);
               const bits = [...labor, ...crewBits];
@@ -803,35 +804,64 @@ export function TaskGanttRow({ task, timeline, striped, dependsOnName, requests,
             })()}
           </p>
         </button>
-        <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
+        <div className="relative h-full" style={{ width: `${timeline.width}px` }}>
           {span.width > 0 && (
             <div
-              className={`absolute top-0 h-7 overflow-hidden rounded-md px-2.5 text-[11px] font-semibold leading-7 text-white shadow-sm ${barColor}`}
-              style={{ left: `${span.left}px`, width: `${span.width}px` }}
-              title={`${task.name}\n${formatDate(task.start_date)} - ${formatDate(task.end_date)}${reqs.length ? "\nCrew: " + reqs.map((r) => `${r.crew_specialty} (${r.status})`).join(", ") : ""}`}
+              className={`absolute h-5 overflow-hidden rounded-md px-2.5 text-[11px] font-semibold leading-5 text-white shadow-sm ${isHeader ? "bg-slate-700" : barColor}`}
+              style={{ left: `${span.left}px`, width: `${span.width}px`, top: "6px" }}
+              title={`${task.name}\n${startD ? formatDate(startD) : "?"} - ${endD ? formatDate(endD) : "?"}${reqs.length ? "\nCrew: " + reqs.map((r) => `${r.crew_specialty} (${r.status})`).join(", ") : ""}`}
             >
-              {reqs.length ? reqs.map((r) => r.crew_specialty).join(", ") : task.name}
+              {isHeader ? task.name : (reqs.length ? reqs.map((r) => r.crew_specialty).join(", ") : task.name)}
             </div>
           )}
         </div>
       </div>
-      {assigned && (assigned.crews.length > 0 || assigned.supers.size > 0 || assigned.fieldCoords.size > 0) && (
-        <div className="grid grid-cols-[320px_1fr] items-start gap-0">
-          <div className="sticky left-0 z-20 bg-white pr-3" />
-          <div className="flex flex-wrap items-center gap-1.5 py-0.5 pl-1">
-            {[...assigned.supers].map((s) => (
-              <span key={`s-${s}`} className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-800">Super: {s}</span>
-            ))}
-            {[...assigned.fieldCoords].map((f) => (
-              <span key={`f-${f}`} className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-800">FC: {f}</span>
-            ))}
-            {assigned.crews.map((c) => (
-              <span key={`c-${c.name}`} className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">{c.name}{c.men ? ` · ${c.men} men` : ""}</span>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
+  );
+}
+
+// ─── TaskDependencyArrows ────────────────────────────────────────────────────
+// SVG overlay drawing predecessor → successor connectors on the task Gantt.
+// Anchor points depend on the relationship type:
+//   FS: predecessor END  → successor START
+//   SS: predecessor START → successor START
+//   FF: predecessor END  → successor END
+//   SF: predecessor START → successor END
+function TaskDependencyArrows({ tasks, timeline, rowHeight }) {
+  const indexById = new Map(tasks.map((t, i) => [t.id, i]));
+  const spanOf = (t) => {
+    const s = t.eff_start || t.start_date, e = t.eff_end || t.end_date;
+    return (s && e) ? timelineSpanPixels(s, e, timeline) : null;
+  };
+  const paths = [];
+  tasks.forEach((t, i) => {
+    if (!t.depends_on || !indexById.has(t.depends_on)) return;
+    const depIdx = indexById.get(t.depends_on);
+    const dep = tasks[depIdx];
+    const depSpan = spanOf(dep);
+    const curSpan = spanOf(t);
+    if (!depSpan || !curSpan || depSpan.width <= 0 || curSpan.width <= 0) return;
+    const type = t.dependency_type || "FS";
+    const fromX = (type === "FS" || type === "FF") ? depSpan.left + depSpan.width : depSpan.left;
+    const toX = (type === "FF" || type === "SF") ? curSpan.left + curSpan.width : curSpan.left;
+    const fromY = depIdx * rowHeight + rowHeight / 2;
+    const toY = i * rowHeight + rowHeight / 2;
+    // Orthogonal elbow with a small horizontal stub, then arrowhead into the bar.
+    const stub = 10;
+    const dir = toX >= fromX ? 1 : -1;
+    const midX = Math.max(fromX + stub, toX - stub);
+    const d = `M ${fromX} ${fromY} H ${fromX + dir * stub} V ${toY} H ${toX - 6}`;
+    paths.push(
+      <g key={`${t.id}-arrow`}>
+        <path d={d} fill="none" stroke="#64748b" strokeWidth="1.4" />
+        <path d={`M ${toX - 6} ${toY - 3} L ${toX} ${toY} L ${toX - 6} ${toY + 3} Z`} fill="#64748b" />
+      </g>
+    );
+  });
+  return (
+    <svg width={timeline.width} height={tasks.length * rowHeight} className="overflow-visible">
+      {paths}
+    </svg>
   );
 }
 
@@ -885,36 +915,59 @@ export function TaskCrewRequestRow({ r, isOffice, isPM, taskNameById, crews, onW
 
 export function TaskForm({ form, setForm, tasks, editingTaskId, onSave, onCancel, onDelete }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
-  // Dependency options: every other task in this project.
-  const depOptions = tasks.filter((t) => t.id !== editingTaskId);
+  // Dependency options: every other NON-header task in this project.
+  const depOptions = tasks.filter((t) => t.id !== editingTaskId && !t.is_header);
+  // Header rows available as group parents.
+  const headerOptions = tasks.filter((t) => t.is_header && t.id !== editingTaskId);
+  const isHeader = !!form.isHeader;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
       <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-slate-200 p-5">
           <div>
-            <h2 className="text-xl font-bold text-slate-900">{editingTaskId ? "Edit Task" : "Add Task"}</h2>
-            <p className="text-sm text-slate-500">A task is a granular work item within this project.</p>
+            <h2 className="text-xl font-bold text-slate-900">{editingTaskId ? (isHeader ? "Edit Header" : "Edit Task") : (isHeader ? "Add Header" : "Add Task")}</h2>
+            <p className="text-sm text-slate-500">{isHeader ? "A header groups tasks beneath it. Its bar spans its children." : "A task is a granular work item within this project."}</p>
           </div>
           <button onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
         </div>
 
         <div className="grid gap-4 p-5">
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Task Name</span>
-            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.name} onChange={(e) => updateField("name", e.target.value)} placeholder="e.g. Form & Pour — Zone A" />
+          <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 cursor-pointer hover:bg-slate-100">
+            <input type="checkbox" className="h-4 w-4 rounded accent-emerald-600" checked={isHeader} onChange={(e) => updateField("isHeader", e.target.checked)} />
+            <div>
+              <p className="text-sm font-semibold text-slate-800">Header / group row</p>
+              <p className="text-xs text-slate-500">Use this row to group tasks underneath it. No dates or dependency — its span comes from its children.</p>
+            </div>
           </label>
 
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">{isHeader ? "Header Name" : "Task Name"}</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.name} onChange={(e) => updateField("name", e.target.value)} placeholder={isHeader ? "e.g. Sitework" : "e.g. Form & Pour — Zone A"} />
+          </label>
+
+          {!isHeader && headerOptions.length > 0 && (
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Group under (header)</span>
+              <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.parentId} onChange={(e) => updateField("parentId", e.target.value)}>
+                <option value="">None — top level</option>
+                {headerOptions.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+              </select>
+            </label>
+          )}
+
+          {!isHeader && (
           <label className="space-y-1">
             <span className="text-sm font-medium text-slate-700">Follows (dependency)</span>
             <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.dependsOn} onChange={(e) => updateField("dependsOn", e.target.value)}>
               <option value="">None — independent task</option>
               {depOptions.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
-            <span className="text-xs text-slate-500">If set and no start date is given, this task starts the day after the one it follows.</span>
+            <span className="text-xs text-slate-500">If set and no start date is given, dates derive from the predecessor by type + lag.</span>
           </label>
+          )}
 
-          {form.dependsOn && (
+          {!isHeader && form.dependsOn && (
             <div className="grid gap-4 md:grid-cols-[1fr_auto]">
               <label className="space-y-1">
                 <span className="text-sm font-medium text-slate-700">Dependency Type</span>
@@ -933,6 +986,7 @@ export function TaskForm({ form, setForm, tasks, editingTaskId, onSave, onCancel
             </div>
           )}
 
+          {!isHeader && (<>
           <div className="grid gap-4 md:grid-cols-3">
             <label className="space-y-1">
               <span className="text-sm font-medium text-slate-700">Start Date</span>
@@ -948,13 +1002,14 @@ export function TaskForm({ form, setForm, tasks, editingTaskId, onSave, onCancel
             </label>
           </div>
           <p className="text-xs text-slate-500">Leave End blank to auto-fill from Start + Duration. End wins if both are given.</p>
+          </>)}
         </div>
 
         <div className="flex justify-between gap-3 border-t border-slate-200 p-5">
           <div>{editingTaskId && <button onClick={() => onDelete(editingTaskId)} className="rounded-xl border border-red-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-50">Delete Task</button>}</div>
           <div className="flex gap-3">
             <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-            <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Task</button>
+            <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">{isHeader ? "Save Header" : "Save Task"}</button>
           </div>
         </div>
       </div>
@@ -3488,7 +3543,7 @@ export default function App() {
 
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
-  const [taskForm, setTaskForm] = useState({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS", dependencyLag: 0 });
+  const [taskForm, setTaskForm] = useState({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS", dependencyLag: 0, isHeader: false, parentId: "" });
 
   const [showTaskRequestForm, setShowTaskRequestForm] = useState(false);
   const [taskRequestForm, setTaskRequestForm] = useState({ crewSpecialty: "", crewTypes: [], menCount: "", notes: "", laborManagement: "None", taskIds: [] });
@@ -3533,9 +3588,9 @@ export default function App() {
     return `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
   }
 
-  function openAddTaskForm() {
+  function openAddTaskForm(opts) {
     setEditingTaskId(null);
-    setTaskForm({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS", dependencyLag: 0 });
+    setTaskForm({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS", dependencyLag: 0, isHeader: !!(opts && opts.isHeader), parentId: (opts && opts.parentId) || "" });
     setShowTaskForm(true);
   }
   function openEditTaskForm(t) {
@@ -3548,6 +3603,8 @@ export default function App() {
       dependsOn: t.depends_on || "",
       dependencyType: t.dependency_type || "FS",
       dependencyLag: t.dependency_lag || 0,
+      isHeader: !!t.is_header,
+      parentId: t.parent_id || "",
     });
     setShowTaskForm(true);
   }
@@ -3584,15 +3641,18 @@ export default function App() {
       if (e) start = fmtDate(addDays(e, -(Number(taskForm.durationDays) - 1)));
     }
     if (!end) end = taskEndFromDuration(start, taskForm.durationDays) || null;
+    const isHeader = !!taskForm.isHeader;
     const payload = {
       project_id: schedProjectId,
       name: taskForm.name.trim(),
-      start_date: start,
-      end_date: end,
-      duration_days: taskForm.durationDays ? Number(taskForm.durationDays) : null,
-      depends_on: taskForm.dependsOn || null,
-      dependency_type: taskForm.dependsOn ? (taskForm.dependencyType || "FS") : "FS",
-      dependency_lag: taskForm.dependsOn ? (Number(taskForm.dependencyLag) || 0) : 0,
+      is_header: isHeader,
+      parent_id: isHeader ? null : (taskForm.parentId || null),
+      start_date: isHeader ? null : start,
+      end_date: isHeader ? null : end,
+      duration_days: isHeader ? null : (taskForm.durationDays ? Number(taskForm.durationDays) : null),
+      depends_on: isHeader ? null : (taskForm.dependsOn || null),
+      dependency_type: (!isHeader && taskForm.dependsOn) ? (taskForm.dependencyType || "FS") : "FS",
+      dependency_lag: (!isHeader && taskForm.dependsOn) ? (Number(taskForm.dependencyLag) || 0) : 0,
       created_by_name: pmName || currentUser,
       updated_at: new Date().toISOString(),
     };
@@ -3739,12 +3799,102 @@ export default function App() {
   }, [assignments, schedProjectId, crewNameByIdMap]);
 
   // Build a Gantt timeline scoped to the selected project's tasks.
+  // ── Effective task scheduling (honor dependency type + lag at render time) ──
+  // Stored dates may be stale or only reflect the old FS-only logic, so we
+  // recompute each non-header task's start/end from its predecessor here. This
+  // makes the Gantt bars reflect SS / FF / SF / FS + lag regardless of what's
+  // stored. Headers derive their span from their children.
+  const scheduledById = useMemo(() => {
+    const byId = new Map(projectTasks.map((t) => [t.id, t]));
+    const result = new Map(); // id -> { start: Date|null, end: Date|null }
+    const visiting = new Set();
+    const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const durOf = (t) => {
+      if (t.duration_days) return Number(t.duration_days);
+      if (t.start_date && t.end_date) {
+        const s = toDate(t.start_date), e = toDate(t.end_date);
+        if (s && e) return Math.round((e - s) / 86400000) + 1;
+      }
+      return 1;
+    };
+    function compute(id) {
+      if (result.has(id)) return result.get(id);
+      const t = byId.get(id);
+      if (!t) return { start: null, end: null };
+      if (visiting.has(id)) { // cycle guard — fall back to stored dates
+        const s = t.start_date ? toDate(t.start_date) : null;
+        const e = t.end_date ? toDate(t.end_date) : null;
+        return { start: s, end: e };
+      }
+      visiting.add(id);
+      let start = t.start_date ? toDate(t.start_date) : null;
+      let end = t.end_date ? toDate(t.end_date) : null;
+      const dur = durOf(t);
+      if (t.depends_on && byId.has(t.depends_on)) {
+        const dep = compute(t.depends_on);
+        const lag = Number(t.dependency_lag) || 0;
+        const type = t.dependency_type || "FS";
+        if (dep.start || dep.end) {
+          if (type === "FS" && dep.end) { start = addDays(dep.end, 1 + lag); end = addDays(start, dur - 1); }
+          else if (type === "SS" && dep.start) { start = addDays(dep.start, lag); end = addDays(start, dur - 1); }
+          else if (type === "FF" && dep.end) { end = addDays(dep.end, lag); start = addDays(end, -(dur - 1)); }
+          else if (type === "SF" && dep.start) { end = addDays(dep.start, lag); start = addDays(end, -(dur - 1)); }
+        }
+      }
+      visiting.delete(id);
+      const out = { start: start || null, end: end || null };
+      result.set(id, out);
+      return out;
+    }
+    projectTasks.forEach((t) => { if (!t.is_header) compute(t.id); });
+    // Headers: span across their children's computed dates.
+    projectTasks.filter((t) => t.is_header).forEach((h) => {
+      const kids = projectTasks.filter((c) => c.parent_id === h.id && !c.is_header);
+      let s = null, e = null;
+      kids.forEach((c) => {
+        const cc = result.get(c.id);
+        if (cc && cc.start && (!s || cc.start < s)) s = cc.start;
+        if (cc && cc.end && (!e || cc.end > e)) e = cc.end;
+      });
+      result.set(h.id, { start: s, end: e });
+    });
+    // Convert to ISO strings for downstream consumers.
+    const iso = new Map();
+    result.forEach((v, k) => iso.set(k, { start: v.start ? fmt(v.start) : null, end: v.end ? fmt(v.end) : null }));
+    return iso;
+  }, [projectTasks]);
+
+  // Ordered, grouped task list for the Gantt: headers first, each followed by
+  // its children (in sort order); orphan (ungrouped) tasks fall under a virtual
+  // bucket at the end. Each entry carries effective start/end + depth.
+  const groupedTasks = useMemo(() => {
+    const eff = (t) => {
+      const e = scheduledById.get(t.id) || {};
+      return { ...t, eff_start: e.start || t.start_date || null, eff_end: e.end || t.end_date || null };
+    };
+    const headers = projectTasks.filter((t) => t.is_header).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const out = [];
+    headers.forEach((h) => {
+      out.push({ ...eff(h), depth: 0, isHeader: true });
+      projectTasks
+        .filter((c) => c.parent_id === h.id && !c.is_header)
+        .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+        .forEach((c) => out.push({ ...eff(c), depth: 1, isHeader: false }));
+    });
+    // Ungrouped tasks (no parent, not a header) shown at the top level.
+    const ungrouped = projectTasks
+      .filter((t) => !t.is_header && !t.parent_id)
+      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    ungrouped.forEach((t) => out.push({ ...eff(t), depth: 0, isHeader: false }));
+    return out;
+  }, [projectTasks, scheduledById]);
+
   const schedTimeline = useMemo(() => {
-    const items = projectTasks
-      .filter((t) => t.start_date && t.end_date)
-      .map((t) => ({ start: t.start_date, end: t.end_date }));
+    const items = groupedTasks
+      .filter((t) => t.eff_start && t.eff_end)
+      .map((t) => ({ start: t.eff_start, end: t.eff_end }));
     return buildTimeline(items, schedZoom);
-  }, [projectTasks, schedZoom]);
+  }, [groupedTasks, schedZoom]);
 
   const schedPendingRequests = taskCrewRequests.filter((r) => r.status === "pending");
   const schedResolvedRequests = taskCrewRequests.filter((r) => r.status !== "pending");
@@ -4399,15 +4549,15 @@ export default function App() {
   function printTaskSchedule() {
     if (!schedProjectId) { alert("Pick a project first."); return; }
     const proj = findProject(projects, schedProjectId);
-    const tasks = (projectTasks || []).slice();
+    const tasks = (groupedTasks || []).slice(); // ordered/grouped with effective dates
     if (!tasks.length) { alert("This project has no tasks to print."); return; }
     const esc = (v) => String(v == null ? "" : v).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch] || ch));
 
-    // Overall date window across all dated tasks.
-    const dated = tasks.filter((t) => t.start_date && t.end_date);
+    // Overall date window across all dated tasks (using effective dates).
+    const dated = tasks.filter((t) => t.eff_start && t.eff_end);
     let minD = null, maxD = null;
     dated.forEach((t) => {
-      const s = toDate(t.start_date), e = toDate(t.end_date);
+      const s = toDate(t.eff_start), e = toDate(t.eff_end);
       if (s && (!minD || s < minD)) minD = s;
       if (e && (!maxD || e > maxD)) maxD = e;
     });
@@ -4421,9 +4571,18 @@ export default function App() {
     };
 
     const rows = tasks.map((t) => {
-      const has = t.start_date && t.end_date;
-      const left = has ? pct(t.start_date) : 0;
-      const width = has ? Math.max(0.6, (((toDate(t.end_date) - toDate(t.start_date)) / dayMs) + 1) / totalDays * 100) : 0;
+      const has = t.eff_start && t.eff_end;
+      const left = has ? pct(t.eff_start) : 0;
+      const width = has ? Math.max(0.6, (((toDate(t.eff_end) - toDate(t.eff_start)) / dayMs) + 1) / totalDays * 100) : 0;
+      if (t.isHeader) {
+        return `<tr class="hdr">
+          <td class="name">${esc(t.name)}</td>
+          <td class="date">${has ? esc(formatDate(t.eff_start)) : ""}</td>
+          <td class="date">${has ? esc(formatDate(t.eff_end)) : ""}</td>
+          <td class="assigned"></td>
+          <td class="barcell"><div class="track">${has ? `<div class="bar hdrbar" style="left:${left}%;width:${width}%"></div>` : ""}</div></td>
+        </tr>`;
+      }
       const predName = t.depends_on ? (taskNameById.get(t.depends_on) || "") : "";
       const predTag = t.depends_on ? depTagLocal(t.dependency_type, t.dependency_lag) : "";
       const a = assignedByTaskId.get(t.id);
@@ -4434,9 +4593,9 @@ export default function App() {
         a.crews.forEach((c) => assignedBits.push(c.name + (c.men ? ` (${c.men})` : "")));
       }
       return `<tr>
-        <td class="name">${esc(t.name)}${predName ? `<br><span class="pred">↳ ${esc(predName)} <b>${esc(predTag)}</b></span>` : ""}</td>
-        <td class="date">${has ? esc(formatDate(t.start_date)) : "—"}</td>
-        <td class="date">${has ? esc(formatDate(t.end_date)) : "—"}</td>
+        <td class="name" style="padding-left:${8 + (t.depth || 0) * 16}px">${esc(t.name)}${predName ? `<br><span class="pred">↳ ${esc(predName)} <b>${esc(predTag)}</b></span>` : ""}</td>
+        <td class="date">${has ? esc(formatDate(t.eff_start)) : "—"}</td>
+        <td class="date">${has ? esc(formatDate(t.eff_end)) : "—"}</td>
         <td class="assigned">${assignedBits.length ? esc(assignedBits.join(" · ")) : "<span class='muted'>—</span>"}</td>
         <td class="barcell"><div class="track">${has ? `<div class="bar" style="left:${left}%;width:${width}%"></div>` : ""}</div></td>
       </tr>`;
@@ -4471,6 +4630,8 @@ export default function App() {
       .date{color:#334155;white-space:nowrap}.assigned{color:#065f46;font-size:9px}.muted{color:#94a3b8}
       .barcell{padding:4px 6px}.track{position:relative;height:14px;background:#f1f5f9;border-radius:7px}
       .bar{position:absolute;top:0;height:14px;background:#047857;border-radius:7px;min-width:3px}
+      tr.hdr td{background:#e2e8f0;font-weight:800;text-transform:uppercase;font-size:9px;letter-spacing:.03em}
+      .hdrbar{background:#334155}
     </style></head><body>
       <div class="header">
         <div class="header-left"><img id="ggc-logo" class="logo" src="${window.location.origin}/logo.png" alt="GGC" onerror="this.style.display='none';window.__logoDone&&window.__logoDone();" onload="window.__logoDone&&window.__logoDone();"/>
@@ -6505,8 +6666,11 @@ export default function App() {
                       </button>
                       {(isPM || isOffice) && (
                         <>
-                          <button onClick={openAddTaskForm} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                          <button onClick={() => openAddTaskForm()} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                             <Plus size={16} /> Add Task
+                          </button>
+                          <button onClick={() => openAddTaskForm({ isHeader: true })} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                            <Plus size={16} /> Add Header
                           </button>
                           <button onClick={() => openTaskRequestForm()} disabled={!projectTasks.length} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:bg-slate-300">
                             <Plus size={16} /> Request Crew
@@ -6544,8 +6708,12 @@ export default function App() {
                           <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${schedTimeline.width}px` }}>
                             <GanttBackdrop timeline={schedTimeline} />
                           </div>
+                          {/* Dependency arrows overlay (aligned to the timeline area). */}
+                          <div className="absolute top-0 z-[15] pointer-events-none" style={{ left: "320px", width: `${schedTimeline.width}px`, height: `${groupedTasks.length * 32}px` }}>
+                            <TaskDependencyArrows tasks={groupedTasks} timeline={schedTimeline} rowHeight={32} />
+                          </div>
                           <div className="relative z-10">
-                            {projectTasks.map((t, idx) => (
+                            {groupedTasks.map((t, idx) => (
                               <TaskGanttRow
                                 key={t.id}
                                 task={t}
