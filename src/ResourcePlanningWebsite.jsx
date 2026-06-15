@@ -252,6 +252,9 @@ function mapAssignmentFromDbLocal(assignment, mobilizations) {
       // page reload and crew-only items can be identified by the
       // ganttItems augmentation.
       crewOnly: raw.crew_only != null ? !!raw.crew_only : !!mob.crewOnly,
+      // Which project tasks this mobilization covers (for the "which task"
+      // display on the assignment + the task-schedule details row).
+      taskIds: Array.isArray(raw.task_ids) ? raw.task_ids : (Array.isArray(mob.taskIds) ? mob.taskIds : []),
     };
   });
   // Sort by start date so the earliest mobilization is always first. Mobs
@@ -273,6 +276,7 @@ function mobilizationToDbLocal(mobilization, assignmentId) {
     ...mobilizationToDb(mobilization, assignmentId),
     unassigned_needs: normalizeUnassignedNeeds(mobilization.unassignedNeeds),
     crew_only: !!mobilization.crewOnly,
+    task_ids: Array.isArray(mobilization.taskIds) ? mobilization.taskIds.filter(Boolean) : [],
   };
 }
 
@@ -694,7 +698,7 @@ export function RequestsModal({ requests, activeRequest, availability, requested
   );
 }
 
-export function TaskGanttRow({ task, timeline, striped, dependsOnName, requests, onClick }) {
+export function TaskGanttRow({ task, timeline, striped, dependsOnName, requests, assigned, onClick }) {
   const span = (task.start_date && task.end_date)
     ? timelineSpanPixels(task.start_date, task.end_date, timeline)
     : { left: 0, width: 0 };
@@ -726,6 +730,22 @@ export function TaskGanttRow({ task, timeline, striped, dependsOnName, requests,
           )}
         </div>
       </div>
+      {assigned && (assigned.crews.length > 0 || assigned.supers.size > 0 || assigned.fieldCoords.size > 0) && (
+        <div className="grid grid-cols-[320px_1fr] items-start gap-0">
+          <div className="sticky left-0 z-20 bg-white pr-3" />
+          <div className="flex flex-wrap items-center gap-1.5 py-0.5 pl-1">
+            {[...assigned.supers].map((s) => (
+              <span key={`s-${s}`} className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-800">Super: {s}</span>
+            ))}
+            {[...assigned.fieldCoords].map((f) => (
+              <span key={`f-${f}`} className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-800">FC: {f}</span>
+            ))}
+            {assigned.crews.map((c) => (
+              <span key={`c-${c.name}`} className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">{c.name}{c.men ? ` · ${c.men} men` : ""}</span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -849,7 +869,7 @@ export function TaskForm({ form, setForm, tasks, editingTaskId, onSave, onCancel
 
 // ─── TaskCrewRequestForm (request a crew TYPE across one or more tasks) ───────
 
-export function TaskCrewRequestForm({ form, setForm, tasks, crewTypeOptions, onSave, onCancel, busy }) {
+export function TaskCrewRequestForm({ form, setForm, tasks, crewTypeOptions, resources, onSave, onCancel, busy }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
   function toggleType(t) {
     setForm((c) => {
@@ -896,6 +916,15 @@ export function TaskCrewRequestForm({ form, setForm, tasks, crewTypeOptions, onS
           <label className="space-y-1">
             <span className="text-sm font-medium text-slate-700">Men</span>
             <input type="number" min="0" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.menCount} onChange={(e) => updateField("menCount", e.target.value)} placeholder="0" />
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Superintendent <span className="font-normal text-slate-400">(optional)</span></span>
+            <SearchableResourceSelect value={form.superintendent || ""} onChange={(v) => updateField("superintendent", v)} resources={resources || []} resourceType={["Superintendent", "General Superintendent"]} placeholder="Request a superintendent..." />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Field Coordinator <span className="font-normal text-slate-400">(optional)</span></span>
+            <SearchableResourceSelect value={form.fieldCoordinator || ""} onChange={(v) => updateField("fieldCoordinator", v)} resources={resources || []} resourceType="Field Coordinator" placeholder="Request a field coordinator..." />
           </label>
 
           <div className="space-y-1 md:col-span-2">
@@ -1354,7 +1383,7 @@ export function ProjectForm({ form, setForm, onSave, onCancel, onDelete, editing
 
 // ─── AssignmentForm ───────────────────────────────────────────────────────────
 
-export function AssignmentForm({ form, setForm, onSave, onCancel, onDelete, editing, resources, projects, crews }) {
+export function AssignmentForm({ form, setForm, onSave, onCancel, onDelete, editing, resources, projects, crews, tasks }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
 
   // Calculate end date by adding `durationWeeks` work weeks to `startDate`,
@@ -1439,12 +1468,24 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, onDelete, edit
     }));
   }
 
+  // Which project task(s) a mobilization is for.
+  function toggleMobilizationTask(mobId, taskId) {
+    setForm((c) => ({
+      ...c,
+      mobilizations: (c.mobilizations || []).map((mob) => {
+        if (mob.id !== mobId) return mob;
+        const cur = Array.isArray(mob.taskIds) ? mob.taskIds : [];
+        return { ...mob, taskIds: cur.includes(taskId) ? cur.filter((x) => x !== taskId) : [...cur, taskId] };
+      }),
+    }));
+  }
+
   function addMobilization() {
     setForm((c) => ({
       ...c,
       mobilizations: [...(c.mobilizations || []), {
         id: crypto.randomUUID(), start: "", durationWeeks: "", end: "",
-        superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [],
+        superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [], taskIds: [],
       }],
     }));
   }
@@ -1594,6 +1635,25 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, onDelete, edit
                       <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={mob.end} onChange={(e) => updateMobilization(mob.id, "end", e.target.value)} />
                     </label>
                   </div>
+
+                  {/* Which task(s) this mobilization is for */}
+                  {(tasks || []).length > 0 && (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Task(s) for this mobilization</p>
+                      <div className="flex flex-wrap gap-2">
+                        {tasks.map((t) => {
+                          const active = (mob.taskIds || []).includes(t.id);
+                          return (
+                            <button key={`${mob.id}-task-${t.id}`} type="button" onClick={() => toggleMobilizationTask(mob.id, t.id)}
+                              className={`rounded-full px-3 py-1 text-xs font-semibold ${active ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"}`}>
+                              {t.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="mt-2 text-xs text-slate-400">Tagging tasks shows this crew/super on the task schedule.</p>
+                    </div>
+                  )}
 
                   {/* Per-mob roles — hidden if crew-only */}
                   {!mob.crewOnly && (
@@ -2879,6 +2939,8 @@ export default function App() {
   const [editingCrewId, setEditingCrewId] = useState(null);
   const [projectForm, setProjectForm] = useState(blankProject);
   const [assignmentForm, setAssignmentForm] = useState(blankAssignment);
+  const [assignmentTasks, setAssignmentTasks] = useState([]); // tasks for the project being assigned (for mob task tagging)
+  const [allTaskNames, setAllTaskNames] = useState({}); // taskId -> name, for the assignments table "which task" display
   const [resourceForm, setResourceForm] = useState(blankResource);
   const [crewForm, setCrewForm] = useState(blankCrew);
   const [crewTypes, setCrewTypes] = useState([]);
@@ -3038,7 +3100,7 @@ export default function App() {
   useSupabaseRealtime({ setProjects, setResources, setCrews, setAssignments, setCertifications });
 
   // ── Load app users after login ─────────────────────────────────────────────
-  useEffect(() => { if (currentUser) { loadAppUsers(); loadProjectTypes(); loadCrewTypes(); loadSavedViews(); } }, [currentUser]);
+  useEffect(() => { if (currentUser) { loadAppUsers(); loadProjectTypes(); loadCrewTypes(); loadAllTaskNames(); loadSavedViews(); } }, [currentUser]);
 
   useEffect(() => {
     localStorage.setItem("ggc_project_types", JSON.stringify(projectTypes));
@@ -3327,7 +3389,7 @@ export default function App() {
   const [taskForm, setTaskForm] = useState({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS" });
 
   const [showTaskRequestForm, setShowTaskRequestForm] = useState(false);
-  const [taskRequestForm, setTaskRequestForm] = useState({ crewSpecialty: "", crewTypes: [], menCount: "", notes: "", taskIds: [] });
+  const [taskRequestForm, setTaskRequestForm] = useState({ crewSpecialty: "", crewTypes: [], menCount: "", notes: "", superintendent: "", fieldCoordinator: "", taskIds: [] });
   const [taskRequestBusy, setTaskRequestBusy] = useState(false);
 
   // Load tasks + requests for the selected project.
@@ -3440,6 +3502,7 @@ export default function App() {
   function openTaskRequestForm(preselectTaskId = null) {
     setTaskRequestForm({
       crewSpecialty: "", crewTypes: [], menCount: "", notes: "",
+      superintendent: "", fieldCoordinator: "",
       taskIds: preselectTaskId ? [preselectTaskId] : [],
     });
     setShowTaskRequestForm(true);
@@ -3459,6 +3522,8 @@ export default function App() {
         project_id: schedProjectId,
         crew_specialty: types.join(", "),
         crew_types: types,
+        superintendent: taskRequestForm.superintendent || null,
+        field_coordinator: taskRequestForm.fieldCoordinator || null,
         men_count: taskRequestForm.menCount ? Number(taskRequestForm.menCount) : 0,
         notes: taskRequestForm.notes || null,
         requested_by: user.id,
@@ -3511,6 +3576,41 @@ export default function App() {
     projectTasks.forEach((t) => m.set(t.id, t.name));
     return m;
   }, [projectTasks]);
+
+  // Quick crew name lookup.
+  const crewNameByIdMap = useMemo(() => {
+    const m = new Map();
+    crews.forEach((c) => m.set(c.id, c.crewName));
+    return m;
+  }, [crews]);
+
+  // What's actually assigned to each task — derived from the selected project's
+  // assignment mobilizations that have been tagged with a task id. Shows under
+  // each task row on the schedule.
+  const assignedByTaskId = useMemo(() => {
+    const map = new Map(); // taskId -> { crews:[{name,men}], supers:Set, fieldCoords:Set }
+    if (!schedProjectId) return map;
+    assignments
+      .filter((a) => a.projectId === schedProjectId)
+      .forEach((a) => {
+        (a.mobilizations || []).forEach((mob) => {
+          const taskIds = Array.isArray(mob.taskIds) ? mob.taskIds : [];
+          if (!taskIds.length) return;
+          taskIds.forEach((tid) => {
+            if (!map.has(tid)) map.set(tid, { crews: [], supers: new Set(), fieldCoords: new Set() });
+            const entry = map.get(tid);
+            (mob.crewIds || []).filter(Boolean).forEach((cid) => {
+              const name = crewNameByIdMap.get(cid) || "Crew";
+              const men = (mob.crewMenCounts || {})[cid];
+              if (!entry.crews.some((x) => x.name === name)) entry.crews.push({ name, men: men || 0 });
+            });
+            if (mob.superintendent) entry.supers.add(mob.superintendent);
+            if (mob.fieldCoordinator) entry.fieldCoords.add(mob.fieldCoordinator);
+          });
+        });
+      });
+    return map;
+  }, [assignments, schedProjectId, crewNameByIdMap]);
 
   // Build a Gantt timeline scoped to the selected project's tasks.
   const schedTimeline = useMemo(() => {
@@ -3636,6 +3736,10 @@ export default function App() {
           label: `${r.crew_specialty}${r.men_count ? ` · ${r.men_count} men` : ""}`,
           specialty: r.crew_specialty,
           crewTypes: Array.isArray(r.crew_types) ? r.crew_types : [],
+          menCount: r.men_count || 0,
+          superintendent: r.superintendent || "",
+          fieldCoordinator: r.field_coordinator || "",
+          taskIds: (r.task_crew_request_links || []).map((l) => l.task_id),
           requestedBy: r.requested_by_name,
           start: r.window_start || null, end: r.window_end || null,
           raw: r,
@@ -3691,6 +3795,7 @@ export default function App() {
   // Click a banner request → preselect its project in the Assign tool and open it.
   function startAssignFromRequest(req) {
     setActiveRequest(req);
+    loadAssignmentTasks(req.projectId);
     // Find an existing assignment for the project, or open a fresh Assign form
     // with the project preselected.
     const existing = assignments.find((a) => a.projectId === req.projectId);
@@ -3722,6 +3827,7 @@ export default function App() {
   // the matching role on the Assign form (opening it on the request's project).
   function assignResourceFromModal(resource) {
     if (!activeRequest) return;
+    loadAssignmentTasks(activeRequest.projectId);
     const field = roleFieldForResourceType(resource.resourceType);
     const existing = assignments.find((a) => a.projectId === activeRequest.projectId);
     const base = existing
@@ -3747,17 +3853,35 @@ export default function App() {
   }
 
   // Click an available CREW to add it to the first mobilization of the
-  // request's project assignment.
+  // request's project assignment. Carries the request's men count, requested
+  // super / field coordinator, and the tasks it was requested for.
   function assignCrewFromModal(crew) {
     if (!activeRequest) return;
+    loadAssignmentTasks(activeRequest.projectId);
+    const reqTaskIds = Array.isArray(activeRequest.taskIds) ? activeRequest.taskIds : [];
+    const reqMen = Number(activeRequest.menCount) || 0;
+    const reqSuper = activeRequest.superintendent || "";
+    const reqFC = activeRequest.fieldCoordinator || "";
     const existing = assignments.find((a) => a.projectId === activeRequest.projectId);
     const base = existing
       ? { ...blankAssignment, ...existing }
       : { ...blankAssignment, projectId: activeRequest.projectId,
-          mobilizations: [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }] };
-    const mobs = base.mobilizations && base.mobilizations.length ? [...base.mobilizations] : [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }];
-    const firstCrewIds = mobs[0].crewIds || [];
-    if (!firstCrewIds.includes(crew.id)) mobs[0] = { ...mobs[0], crewIds: [...firstCrewIds, crew.id] };
+          mobilizations: [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [], taskIds: [] }] };
+    const mobs = base.mobilizations && base.mobilizations.length ? [...base.mobilizations] : [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [], taskIds: [] }];
+    const m0 = mobs[0];
+    const firstCrewIds = m0.crewIds || [];
+    const newCrewIds = firstCrewIds.includes(crew.id) ? firstCrewIds : [...firstCrewIds, crew.id];
+    const newMen = { ...(m0.crewMenCounts || {}) };
+    if (reqMen && !newMen[crew.id]) newMen[crew.id] = reqMen;
+    const mergedTasks = Array.from(new Set([...(m0.taskIds || []), ...reqTaskIds]));
+    mobs[0] = {
+      ...m0,
+      crewIds: newCrewIds,
+      crewMenCounts: newMen,
+      taskIds: mergedTasks,
+      superintendent: m0.superintendent || reqSuper,
+      fieldCoordinator: m0.fieldCoordinator || reqFC,
+    };
     base.mobilizations = mobs;
     setEditingAssignmentId(existing ? existing.id : null);
     setAssignmentForm(base);
@@ -4252,8 +4376,17 @@ export default function App() {
   }
 
   // ── CRUD: Assignments ──────────────────────────────────────────────────────
+  async function loadAssignmentTasks(projectId) {
+    if (!supabase || !projectId) { setAssignmentTasks([]); return; }
+    const { data, error } = await supabase
+      .from("project_tasks").select("*").eq("project_id", projectId).order("sort_order", { ascending: true });
+    if (error) { console.warn("Could not load tasks for assignment:", error); setAssignmentTasks([]); return; }
+    setAssignmentTasks(data || []);
+  }
+
   function openAddAssignmentForm() {
     setEditingAssignmentId(null);
+    setAssignmentTasks([]);
     setAssignmentForm({
       ...blankAssignment,
       mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }],
@@ -4280,6 +4413,7 @@ export default function App() {
         crewMenCounts: mob.crewMenCounts || {},
         crewOnly: mob.crewOnly || false,
         unassignedNeeds: normalizeUnassignedNeeds(mob.unassignedNeeds),
+        taskIds: Array.isArray(mob.taskIds) ? mob.taskIds : [],
       };
     });
     setAssignmentForm({
@@ -4289,6 +4423,7 @@ export default function App() {
       safety: assignment.safety || "",
       mobilizations: mobs,
     });
+    loadAssignmentTasks(assignment.projectId);
     setShowAssignmentForm(true);
   }
 
@@ -4389,6 +4524,7 @@ export default function App() {
     if (editingAssignmentId) setAssignments((current) => current.map((a) => (a.id === editingAssignmentId ? mapped : a)));
     else setAssignments((current) => [mapped, ...current]);
     setShowAssignmentForm(false); setEditingAssignmentId(null);
+    setAssignmentTasks([]);
     setAssignmentForm({ ...blankAssignment, mobilizations: [{ id: crypto.randomUUID(), start: "", durationWeeks: "", end: "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }] });
   }
 
@@ -4434,8 +4570,8 @@ export default function App() {
   }
 
   // ── CRUD: Crews ────────────────────────────────────────────────────────────
-  function openAddCrewForm() { setEditingCrewId(null); setCrewForm(blankCrew); setShowCrewForm(true); }
-  function openEditCrewForm(crew) { setEditingCrewId(crew.id); setCrewForm({ ...blankCrew, ...crew, deactivated: isCrewDeactivated(crew) }); setShowCrewForm(true); }
+  function openAddCrewForm() { setEditingCrewId(null); setCrewForm({ ...blankCrew, crewType: [] }); setShowCrewForm(true); }
+  function openEditCrewForm(crew) { setEditingCrewId(crew.id); setCrewForm({ ...blankCrew, ...crew, crewType: Array.isArray(crew.crewType) ? crew.crewType : [], deactivated: isCrewDeactivated(crew) }); setShowCrewForm(true); }
 
   async function saveCrew() {
     if (!crewForm.crewName.trim()) { alert("Crew name is required."); return; }
@@ -4520,6 +4656,14 @@ export default function App() {
     const { data, error } = await supabase.from("crew_types").select("name").order("name", { ascending: true });
     if (error) { console.warn("Crew types table is not set up yet:", error); return; }
     if (data?.length) setCrewTypes(data.map((row) => row.name));
+  }
+  async function loadAllTaskNames() {
+    if (!supabase) return;
+    const { data, error } = await supabase.from("project_tasks").select("id, name");
+    if (error) { console.warn("Could not load task names:", error); return; }
+    const map = {};
+    (data || []).forEach((t) => { map[t.id] = t.name; });
+    setAllTaskNames(map);
   }
   async function addCrewType() {
     const type = newCrewType.trim();
@@ -6069,7 +6213,21 @@ export default function App() {
                           <td className="p-3">{assignment.fieldEngineer}</td>
                           <td className="p-3">{assignment.safety}</td>
                           <td className="p-3">{getAssignmentCrewDisplayNames(assignment, crews).join(", ")}</td>
-                          <td className="p-3">{(assignment.mobilizations || []).map((m, i) => `#${i + 1}: ${formatDate(m.start)} - ${formatDate(m.end)}`).join("; ")}</td>
+                          <td className="p-3">
+                            <div className="space-y-1">
+                              {(assignment.mobilizations || []).map((m, i) => {
+                                const taskNames = (Array.isArray(m.taskIds) ? m.taskIds : []).map((tid) => allTaskNames[tid]).filter(Boolean);
+                                return (
+                                  <div key={m.id || i} className="whitespace-nowrap">
+                                    <span className="font-semibold text-slate-700">#{i + 1}:</span> {formatDate(m.start)} - {formatDate(m.end)}
+                                    {taskNames.length > 0 && (
+                                      <span className="ml-1 text-xs text-emerald-700">· {taskNames.join(", ")}</span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </td>
                           <td className="p-3 text-right">
                             {canWrite ? (
                               <>
@@ -6179,6 +6337,7 @@ export default function App() {
                                 striped={idx % 2 === 1}
                                 dependsOnName={t.depends_on ? taskNameById.get(t.depends_on) : null}
                                 requests={taskCrewRequests}
+                                assigned={assignedByTaskId.get(t.id)}
                                 onClick={() => (isPM || isOffice) && openEditTaskForm(t)}
                               />
                             ))}
@@ -7660,6 +7819,7 @@ export default function App() {
           setForm={setTaskRequestForm}
           tasks={projectTasks}
           crewTypeOptions={crewTypes}
+          resources={resources}
           onSave={submitTaskRequest}
           onCancel={() => setShowTaskRequestForm(false)}
           busy={taskRequestBusy}
@@ -7695,7 +7855,7 @@ export default function App() {
           setShowAssignmentForm(false);
           setEditingAssignmentId(null);
         }
-      }} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={activeCrews} />}
+      }} editing={Boolean(editingAssignmentId)} resources={resources} projects={projects} crews={activeCrews} tasks={assignmentTasks} />}
       {showResourceForm && <ResourceForm form={resourceForm} setForm={setResourceForm} certifications={certifications} onSave={saveResource} onCancel={() => setShowResourceForm(false)} onDelete={() => deleteResource(editingResourceId)} onExportResume={() => exportResourceResume(resourceForm)} resourceStats={editingResourceId ? getResourceStats(resourceForm) : null} editing={Boolean(editingResourceId)} />}
 
       {/* ── Drag-to-adjust confirmation dialog (Project Gantt) ── */}
