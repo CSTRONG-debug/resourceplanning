@@ -1033,6 +1033,32 @@ export function TaskCrewRequestForm({ form, setForm, tasks, crewTypeOptions, onS
       taskIds: c.taskIds.includes(id) ? c.taskIds.filter((x) => x !== id) : [...c.taskIds, id],
     }));
   }
+  // Selecting a header toggles all of its child tasks at once. If every child
+  // is already selected, it clears them; otherwise it selects them all.
+  function toggleHeader(childIds) {
+    setForm((c) => {
+      const allSelected = childIds.length > 0 && childIds.every((id) => c.taskIds.includes(id));
+      const set = new Set(c.taskIds);
+      if (allSelected) childIds.forEach((id) => set.delete(id));
+      else childIds.forEach((id) => set.add(id));
+      return { ...c, taskIds: [...set] };
+    });
+  }
+  // Build the same grouped/ordered view used by the Gantt: each header followed
+  // by its children, then ungrouped tasks. Headers are display-only rows whose
+  // checkbox controls their children.
+  const orderedTaskRows = (() => {
+    const headers = (tasks || []).filter((t) => t.is_header).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const rows = [];
+    headers.forEach((h) => {
+      const kids = (tasks || []).filter((c) => c.parent_id === h.id && !c.is_header).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+      rows.push({ type: "header", task: h, childIds: kids.map((k) => k.id) });
+      kids.forEach((k) => rows.push({ type: "task", task: k, depth: 1 }));
+    });
+    (tasks || []).filter((t) => !t.is_header && !t.parent_id).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+      .forEach((t) => rows.push({ type: "task", task: t, depth: 0 }));
+    return rows;
+  })();
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
@@ -1087,12 +1113,30 @@ export function TaskCrewRequestForm({ form, setForm, tasks, crewTypeOptions, onS
           <div className="space-y-1 md:col-span-2">
             <span className="text-sm font-medium text-slate-700">Tasks this crew is for</span>
             <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 p-2">
-              {tasks.length === 0 ? (
+              {orderedTaskRows.length === 0 ? (
                 <p className="p-2 text-sm text-slate-400">No tasks yet — add tasks first.</p>
-              ) : tasks.map((t) => {
+              ) : orderedTaskRows.map((row) => {
+                if (row.type === "header") {
+                  const childIds = row.childIds;
+                  const selectedCount = childIds.filter((id) => form.taskIds.includes(id)).length;
+                  const allSelected = childIds.length > 0 && selectedCount === childIds.length;
+                  const someSelected = selectedCount > 0 && !allSelected;
+                  return (
+                    <label key={row.task.id} className="flex cursor-pointer items-center gap-3 rounded-lg bg-slate-100 px-3 py-2 text-sm hover:bg-slate-200">
+                      <input type="checkbox" className="h-4 w-4 accent-emerald-600"
+                        checked={allSelected}
+                        ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                        disabled={childIds.length === 0}
+                        onChange={() => toggleHeader(childIds)} />
+                      <span className="flex-1 font-extrabold uppercase tracking-wide text-slate-700">{row.task.name}</span>
+                      <span className="rounded-full bg-slate-300 px-2 py-0.5 text-[10px] font-bold text-slate-700">HEADER · {childIds.length} task{childIds.length === 1 ? "" : "s"}</span>
+                    </label>
+                  );
+                }
+                const t = row.task;
                 const checked = form.taskIds.includes(t.id);
                 return (
-                  <label key={t.id} className={`flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${checked ? "bg-emerald-50" : ""}`}>
+                  <label key={t.id} className={`flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${checked ? "bg-emerald-50" : ""}`} style={{ paddingLeft: `${12 + (row.depth || 0) * 18}px` }}>
                     <input type="checkbox" className="h-4 w-4 accent-emerald-600" checked={checked} onChange={() => toggleTask(t.id)} />
                     <span className="flex-1 font-medium text-slate-800">{t.name}</span>
                     <span className="text-xs text-slate-400">
