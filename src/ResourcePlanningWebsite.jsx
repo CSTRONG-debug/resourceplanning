@@ -507,6 +507,159 @@ function projectTypeLabel(value) {
 
 // ─── TaskGanttRow ────────────────────────────────────────────────────────────
 
+// ─── StaffRequestRow (read-only status; PM may withdraw) ─────────────────────
+
+export function StaffRequestRow({ r, isPM, isOffice, onWithdraw }) {
+  const [busy, setBusy] = useState(false);
+  const wrap = async (fn) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
+  const statusBadge = {
+    pending: "bg-amber-100 text-amber-700",
+    approved: "bg-emerald-100 text-emerald-700",
+    denied: "bg-red-100 text-red-700",
+  }[r.status] || "bg-slate-100 text-slate-600";
+  return (
+    <div className="flex items-start gap-3 px-5 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-slate-900">
+          <span className="mr-2 rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-bold uppercase text-purple-700">Staff</span>
+          {r.role}
+          {r.assigned_name ? <span className="ml-2 font-normal text-emerald-700">→ {r.assigned_name}</span> : null}
+        </p>
+        <p className="mt-0.5 text-xs text-slate-500">
+          {r.start_date ? formatDate(r.start_date) : "—"}{r.end_date ? ` → ${formatDate(r.end_date)}` : ""}
+          {isOffice && r.requested_by_name ? ` · ${r.requested_by_name}` : ""}
+        </p>
+        {r.notes && <p className="mt-0.5 text-xs text-slate-400">{r.notes}</p>}
+      </div>
+      <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-bold capitalize ${statusBadge}`}>{r.status}</span>
+      {isPM && r.status === "pending" && (
+        <button disabled={busy} onClick={() => wrap(onWithdraw)} className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">Withdraw</button>
+      )}
+    </div>
+  );
+}
+
+// ─── StaffRequestForm (project-level staffing request) ──────────────────────
+
+export function StaffRequestForm({ form, setForm, roles, onSave, onCancel, busy }) {
+  function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 p-5">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">Request Staff</h2>
+            <p className="text-sm text-slate-500">Request a project role. The office assigns the actual person.</p>
+          </div>
+          <button onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+        </div>
+        <div className="grid gap-4 p-5">
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Role</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.role} onChange={(e) => updateField("role", e.target.value)}>
+              {roles.map((r) => <option key={r}>{r}</option>)}
+            </select>
+          </label>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Start Date</span>
+              <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.startDate} onChange={(e) => updateField("startDate", e.target.value)} />
+            </label>
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">End Date</span>
+              <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.endDate} onChange={(e) => updateField("endDate", e.target.value)} />
+            </label>
+          </div>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Notes</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.notes} onChange={(e) => updateField("notes", e.target.value)} placeholder="Anything the office should know" />
+          </label>
+        </div>
+        <div className="flex justify-end gap-3 border-t border-slate-200 p-5">
+          <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+          <button onClick={onSave} disabled={busy} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 disabled:bg-slate-300">{busy ? "Sending…" : "Submit Request"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── RequestsModal (Project Dashboard banner) ────────────────────────────────
+// Lists pending crew + staff requests. Clicking one opens the Assign tool
+// (handled by parent) and shows an availability recommendation for its window.
+
+export function RequestsModal({ requests, activeRequest, availability, onPick, onClose }) {
+  return (
+    <div className="fixed inset-0 z-[86] flex items-center justify-center bg-slate-950/50 p-4">
+      <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-200 p-5">
+          <div>
+            <h2 className="text-2xl font-bold text-slate-900">Open Requests</h2>
+            <p className="text-sm text-slate-500">Click a request to open the Assign tool and see who’s available for that window.</p>
+          </div>
+          <button onClick={onClose} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
+        </div>
+        <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2">
+          {/* Left: request list */}
+          <div className="min-h-0 overflow-auto border-r border-slate-200">
+            {requests.length === 0 ? (
+              <div className="p-6 text-sm text-slate-500">No pending requests.</div>
+            ) : requests.map((req) => {
+              const active = activeRequest && activeRequest.id === req.id && activeRequest.kind === req.kind;
+              return (
+                <button key={`${req.kind}-${req.id}`} onClick={() => onPick(req)}
+                  className={`block w-full border-b border-slate-100 px-5 py-3 text-left hover:bg-emerald-50 ${active ? "bg-emerald-50" : ""}`}>
+                  <div className="flex items-center gap-2">
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${req.kind === "crew" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>{req.kind}</span>
+                    <span className="text-sm font-semibold text-slate-900">{req.label}</span>
+                  </div>
+                  <p className="mt-0.5 text-xs text-slate-500">{req.projectLabel}{req.requestedBy ? ` · ${req.requestedBy}` : ""}</p>
+                  {(req.start || req.end) && (
+                    <p className="mt-0.5 text-xs text-slate-400">{req.start ? formatDate(req.start) : "—"}{req.end ? ` → ${formatDate(req.end)}` : ""}</p>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          {/* Right: availability recommendation */}
+          <div className="min-h-0 overflow-auto p-5">
+            {!activeRequest ? (
+              <div className="text-sm text-slate-400">Select a request to see availability.</div>
+            ) : !availability ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                This request has no date window yet. Open the Assign tool and set mobilization dates — availability needs a start and end.
+              </div>
+            ) : (
+              <>
+                <h3 className="mb-2 text-sm font-bold text-slate-900">Available for this window</h3>
+                <p className="mb-3 text-xs text-slate-500">Not booked on another project (and not on PTO) during the request’s dates.</p>
+                <div className="mb-4">
+                  <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">Crews ({availability.freeCrews.length})</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {availability.freeCrews.length === 0 ? <span className="text-xs text-slate-400">None free</span>
+                      : availability.freeCrews.map((c) => (
+                        <span key={c.id} className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">{c.crewName}{(c.specialty || []).length ? ` · ${(c.specialty || []).join("/")}` : ""}</span>
+                      ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">People ({availability.freeResources.length})</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {availability.freeResources.length === 0 ? <span className="text-xs text-slate-400">None free</span>
+                      : availability.freeResources.map((r) => (
+                        <span key={r.id} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{r.name} · {r.resourceType}</span>
+                      ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function TaskGanttRow({ task, timeline, striped, dependsOnName, requests, onClick }) {
   const span = (task.start_date && task.end_date)
     ? timelineSpanPixels(task.start_date, task.end_date, timeline)
@@ -576,12 +729,6 @@ export function TaskCrewRequestRow({ r, isOffice, isPM, taskNameById, crews, onA
 
       <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-bold capitalize ${statusBadge}`}>{r.status}</span>
 
-      {isOffice && r.status === "pending" && (
-        <div className="flex shrink-0 gap-2">
-          <button disabled={busy} onClick={onApproveClick} className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">Approve</button>
-          <button disabled={busy} onClick={() => wrap(onDeny)} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">Deny</button>
-        </div>
-      )}
       {isPM && r.status === "pending" && (
         <button disabled={busy} onClick={() => wrap(onWithdraw)} className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">Withdraw</button>
       )}
@@ -621,6 +768,18 @@ export function TaskForm({ form, setForm, tasks, editingTaskId, onSave, onCancel
             </select>
             <span className="text-xs text-slate-500">If set and no start date is given, this task starts the day after the one it follows.</span>
           </label>
+
+          {form.dependsOn && (
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Dependency Type</span>
+              <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.dependencyType} onChange={(e) => updateField("dependencyType", e.target.value)}>
+                <option value="FS">Finish-to-Start (this starts after that finishes)</option>
+                <option value="SS">Start-to-Start (both start together)</option>
+                <option value="FF">Finish-to-Finish (both finish together)</option>
+                <option value="SF">Start-to-Finish (this finishes when that starts)</option>
+              </select>
+            </label>
+          )}
 
           <div className="grid gap-4 md:grid-cols-3">
             <label className="space-y-1">
@@ -3102,15 +3261,11 @@ export default function App() {
 
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
-  const [taskForm, setTaskForm] = useState({ name: "", start: "", durationDays: "", end: "", dependsOn: "" });
+  const [taskForm, setTaskForm] = useState({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS" });
 
   const [showTaskRequestForm, setShowTaskRequestForm] = useState(false);
   const [taskRequestForm, setTaskRequestForm] = useState({ crewSpecialty: "", menCount: "", notes: "", taskIds: [] });
   const [taskRequestBusy, setTaskRequestBusy] = useState(false);
-
-  // Office-side: approving a request (assign a crew, optionally link a mob).
-  const [resolvingRequest, setResolvingRequest] = useState(null); // the request row being acted on
-  const [resolveCrewId, setResolveCrewId] = useState("");
 
   // Load tasks + requests for the selected project.
   const loadProjectSchedule = React.useCallback(async (projectId) => {
@@ -3153,7 +3308,7 @@ export default function App() {
 
   function openAddTaskForm() {
     setEditingTaskId(null);
-    setTaskForm({ name: "", start: "", durationDays: "", end: "", dependsOn: "" });
+    setTaskForm({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS" });
     setShowTaskForm(true);
   }
   function openEditTaskForm(t) {
@@ -3164,6 +3319,7 @@ export default function App() {
       durationDays: t.duration_days || "",
       end: t.end_date || "",
       dependsOn: t.depends_on || "",
+      dependencyType: t.dependency_type || "FS",
     });
     setShowTaskForm(true);
   }
@@ -3191,6 +3347,7 @@ export default function App() {
       end_date: end,
       duration_days: taskForm.durationDays ? Number(taskForm.durationDays) : null,
       depends_on: taskForm.dependsOn || null,
+      dependency_type: taskForm.dependsOn ? (taskForm.dependencyType || "FS") : "FS",
       created_by_name: pmName || currentUser,
       updated_at: new Date().toISOString(),
     };
@@ -3264,18 +3421,6 @@ export default function App() {
 
   // Office: approve (assign a crew) or deny. Does NOT touch mobilizations —
   // the office changes those separately, per the approval-first workflow.
-  async function resolveTaskRequest(id, status, crewId) {
-    if (!supabase) return;
-    const patch = { status, resolved_at: new Date().toISOString() };
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) patch.resolved_by = user.id;
-    if (status === "approved" && crewId) patch.assigned_crew_id = crewId;
-    const { error } = await supabase.from("task_crew_requests").update(patch).eq("id", id);
-    if (error) { console.error(error); alert(`Could not ${status} request: ${error.message}`); return; }
-    setResolvingRequest(null);
-    setResolveCrewId("");
-    loadProjectSchedule(schedProjectId);
-  }
 
   // Crew specialties for the request dropdown (active crews only).
   const schedCrewSpecialties = useMemo(() => {
@@ -3301,6 +3446,188 @@ export default function App() {
 
   const schedPendingRequests = taskCrewRequests.filter((r) => r.status === "pending");
   const schedResolvedRequests = taskCrewRequests.filter((r) => r.status !== "pending");
+
+  // ── Project-level STAFF requests (super / asst super / field coord / eng) ──
+  // Role-only requests (office assigns the person). Stored separately but
+  // shown in the SAME unified request list as crew requests.
+  const STAFF_ROLES = ["Superintendent", "Assistant Superintendent", "Field Coordinator", "Field Engineer"];
+  const [staffRequests, setStaffRequests] = useState([]);            // for selected sched project
+  const [allStaffRequests, setAllStaffRequests] = useState([]);      // across all projects (for banner)
+  const [allCrewRequests, setAllCrewRequests] = useState([]);        // across all projects (for banner)
+  const [showStaffRequestForm, setShowStaffRequestForm] = useState(false);
+  const [staffRequestForm, setStaffRequestForm] = useState({ role: "Superintendent", startDate: "", endDate: "", notes: "" });
+  const [staffRequestBusy, setStaffRequestBusy] = useState(false);
+
+  // Banner "Requests" modal (Project Dashboard) state.
+  const [showRequestsModal, setShowRequestsModal] = useState(false);
+  const [activeRequest, setActiveRequest] = useState(null); // request clicked → drives availability panel
+
+  // Load staff requests for the selected scheduling project.
+  const loadStaffRequests = React.useCallback(async (projectId) => {
+    if (!supabase || !projectId) { setStaffRequests([]); return; }
+    const { data, error } = await supabase
+      .from("project_staff_requests").select("*")
+      .eq("project_id", projectId).order("created_at", { ascending: false });
+    if (error) { console.error("Staff requests load error:", error); return; }
+    setStaffRequests(data || []);
+  }, []);
+  useEffect(() => { if (schedProjectId) loadStaffRequests(schedProjectId); }, [schedProjectId, loadStaffRequests]);
+
+  // Load ALL pending requests across projects for the dashboard banner.
+  const loadAllRequests = React.useCallback(async () => {
+    if (!supabase) return;
+    const [crewRes, staffRes] = await Promise.all([
+      supabase.from("task_crew_requests")
+        .select("*, projects ( id, project_number, name ), task_crew_request_links ( task_id )")
+        .order("created_at", { ascending: false }),
+      supabase.from("project_staff_requests")
+        .select("*, projects ( id, project_number, name )")
+        .order("created_at", { ascending: false }),
+    ]);
+    if (!crewRes.error) setAllCrewRequests(crewRes.data || []);
+    if (!staffRes.error) setAllStaffRequests(staffRes.data || []);
+  }, []);
+  useEffect(() => { if (currentUser) loadAllRequests(); }, [currentUser, loadAllRequests]);
+
+  // Realtime for staff requests (keeps both scoped + banner lists fresh).
+  useEffect(() => {
+    if (!supabase || !currentUser) return;
+    const channel = supabase
+      .channel("realtime:staff_requests")
+      .on("postgres_changes", { event: "*", schema: "public", table: "project_staff_requests" }, () => {
+        loadAllRequests();
+        if (schedProjectId) loadStaffRequests(schedProjectId);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "task_crew_requests" }, () => loadAllRequests())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser, schedProjectId, loadAllRequests, loadStaffRequests]);
+
+  function openStaffRequestForm() {
+    setStaffRequestForm({ role: "Superintendent", startDate: "", endDate: "", notes: "" });
+    setShowStaffRequestForm(true);
+  }
+
+  async function submitStaffRequest() {
+    if (!schedProjectId) { alert("Pick a project first."); return; }
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    setStaffRequestBusy(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    const { error } = await supabase.from("project_staff_requests").insert({
+      project_id: schedProjectId,
+      role: staffRequestForm.role,
+      start_date: staffRequestForm.startDate || null,
+      end_date: staffRequestForm.endDate || null,
+      notes: staffRequestForm.notes || null,
+      requested_by: user.id,
+      requested_by_name: pmName || currentUser,
+      status: "pending",
+    });
+    setStaffRequestBusy(false);
+    if (error) { console.error(error); alert(`Could not submit staff request: ${error.message}`); return; }
+    setShowStaffRequestForm(false);
+    loadStaffRequests(schedProjectId);
+    loadAllRequests();
+  }
+
+  async function withdrawStaffRequest(id) {
+    if (!supabase) return;
+    if (!confirm("Withdraw this staff request?")) return;
+    const { error } = await supabase.from("project_staff_requests").delete().eq("id", id);
+    if (error) { console.error(error); alert("Could not withdraw request."); return; }
+    loadStaffRequests(schedProjectId);
+    loadAllRequests();
+  }
+
+  // ── Unified pending request list for the dashboard banner ─────────────────
+  // Normalizes crew + staff requests into one shape so the modal renders one
+  // list. `kind` distinguishes them; `window` is the [start,end] used for the
+  // availability recommendation and to prefill the Assign tool.
+  const bannerRequests = useMemo(() => {
+    const taskById = new Map(); // not project-scoped here; we only need dates if present
+    const crew = (allCrewRequests || [])
+      .filter((r) => r.status === "pending")
+      .map((r) => {
+        // crew request window = min start / max end across its linked tasks,
+        // resolved from the tasks we have loaded for the active project; for
+        // banner we may not have all tasks, so fall back to null (office can
+        // still set dates in the Assign tool).
+        return {
+          kind: "crew",
+          id: r.id,
+          projectId: r.project_id,
+          projectLabel: r.projects ? `${r.projects.project_number ? r.projects.project_number + " - " : ""}${r.projects.name}` : "—",
+          label: `${r.crew_specialty}${r.men_count ? ` · ${r.men_count} men` : ""}`,
+          specialty: r.crew_specialty,
+          requestedBy: r.requested_by_name,
+          start: null, end: null,
+          raw: r,
+        };
+      });
+    const staff = (allStaffRequests || [])
+      .filter((r) => r.status === "pending")
+      .map((r) => ({
+        kind: "staff",
+        id: r.id,
+        projectId: r.project_id,
+        projectLabel: r.projects ? `${r.projects.project_number ? r.projects.project_number + " - " : ""}${r.projects.name}` : "—",
+        label: r.role,
+        role: r.role,
+        requestedBy: r.requested_by_name,
+        start: r.start_date, end: r.end_date,
+        raw: r,
+      }));
+    return [...staff, ...crew];
+  }, [allCrewRequests, allStaffRequests]);
+
+  const bannerRequestCount = bannerRequests.length;
+
+  // Availability for a window: which resources/crews are NOT booked in [start,end].
+  function computeAvailability(start, end) {
+    const s = toDate(start);
+    const e = toDate(end);
+    if (!s || !e) return null;
+    const busyResourceNames = new Set();
+    const busyCrewIds = new Set();
+    ganttItems.forEach((item) => {
+      const is = toDate(item.start), ie = toDate(item.end);
+      if (!is || !ie) return;
+      if (!rangesOverlap(is, addDays(ie, 1), s, addDays(e, 1))) return;
+      [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety]
+        .filter(Boolean).forEach((n) => busyResourceNames.add(n));
+      getAssignmentCrewIds(item.assignment).forEach((id) => busyCrewIds.add(id));
+    });
+    // PTO also makes a resource unavailable.
+    resources.forEach((r) => {
+      (r.pto || []).forEach((p) => {
+        const ps = toDate(p.start), pe = toDate(p.end);
+        if (ps && pe && rangesOverlap(ps, addDays(pe, 1), s, addDays(e, 1))) busyResourceNames.add(r.name);
+      });
+    });
+    return {
+      freeResources: resources.filter((r) => !busyResourceNames.has(r.name)),
+      freeCrews: activeCrews.filter((c) => !busyCrewIds.has(c.id)),
+    };
+  }
+
+  // Click a banner request → preselect its project in the Assign tool and open it.
+  function startAssignFromRequest(req) {
+    setActiveRequest(req);
+    // Find an existing assignment for the project, or open a fresh Assign form
+    // with the project preselected.
+    const existing = assignments.find((a) => a.projectId === req.projectId);
+    if (existing) {
+      openEditAssignmentForm(existing);
+    } else {
+      setEditingAssignmentId(null);
+      setAssignmentForm({
+        ...blankAssignment,
+        projectId: req.projectId,
+        mobilizations: [{ id: crypto.randomUUID(), start: req.start || "", durationWeeks: "", end: req.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }],
+      });
+      setShowAssignmentForm(true);
+    }
+  }
 
   // ── Role-based UI gating ───────────────────────────────────────────────────
   // canWrite = manager or admin (can create/edit/delete data).
@@ -5203,6 +5530,9 @@ export default function App() {
             {attentionTotal === 0 && attentionCounts.mobsThisWeek === 0 && attentionCounts.mobsNextWeek === 0 && (
               <span className="text-xs font-medium text-emerald-700">All clear — no conflicts, collisions, or expiring certs.</span>
             )}
+            <button onClick={() => setShowRequestsModal(true)} className="flex items-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-200">
+              <ClipboardCheck size={13} /> {bannerRequestCount} request{bannerRequestCount === 1 ? "" : "s"}
+            </button>
             <button onClick={() => setSummaryBannerDismissed(true)} title="Dismiss" className="ml-auto rounded-lg p-1 text-amber-700 hover:bg-amber-200"><X size={15} /></button>
           </div>
         </div>
@@ -5624,6 +5954,9 @@ export default function App() {
                           <button onClick={() => openTaskRequestForm()} disabled={!projectTasks.length} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:bg-slate-300">
                             <Plus size={16} /> Request Crew
                           </button>
+                          <button onClick={openStaffRequestForm} className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100">
+                            <Plus size={16} /> Request Staff
+                          </button>
                         </>
                       )}
                     </div>
@@ -5731,15 +6064,15 @@ export default function App() {
                   <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
                     <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
                       <div className="flex items-center gap-3">
-                        <h2 className="text-xl font-bold text-slate-900">{isOffice ? "Crew Requests" : "My Crew Requests"}</h2>
+                        <h2 className="text-xl font-bold text-slate-900">{isOffice ? "Requests" : "My Requests"}</h2>
                         {schedPendingRequests.length > 0 && (
                           <span className="rounded-full bg-emerald-700 px-2.5 py-0.5 text-xs font-bold text-white">{schedPendingRequests.length} pending</span>
                         )}
                       </div>
                     </div>
                     <div className="divide-y divide-slate-100">
-                      {taskCrewRequests.length === 0 ? (
-                        <div className="px-5 py-6 text-sm text-slate-500">No crew requests for this project yet.</div>
+                      {taskCrewRequests.length === 0 && staffRequests.length === 0 ? (
+                        <div className="px-5 py-6 text-sm text-slate-500">No requests for this project yet.</div>
                       ) : (
                         <>
                           {isOffice && schedPendingRequests.length > 0 && (
@@ -5748,8 +6081,6 @@ export default function App() {
                           {schedPendingRequests.map((r) => (
                             <TaskCrewRequestRow key={r.id} r={r} isOffice={isOffice} isPM={isPM}
                               taskNameById={taskNameById} crews={activeCrews}
-                              onApproveClick={() => { setResolvingRequest(r); setResolveCrewId(""); }}
-                              onDeny={() => resolveTaskRequest(r.id, "denied")}
                               onWithdraw={() => withdrawTaskRequest(r.id)} />
                           ))}
                           {schedResolvedRequests.length > 0 && (
@@ -5761,6 +6092,11 @@ export default function App() {
                           ))}
                         </>
                       )}
+                      {/* Project-level staff requests */}
+                      {staffRequests.map((r) => (
+                        <StaffRequestRow key={r.id} r={r} isPM={isPM} isOffice={isOffice}
+                          onWithdraw={() => withdrawStaffRequest(r.id)} />
+                      ))}
                     </div>
                   </section>
                 </>
@@ -7143,29 +7479,24 @@ export default function App() {
           busy={taskRequestBusy}
         />
       )}
-      {resolvingRequest && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/40 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
-            <h2 className="text-lg font-bold text-slate-900">Approve crew request</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              {resolvingRequest.crew_specialty}{resolvingRequest.men_count ? ` · ${resolvingRequest.men_count} men` : ""}
-            </p>
-            <label className="mt-4 block space-y-1">
-              <span className="text-sm font-semibold text-slate-700">Assign crew (optional)</span>
-              <select value={resolveCrewId} onChange={(e) => setResolveCrewId(e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600">
-                <option value="">Approve without assigning a specific crew</option>
-                {activeCrews
-                  .filter((c) => !resolvingRequest.crew_specialty || (c.specialty || []).includes(resolvingRequest.crew_specialty))
-                  .map((c) => <option key={c.id} value={c.id}>{getCrewDisplayName(c)}</option>)}
-              </select>
-              <span className="text-xs text-slate-500">Approving does not change mobilizations — update those separately.</span>
-            </label>
-            <div className="mt-5 flex justify-end gap-2">
-              <button onClick={() => { setResolvingRequest(null); setResolveCrewId(""); }} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Cancel</button>
-              <button onClick={() => resolveTaskRequest(resolvingRequest.id, "approved", resolveCrewId || null)} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Approve</button>
-            </div>
-          </div>
-        </div>
+      {showStaffRequestForm && (
+        <StaffRequestForm
+          form={staffRequestForm}
+          setForm={setStaffRequestForm}
+          roles={STAFF_ROLES}
+          onSave={submitStaffRequest}
+          onCancel={() => setShowStaffRequestForm(false)}
+          busy={staffRequestBusy}
+        />
+      )}
+      {showRequestsModal && (
+        <RequestsModal
+          requests={bannerRequests}
+          activeRequest={activeRequest}
+          availability={activeRequest && (activeRequest.start && activeRequest.end) ? computeAvailability(activeRequest.start, activeRequest.end) : null}
+          onPick={(req) => startAssignFromRequest(req)}
+          onClose={() => { setShowRequestsModal(false); setActiveRequest(null); }}
+        />
       )}
       {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} onDelete={async () => {
         if (!editingAssignmentId) return;
