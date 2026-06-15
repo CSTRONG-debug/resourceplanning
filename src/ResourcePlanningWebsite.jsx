@@ -505,6 +505,161 @@ function projectTypeLabel(value) {
 
 // ─── StatCard ────────────────────────────────────────────────────────────────
 
+// ─── CrewRequestRow ──────────────────────────────────────────────────────────
+
+export function CrewRequestRow({ r, isOffice, isPM, onResolve, onWithdraw }) {
+  const [busy, setBusy] = useState(false);
+  const wrap = async (fn) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
+
+  const proj = r.projects;
+  const projLabel = proj
+    ? `${proj.project_number ? proj.project_number + " - " : ""}${proj.name}`
+    : "Unknown project";
+
+  const typeLabel = r.request_type === "superintendent" ? "Super"
+    : r.request_type === "both" ? "Crew + Super" : "Crew";
+  const detail = [
+    typeLabel,
+    r.crew_specialty,
+    r.men_count ? `${r.men_count} men` : null,
+    r.superintendent,
+    r.start_date ? formatDate(r.start_date) : null,
+    r.duration_weeks ? `${r.duration_weeks} wk` : null,
+  ].filter(Boolean).join(" · ");
+
+  const statusBadge = {
+    pending: "bg-amber-100 text-amber-700",
+    approved: "bg-emerald-100 text-emerald-700",
+    denied: "bg-red-100 text-red-700",
+  }[r.status] || "bg-slate-100 text-slate-600";
+
+  const canManage = isOffice && r.status === "pending";
+
+  return (
+    <div className="flex items-center gap-3 px-5 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold text-slate-900">{projLabel}</p>
+        <p className="truncate text-xs text-slate-500">
+          {detail}{isOffice && r.requested_by_name ? ` · ${r.requested_by_name}` : ""}
+        </p>
+        {r.notes && <p className="truncate text-xs text-slate-400">{r.notes}</p>}
+      </div>
+
+      <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-bold capitalize ${statusBadge}`}>
+        {r.status}
+      </span>
+
+      {canManage && (
+        <div className="flex shrink-0 gap-2">
+          <button disabled={busy} onClick={() => wrap(() => onResolve(r.id, "approved"))}
+            className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">
+            Approve
+          </button>
+          <button disabled={busy} onClick={() => wrap(() => onResolve(r.id, "denied"))}
+            className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">
+            Deny
+          </button>
+        </div>
+      )}
+
+      {isPM && r.status === "pending" && (
+        <button disabled={busy} onClick={() => wrap(() => onWithdraw(r.id))}
+          className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+          Withdraw
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── CrewRequestForm ─────────────────────────────────────────────────────────
+
+export function CrewRequestForm({ form, setForm, projects, crewSpecialties, supers, onSave, onCancel, busy }) {
+  function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
+  const needsCrew = form.requestType === "crew" || form.requestType === "both";
+  const needsSuper = form.requestType === "superintendent" || form.requestType === "both";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+      <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 p-5">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">New Request</h2>
+            <p className="text-sm text-slate-500">Ask the office for a crew or superintendent on a project.</p>
+          </div>
+          <button onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+        </div>
+
+        <div className="grid gap-4 p-5 md:grid-cols-2">
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-sm font-medium text-slate-700">Project</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.projectId} onChange={(e) => updateField("projectId", e.target.value)}>
+              <option value="">Select project…</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.projectNumber ? `${p.projectNumber} - ` : ""}{p.name}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Request Type</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.requestType} onChange={(e) => updateField("requestType", e.target.value)}>
+              <option value="crew">Crew</option>
+              <option value="superintendent">Superintendent</option>
+              <option value="both">Crew + Superintendent</option>
+            </select>
+          </label>
+
+          {needsCrew && (
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Crew Type</span>
+              <input list="ggc-crew-specialties" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.crewSpecialty} onChange={(e) => updateField("crewSpecialty", e.target.value)} placeholder="e.g. Pavers" />
+              <datalist id="ggc-crew-specialties">{crewSpecialties.map((s) => <option key={s} value={s} />)}</datalist>
+            </label>
+          )}
+
+          {needsCrew && (
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Men</span>
+              <input type="number" min="0" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.menCount} onChange={(e) => updateField("menCount", e.target.value)} placeholder="0" />
+            </label>
+          )}
+
+          {needsSuper && (
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Superintendent</span>
+              <input list="ggc-supers" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.superintendent} onChange={(e) => updateField("superintendent", e.target.value)} placeholder="Any / name" />
+              <datalist id="ggc-supers">{supers.map((s) => <option key={s} value={s} />)}</datalist>
+            </label>
+          )}
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Start Date</span>
+            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.startDate} onChange={(e) => updateField("startDate", e.target.value)} />
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Duration (Weeks)</span>
+            <input type="number" min="0" step="0.5" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.durationWeeks} onChange={(e) => updateField("durationWeeks", e.target.value)} placeholder="1" />
+          </label>
+
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-sm font-medium text-slate-700">Notes</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.notes} onChange={(e) => updateField("notes", e.target.value)} placeholder="Anything the office should know" />
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-slate-200 p-5">
+          <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+          <button onClick={onSave} disabled={busy} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 disabled:bg-slate-300">
+            {busy ? "Sending…" : "Submit Request"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function StatCard({ icon: Icon, label, value }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -2474,6 +2629,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [currentUser, setCurrentUser] = useState("");
   const [userRole, setUserRole] = useState(null);
+  const [pmName, setPmName] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [showUserSettings, setShowUserSettings] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ email: "", password: "" });
@@ -2872,6 +3028,110 @@ export default function App() {
 
   const activeCrews = crews.filter((c) => !isCrewDeactivated(c));
 
+  // ── Crew & Superintendent Requests (PM → office workflow) ─────────────────
+  // PMs submit requests from the Scheduling tab; admin/manager approve them.
+  // Approval fires a DB trigger that auto-creates the mobilization, so an
+  // approved request shows up on the Gantt with no extra work here.
+  const [crewRequests, setCrewRequests] = useState([]);
+  const [showRequestForm, setShowRequestForm] = useState(false);
+  const [requestForm, setRequestForm] = useState({
+    projectId: "", requestType: "crew", crewSpecialty: "", superintendent: "",
+    menCount: "", startDate: "", durationWeeks: "", notes: "",
+  });
+  const [requestBusy, setRequestBusy] = useState(false);
+
+  const loadCrewRequests = React.useCallback(async () => {
+    if (!supabase) return;
+    // RLS scopes this: PMs get only their own rows, office sees all.
+    const { data, error } = await supabase
+      .from("crew_requests")
+      .select("*, projects ( id, project_number, name )")
+      .order("created_at", { ascending: false });
+    if (error) { console.error("Crew requests load error:", error); return; }
+    setCrewRequests(data || []);
+  }, []);
+
+  useEffect(() => { if (currentUser) loadCrewRequests(); }, [currentUser, loadCrewRequests]);
+
+  // Realtime so an approval/denial shows instantly across roles.
+  useEffect(() => {
+    if (!supabase || !currentUser) return;
+    const channel = supabase
+      .channel("realtime:crew_requests")
+      .on("postgres_changes", { event: "*", schema: "public", table: "crew_requests" },
+        () => loadCrewRequests())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser, loadCrewRequests]);
+
+  function openRequestForm() {
+    setRequestForm({
+      projectId: "", requestType: "crew", crewSpecialty: "", superintendent: "",
+      menCount: "", startDate: "", durationWeeks: "", notes: "",
+    });
+    setShowRequestForm(true);
+  }
+
+  async function submitCrewRequest() {
+    if (!requestForm.projectId) { alert("Pick a project first."); return; }
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    setRequestBusy(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    const needsCrew = requestForm.requestType === "crew" || requestForm.requestType === "both";
+    const needsSuper = requestForm.requestType === "superintendent" || requestForm.requestType === "both";
+    const payload = {
+      project_id: requestForm.projectId,
+      requested_by: user.id,
+      requested_by_name: pmName,
+      request_type: requestForm.requestType,
+      crew_specialty: needsCrew ? (requestForm.crewSpecialty || null) : null,
+      superintendent: needsSuper ? (requestForm.superintendent || null) : null,
+      men_count: requestForm.menCount ? Number(requestForm.menCount) : 0,
+      start_date: requestForm.startDate || null,
+      duration_weeks: requestForm.durationWeeks ? Number(requestForm.durationWeeks) : null,
+      notes: requestForm.notes || null,
+      status: "pending",
+    };
+    const { error } = await supabase.from("crew_requests").insert(payload);
+    setRequestBusy(false);
+    if (error) { console.error(error); alert(`Could not submit request: ${error.message}`); return; }
+    setShowRequestForm(false);
+    await loadCrewRequests();
+  }
+
+  async function resolveCrewRequest(id, status) {
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    // Trigger auto-creates the mobilization on status='approved'.
+    const { error } = await supabase.from("crew_requests").update({ status }).eq("id", id);
+    if (error) { console.error(error); alert(`Could not ${status} request: ${error.message}`); return; }
+    await loadCrewRequests();
+    if (status === "approved") loadSupabaseData(); // pull the new mobilization in
+  }
+
+  async function withdrawCrewRequest(id) {
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    if (!confirm("Withdraw this request?")) return;
+    const { error } = await supabase.from("crew_requests").delete().eq("id", id);
+    if (error) { console.error(error); alert("Could not withdraw request."); return; }
+    await loadCrewRequests();
+  }
+
+  // Crew specialties for the request dropdown (active crews only).
+  const crewSpecialtyOptions = useMemo(() => {
+    const set = new Set();
+    activeCrews.forEach((c) => (c.specialty || []).forEach((s) => s && set.add(s)));
+    return [...set].sort();
+  }, [activeCrews]);
+
+  const superintendentOptions = useMemo(() =>
+    resources
+      .filter((r) => (r.resourceType || "").toLowerCase().includes("super"))
+      .map((r) => r.name).sort(),
+    [resources]);
+
+  const pendingRequests = crewRequests.filter((r) => r.status === "pending");
+  const resolvedRequests = crewRequests.filter((r) => r.status !== "pending");
+
   // ── Role-based UI gating ───────────────────────────────────────────────────
   // canWrite = manager or admin (can create/edit/delete data).
   // isAdmin  = admin only (can manage users/roles).
@@ -2880,6 +3140,8 @@ export default function App() {
   // would fail.
   const canWrite = userRole === "manager" || userRole === "admin";
   const isAdmin = userRole === "admin";
+  const isPM = userRole === "pm";
+  const isOffice = userRole === "admin" || userRole === "manager";
 
   function toggleSort(setter, key) {
     setter((current) => ({ key, direction: current.key === key && current.direction === "asc" ? "desc" : "asc" }));
@@ -4124,10 +4386,11 @@ export default function App() {
   // ── Auth (Supabase Auth) ─────────────────────────────────────────────────
   // Fetch the role from the profiles table for a given user id.
   async function fetchUserRole(userId) {
-    if (!supabase || !userId) { setUserRole(null); return; }
-    const { data, error } = await supabase.from("profiles").select("role").eq("id", userId).single();
-    if (error) { console.error("Could not load role:", error); setUserRole(null); return; }
+    if (!supabase || !userId) { setUserRole(null); setPmName(null); return; }
+    const { data, error } = await supabase.from("profiles").select("role, pm_name").eq("id", userId).single();
+    if (error) { console.error("Could not load role:", error); setUserRole(null); setPmName(null); return; }
     setUserRole(data?.role || "viewer");
+    setPmName(data?.pm_name || null);
   }
 
   // Establish the session on mount and subscribe to auth changes.
@@ -4685,6 +4948,7 @@ export default function App() {
             <nav className="flex min-w-0 flex-1 flex-nowrap gap-2 overflow-x-auto">
               {[
                 { key: "projectDash", label: "Project Dashboard" },
+                { key: "scheduling", label: "Scheduling" },
                 { key: "resourceDash", label: "Resource Dashboard" },
                 { key: "crewDash", label: "Crew Dashboard" },
                 { key: "forecast", label: "Forecast" },
@@ -4718,6 +4982,7 @@ export default function App() {
                 </div>
               )}
               {page === "projectDash" && canWrite && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><ClipboardCheck size={18} /> Assign</button>}
+              {page === "scheduling" && (isPM || isOffice) && <button onClick={openRequestForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> New Request</button>}
               {page === "setup" && setupTab === "projects" && canWrite && (
                 <>
                   <CmicPullProjects projects={projects} onApplied={() => loadSupabaseData()} />
@@ -5139,6 +5404,109 @@ export default function App() {
               </div>
             )}
           </section>
+        </section>
+      )}
+
+      {/* ── Scheduling (PM requests + Gantt) ── */}
+      {page === "scheduling" && (
+        <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
+          {(!userRole || !["admin", "manager", "pm", "viewer"].includes(userRole)) ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+              You don’t have access to scheduling. Ask an admin if you need it.
+            </div>
+          ) : (isPM && !pmName) ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-sm font-semibold text-amber-800 shadow-sm">
+              Your account isn’t linked to a PM name yet, so requests can’t be attributed. Ask an admin to set your PM name in User Settings.
+            </div>
+          ) : (
+            <>
+              {/* Request panel */}
+              <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-xl font-bold text-slate-900">
+                      {isOffice ? "Crew & Superintendent Requests" : "Request a Crew or Superintendent"}
+                    </h2>
+                    {pendingRequests.length > 0 && (
+                      <span className="rounded-full bg-emerald-700 px-2.5 py-0.5 text-xs font-bold text-white">
+                        {pendingRequests.length} pending
+                      </span>
+                    )}
+                  </div>
+                  {(isPM || isOffice) && (
+                    <button onClick={openRequestForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
+                      <Plus size={16} /> New Request
+                    </button>
+                  )}
+                </div>
+
+                <div className="divide-y divide-slate-100">
+                  {crewRequests.length === 0 ? (
+                    <div className="px-5 py-6 text-sm text-slate-500">
+                      {isOffice ? "No requests yet. PM submissions will land here." : "No requests yet. Use “New Request” to ask the office for a crew or superintendent."}
+                    </div>
+                  ) : (
+                    <>
+                      {isOffice && pendingRequests.length > 0 && (
+                        <p className="px-5 pt-3 text-xs font-bold uppercase tracking-wide text-slate-500">Needs action</p>
+                      )}
+                      {pendingRequests.map((r) => (
+                        <CrewRequestRow key={r.id} r={r} isOffice={isOffice} isPM={isPM}
+                          onResolve={resolveCrewRequest} onWithdraw={withdrawCrewRequest} />
+                      ))}
+                      {resolvedRequests.length > 0 && (
+                        <p className="px-5 pt-3 text-xs font-bold uppercase tracking-wide text-slate-500">Resolved</p>
+                      )}
+                      {resolvedRequests.map((r) => (
+                        <CrewRequestRow key={r.id} r={r} isOffice={isOffice} isPM={isPM}
+                          onResolve={resolveCrewRequest} onWithdraw={withdrawCrewRequest} />
+                      ))}
+                    </>
+                  )}
+                </div>
+              </section>
+
+              {/* Schedule Gantt — same rows the Project Dashboard uses */}
+              <section id="scheduling-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h2 className="text-xl font-bold">Schedule</h2>
+                    <p className="text-sm text-slate-500">Approved requests appear here automatically as mobilizations.</p>
+                  </div>
+                  <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <ZoomIn size={16} className="text-slate-500" />
+                    <span className="text-sm font-medium text-slate-700">Zoom</span>
+                    <select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">
+                      {zoomModes.map((m) => <option key={m}>{m}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="overflow-auto rounded-xl border border-slate-200 p-4 max-h-[70vh]">
+                  <GanttHeader timeline={timeline} zoom={zoom} />
+                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
+                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
+                      <GanttBackdrop timeline={timeline} />
+                    </div>
+                    <div className="relative z-10">
+                      {projectGanttRows.map((row, idx) => (
+                        <div key={row.project.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                          <ProjectGanttRow
+                            assignment={row.assignment}
+                            project={row.project}
+                            items={row.items}
+                            timeline={timeline}
+                            crews={crews}
+                            onLabelClick={isOffice ? () => openEditAssignmentForm(row.assignment) : undefined}
+                            onDragEnd={isOffice ? handleProjectGanttDragEnd : undefined}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </>
+          )}
         </section>
       )}
 
@@ -6493,6 +6861,18 @@ export default function App() {
 
       {/* Forms */}
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} onDelete={() => deleteProject(editingProjectId)} editing={Boolean(editingProjectId)} certifications={certifications} projectTypes={projectTypes} />}
+      {showRequestForm && (
+        <CrewRequestForm
+          form={requestForm}
+          setForm={setRequestForm}
+          projects={projects}
+          crewSpecialties={crewSpecialtyOptions}
+          supers={superintendentOptions}
+          onSave={submitCrewRequest}
+          onCancel={() => setShowRequestForm(false)}
+          busy={requestBusy}
+        />
+      )}
       {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} onDelete={async () => {
         if (!editingAssignmentId) return;
         const ok = await deleteAssignment(editingAssignmentId);
