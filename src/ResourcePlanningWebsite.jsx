@@ -915,15 +915,22 @@ export function TaskForm({ form, setForm, tasks, editingTaskId, onSave, onCancel
           </label>
 
           {form.dependsOn && (
-            <label className="space-y-1">
-              <span className="text-sm font-medium text-slate-700">Dependency Type</span>
-              <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.dependencyType} onChange={(e) => updateField("dependencyType", e.target.value)}>
-                <option value="FS">Finish-to-Start (this starts after that finishes)</option>
-                <option value="SS">Start-to-Start (both start together)</option>
-                <option value="FF">Finish-to-Finish (both finish together)</option>
-                <option value="SF">Start-to-Finish (this finishes when that starts)</option>
-              </select>
-            </label>
+            <div className="grid gap-4 md:grid-cols-[1fr_auto]">
+              <label className="space-y-1">
+                <span className="text-sm font-medium text-slate-700">Dependency Type</span>
+                <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.dependencyType} onChange={(e) => updateField("dependencyType", e.target.value)}>
+                  <option value="FS">Finish-to-Start (this starts after that finishes)</option>
+                  <option value="SS">Start-to-Start (both start together)</option>
+                  <option value="FF">Finish-to-Finish (both finish together)</option>
+                  <option value="SF">Start-to-Finish (this finishes when that starts)</option>
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="text-sm font-medium text-slate-700">Lag (days)</span>
+                <input type="number" step="1" className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.dependencyLag} onChange={(e) => updateField("dependencyLag", e.target.value)} placeholder="0" />
+                <span className="block text-xs text-slate-500">+ waits, − overlaps</span>
+              </label>
+            </div>
           )}
 
           <div className="grid gap-4 md:grid-cols-3">
@@ -3481,7 +3488,7 @@ export default function App() {
 
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
-  const [taskForm, setTaskForm] = useState({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS" });
+  const [taskForm, setTaskForm] = useState({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS", dependencyLag: 0 });
 
   const [showTaskRequestForm, setShowTaskRequestForm] = useState(false);
   const [taskRequestForm, setTaskRequestForm] = useState({ crewSpecialty: "", crewTypes: [], menCount: "", notes: "", laborManagement: "None", taskIds: [] });
@@ -3528,7 +3535,7 @@ export default function App() {
 
   function openAddTaskForm() {
     setEditingTaskId(null);
-    setTaskForm({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS" });
+    setTaskForm({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS", dependencyLag: 0 });
     setShowTaskForm(true);
   }
   function openEditTaskForm(t) {
@@ -3540,6 +3547,7 @@ export default function App() {
       end: t.end_date || "",
       dependsOn: t.depends_on || "",
       dependencyType: t.dependency_type || "FS",
+      dependencyLag: t.dependency_lag || 0,
     });
     setShowTaskForm(true);
   }
@@ -3552,14 +3560,30 @@ export default function App() {
     // If a dependency is set and this task has no explicit start, default its
     // start to the day after the dependency ends.
     let start = taskForm.start || null;
-    if (!start && taskForm.dependsOn) {
+    // Predecessor-driven scheduling. When the user hasn't pinned an explicit
+    // start (or end, for finish-anchored types), derive it from the predecessor
+    // using the relationship type + lag (in days; negative = lead/overlap).
+    const fmtDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    let end = taskForm.end || null;
+    if (taskForm.dependsOn) {
       const dep = projectTasks.find((t) => t.id === taskForm.dependsOn);
-      if (dep?.end_date) {
-        const next = addDays(toDate(dep.end_date), 1);
-        start = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`;
+      const lag = Number(taskForm.dependencyLag) || 0;
+      const depStart = dep?.start_date ? toDate(dep.start_date) : null;
+      const depEnd = dep?.end_date ? toDate(dep.end_date) : null;
+      const type = taskForm.dependencyType || "FS";
+      if (!start && !end) {
+        if (type === "FS" && depEnd) start = fmtDate(addDays(depEnd, 1 + lag));
+        else if (type === "SS" && depStart) start = fmtDate(addDays(depStart, lag));
+        else if (type === "FF" && depEnd) end = fmtDate(addDays(depEnd, lag));
+        else if (type === "SF" && depStart) end = fmtDate(addDays(depStart, lag));
       }
     }
-    const end = taskForm.end || taskEndFromDuration(start, taskForm.durationDays) || null;
+    // If we anchored an end (FF/SF) and have a duration, back-calc the start.
+    if (!start && end && taskForm.durationDays) {
+      const e = toDate(end);
+      if (e) start = fmtDate(addDays(e, -(Number(taskForm.durationDays) - 1)));
+    }
+    if (!end) end = taskEndFromDuration(start, taskForm.durationDays) || null;
     const payload = {
       project_id: schedProjectId,
       name: taskForm.name.trim(),
@@ -3568,6 +3592,7 @@ export default function App() {
       duration_days: taskForm.durationDays ? Number(taskForm.durationDays) : null,
       depends_on: taskForm.dependsOn || null,
       dependency_type: taskForm.dependsOn ? (taskForm.dependencyType || "FS") : "FS",
+      dependency_lag: taskForm.dependsOn ? (Number(taskForm.dependencyLag) || 0) : 0,
       created_by_name: pmName || currentUser,
       updated_at: new Date().toISOString(),
     };
@@ -3666,6 +3691,12 @@ export default function App() {
   // the office changes those separately, per the approval-first workflow.
 
   // Map task id -> task name for showing "which tasks" on each request.
+  // Compact predecessor tag, e.g. "FS+2", "SS-1", "FF".
+  function depTag(type, lag) {
+    const t = type || "FS";
+    const n = Number(lag) || 0;
+    return n === 0 ? t : `${t}${n > 0 ? "+" : ""}${n}`;
+  }
   const taskNameById = useMemo(() => {
     const m = new Map();
     projectTasks.forEach((t) => m.set(t.id, t.name));
@@ -4361,6 +4392,103 @@ export default function App() {
       projectTypes: topCountsFromItems(items, (p) => projectTypeLabel(p.projectType)),
       items,
     };
+  }
+
+  // Print the task schedule as a clean, paginated HTML Gantt (table-based so it
+  // renders crisply and breaks across pages, rather than a screenshot).
+  function printTaskSchedule() {
+    if (!schedProjectId) { alert("Pick a project first."); return; }
+    const proj = findProject(projects, schedProjectId);
+    const tasks = (projectTasks || []).slice();
+    if (!tasks.length) { alert("This project has no tasks to print."); return; }
+    const esc = (v) => String(v == null ? "" : v).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch] || ch));
+
+    // Overall date window across all dated tasks.
+    const dated = tasks.filter((t) => t.start_date && t.end_date);
+    let minD = null, maxD = null;
+    dated.forEach((t) => {
+      const s = toDate(t.start_date), e = toDate(t.end_date);
+      if (s && (!minD || s < minD)) minD = s;
+      if (e && (!maxD || e > maxD)) maxD = e;
+    });
+    const dayMs = 86400000;
+    const totalDays = (minD && maxD) ? Math.max(1, Math.round((maxD - minD) / dayMs) + 1) : 1;
+    const pct = (d) => minD ? ((toDate(d) - minD) / dayMs) / totalDays * 100 : 0;
+
+    const depTagLocal = (type, lag) => {
+      const t = type || "FS"; const n = Number(lag) || 0;
+      return n === 0 ? t : `${t}${n > 0 ? "+" : ""}${n}`;
+    };
+
+    const rows = tasks.map((t) => {
+      const has = t.start_date && t.end_date;
+      const left = has ? pct(t.start_date) : 0;
+      const width = has ? Math.max(0.6, (((toDate(t.end_date) - toDate(t.start_date)) / dayMs) + 1) / totalDays * 100) : 0;
+      const predName = t.depends_on ? (taskNameById.get(t.depends_on) || "") : "";
+      const predTag = t.depends_on ? depTagLocal(t.dependency_type, t.dependency_lag) : "";
+      const a = assignedByTaskId.get(t.id);
+      const assignedBits = [];
+      if (a) {
+        [...a.supers].forEach((s) => assignedBits.push("Super: " + s));
+        [...a.fieldCoords].forEach((f) => assignedBits.push("FC: " + f));
+        a.crews.forEach((c) => assignedBits.push(c.name + (c.men ? ` (${c.men})` : "")));
+      }
+      return `<tr>
+        <td class="name">${esc(t.name)}${predName ? `<br><span class="pred">↳ ${esc(predName)} <b>${esc(predTag)}</b></span>` : ""}</td>
+        <td class="date">${has ? esc(formatDate(t.start_date)) : "—"}</td>
+        <td class="date">${has ? esc(formatDate(t.end_date)) : "—"}</td>
+        <td class="assigned">${assignedBits.length ? esc(assignedBits.join(" · ")) : "<span class='muted'>—</span>"}</td>
+        <td class="barcell"><div class="track">${has ? `<div class="bar" style="left:${left}%;width:${width}%"></div>` : ""}</div></td>
+      </tr>`;
+    }).join("");
+
+    const monthMarks = (() => {
+      if (!minD || !maxD) return "";
+      const marks = [];
+      const cur = new Date(minD.getFullYear(), minD.getMonth(), 1);
+      while (cur <= maxD) {
+        const p = ((cur - minD) / dayMs) / totalDays * 100;
+        if (p >= 0 && p <= 100) marks.push(`<span class="mark" style="left:${p}%">${cur.toLocaleDateString(undefined, { month: "short", year: "2-digit" })}</span>`);
+        cur.setMonth(cur.getMonth() + 1);
+      }
+      return marks.join("");
+    })();
+
+    const title = proj ? `${proj.projectNumber ? proj.projectNumber + " - " : ""}${proj.name}` : "Task Schedule";
+    const html = `<!doctype html><html><head><title>${esc(title)} — Task Schedule</title><style>
+      @page{size:letter landscape;margin:.4in} *{box-sizing:border-box} body{font-family:Arial,sans-serif;color:#0f172a;font-size:10px;margin:0}
+      .header{display:flex;justify-content:space-between;align-items:center;gap:18px;border-bottom:4px solid #047857;padding-bottom:10px;margin-bottom:8px}
+      .header-left{display:flex;align-items:center;gap:12px}.logo{height:46px;width:auto;display:block}
+      h1{font-size:18px;margin:0}.sub{color:#64748b;font-size:11px}
+      .axis{position:relative;height:14px;margin:2px 0 4px;border-bottom:1px solid #cbd5e1}
+      .mark{position:absolute;font-size:8px;color:#64748b;transform:translateX(2px)}
+      table{width:100%;border-collapse:collapse;table-layout:fixed}
+      th{background:#f1f5f9;text-align:left;padding:5px 6px;border-bottom:2px solid #cbd5e1;font-size:9px;text-transform:uppercase;letter-spacing:.03em}
+      td{padding:5px 6px;border-bottom:1px solid #e2e8f0;vertical-align:middle}
+      tr{break-inside:avoid}
+      col.c-name{width:24%}col.c-date{width:9%}col.c-assigned{width:20%}col.c-bar{width:38%}
+      .name{font-weight:600}.pred{color:#64748b;font-weight:400;font-size:8.5px}.pred b{color:#0f172a}
+      .date{color:#334155;white-space:nowrap}.assigned{color:#065f46;font-size:9px}.muted{color:#94a3b8}
+      .barcell{padding:4px 6px}.track{position:relative;height:14px;background:#f1f5f9;border-radius:7px}
+      .bar{position:absolute;top:0;height:14px;background:#047857;border-radius:7px;min-width:3px}
+    </style></head><body>
+      <div class="header">
+        <div class="header-left"><img id="ggc-logo" class="logo" src="${window.location.origin}/logo.png" alt="GGC" onerror="this.style.display='none';window.__logoDone&&window.__logoDone();" onload="window.__logoDone&&window.__logoDone();"/>
+          <div><h1>${esc(title)}</h1><p class="sub">Task Schedule${minD ? " · " + esc(formatDate(minD.toISOString())) + " – " + esc(formatDate(maxD.toISOString())) : ""}</p></div></div>
+        <div class="sub">Generated ${new Date().toLocaleDateString()}</div>
+      </div>
+      <div class="axis">${monthMarks}</div>
+      <table>
+        <colgroup><col class="c-name"/><col class="c-date"/><col class="c-date"/><col class="c-assigned"/><col class="c-bar"/></colgroup>
+        <thead><tr><th>Task / Predecessor</th><th>Start</th><th>End</th><th>Assigned</th><th>Timeline</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <script>(function(){var done=false;window.__logoDone=function(){if(done)return;done=true;setTimeout(function(){window.print();},100);};setTimeout(function(){if(!done){done=true;window.print();}},2500);})();<\/script>
+    </body></html>`;
+    const w = window.open("", "_blank", "width=1200,height=900");
+    if (!w) { alert("Allow pop-ups to print the schedule."); return; }
+    w.document.write(html);
+    w.document.close();
   }
 
   function exportResourceResume(resource) {
@@ -6372,6 +6500,9 @@ export default function App() {
                           {zoomModes.map((m) => <option key={m}>{m}</option>)}
                         </select>
                       </div>
+                      <button onClick={printTaskSchedule} disabled={!projectTasks.length} title="Print the task schedule" className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                        <ClipboardCheck size={16} /> Print Schedule
+                      </button>
                       {(isPM || isOffice) && (
                         <>
                           <button onClick={openAddTaskForm} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
@@ -6420,7 +6551,7 @@ export default function App() {
                                 task={t}
                                 timeline={schedTimeline}
                                 striped={idx % 2 === 1}
-                                dependsOnName={t.depends_on ? taskNameById.get(t.depends_on) : null}
+                                dependsOnName={t.depends_on ? `${taskNameById.get(t.depends_on)} (${depTag(t.dependency_type, t.dependency_lag)})` : null}
                                 requests={taskCrewRequests}
                                 assigned={assignedByTaskId.get(t.id)}
                                 onClick={() => (isPM || isOffice) && openEditTaskForm(t)}
@@ -6457,7 +6588,9 @@ export default function App() {
                                   <td className="p-3 font-semibold text-slate-900">{t.name}</td>
                                   <td className="p-3">{t.start_date ? formatDate(t.start_date) : <span className="text-slate-300">—</span>}</td>
                                   <td className="p-3">{t.end_date ? formatDate(t.end_date) : <span className="text-slate-300">—</span>}</td>
-                                  <td className="p-3">{t.depends_on ? (taskNameById.get(t.depends_on) || "—") : <span className="text-slate-300">—</span>}</td>
+                                  <td className="p-3">{t.depends_on ? (
+                                    <span>{taskNameById.get(t.depends_on) || "—"} <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">{depTag(t.dependency_type, t.dependency_lag)}</span></span>
+                                  ) : <span className="text-slate-300">—</span>}</td>
                                   <td className="p-3">
                                     {reqsForTask.length === 0 ? <span className="text-slate-300">None</span> : (
                                       <div className="flex flex-wrap gap-1">
