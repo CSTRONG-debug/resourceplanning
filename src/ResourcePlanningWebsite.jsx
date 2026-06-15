@@ -79,6 +79,7 @@ function mapCrewFromDbLocal(c) {
     foremanName: c.foreman_name || "",
     totalMembers: c.total_members || 0,
     specialty: c.specialty || [],
+    crewType: c.crew_type || [],
     deactivated: c.deactivated || false,
   };
 }
@@ -88,6 +89,7 @@ function crewToDbLocal(crew) {
     foreman_name: crew.foremanName,
     total_members: crew.totalMembers || 0,
     specialty: crew.specialty || [],
+    crew_type: crew.crewType || [],
     deactivated: crew.deactivated || false,
   };
 }
@@ -591,7 +593,7 @@ export function StaffRequestForm({ form, setForm, roles, onSave, onCancel, busy 
 // Lists pending crew + staff requests. Clicking one opens the Assign tool
 // (handled by parent) and shows an availability recommendation for its window.
 
-export function RequestsModal({ requests, activeRequest, availability, onPick, onDelete, onClose }) {
+export function RequestsModal({ requests, activeRequest, availability, requestedTypes, onPick, onDelete, onAssignResource, onAssignCrew, onClose }) {
   return (
     <div className="fixed inset-0 z-[86] flex items-center justify-center bg-slate-950/50 p-4">
       <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
@@ -641,14 +643,36 @@ export function RequestsModal({ requests, activeRequest, availability, onPick, o
             ) : (
               <>
                 <h3 className="mb-2 text-sm font-bold text-slate-900">Available for this window</h3>
-                <p className="mb-3 text-xs text-slate-500">Not booked on another project (and not on PTO) during the request’s dates.</p>
+                <p className="mb-3 text-xs text-slate-500">Not booked on another project (and not on PTO) during the request’s dates. Click to assign.</p>
+                {activeRequest && activeRequest.kind === "crew" && (requestedTypes || []).length > 0 && (
+                  <div className="mb-3 flex items-center gap-3 text-[11px] font-semibold">
+                    <span className="flex items-center gap-1"><span className="h-3 w-3 rounded-full bg-emerald-500" /> matches all types</span>
+                    <span className="flex items-center gap-1"><span className="h-3 w-3 rounded-full bg-amber-400" /> matches some</span>
+                    <span className="flex items-center gap-1"><span className="h-3 w-3 rounded-full bg-slate-200" /> no type match</span>
+                  </div>
+                )}
                 <div className="mb-4">
                   <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">Crews ({availability.freeCrews.length})</p>
                   <div className="flex flex-wrap gap-1.5">
                     {availability.freeCrews.length === 0 ? <span className="text-xs text-slate-400">None free</span>
-                      : availability.freeCrews.map((c) => (
-                        <span key={c.id} className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">{c.crewName}{(c.specialty || []).length ? ` · ${(c.specialty || []).join("/")}` : ""}</span>
-                      ))}
+                      : availability.freeCrews.map((c) => {
+                        const types = Array.isArray(c.crewType) ? c.crewType : [];
+                        const needed = (activeRequest && activeRequest.kind === "crew") ? (requestedTypes || []) : [];
+                        const matchCount = needed.filter((t) => types.includes(t)).length;
+                        const cls = needed.length === 0
+                          ? "bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                          : matchCount === 0
+                            ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                            : matchCount === needed.length
+                              ? "bg-emerald-500 text-white hover:bg-emerald-600"
+                              : "bg-amber-300 text-amber-900 hover:bg-amber-400";
+                        return (
+                          <button key={c.id} onClick={() => onAssignCrew && onAssignCrew(c)} title={types.length ? `Types: ${types.join(", ")}` : "No crew type set"}
+                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${cls}`}>
+                            {c.crewName}{types.length ? ` · ${types.join("/")}` : ""}
+                          </button>
+                        );
+                      })}
                   </div>
                 </div>
                 <div>
@@ -656,7 +680,8 @@ export function RequestsModal({ requests, activeRequest, availability, onPick, o
                   <div className="flex flex-wrap gap-1.5">
                     {availability.freeResources.length === 0 ? <span className="text-xs text-slate-400">None free</span>
                       : availability.freeResources.map((r) => (
-                        <span key={r.id} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{r.name} · {r.resourceType}</span>
+                        <button key={r.id} onClick={() => onAssignResource && onAssignResource(r)} title="Assign to matching role"
+                          className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200">{r.name} · {r.resourceType}</button>
                       ))}
                   </div>
                 </div>
@@ -824,8 +849,14 @@ export function TaskForm({ form, setForm, tasks, editingTaskId, onSave, onCancel
 
 // ─── TaskCrewRequestForm (request a crew TYPE across one or more tasks) ───────
 
-export function TaskCrewRequestForm({ form, setForm, tasks, crewSpecialties, onSave, onCancel, busy }) {
+export function TaskCrewRequestForm({ form, setForm, tasks, crewTypeOptions, onSave, onCancel, busy }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
+  function toggleType(t) {
+    setForm((c) => {
+      const cur = c.crewTypes || [];
+      return { ...c, crewTypes: cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t] };
+    });
+  }
   function toggleTask(id) {
     setForm((c) => ({
       ...c,
@@ -845,11 +876,23 @@ export function TaskCrewRequestForm({ form, setForm, tasks, crewSpecialties, onS
         </div>
 
         <div className="grid gap-4 p-5 md:grid-cols-2">
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Crew Type</span>
-            <input list="ggc-sched-specialties" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.crewSpecialty} onChange={(e) => updateField("crewSpecialty", e.target.value)} placeholder="e.g. Pavers" />
-            <datalist id="ggc-sched-specialties">{crewSpecialties.map((s) => <option key={s} value={s} />)}</datalist>
-          </label>
+          <div className="space-y-1 md:col-span-2">
+            <span className="text-sm font-medium text-slate-700">Crew Type(s) needed</span>
+            <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              {(crewTypeOptions || []).length === 0 ? (
+                <span className="text-xs text-slate-400">No crew types defined. Add them under Setup → Crews → Crew Type Settings.</span>
+              ) : crewTypeOptions.map((t) => {
+                const active = (form.crewTypes || []).includes(t);
+                return (
+                  <button key={t} type="button" onClick={() => toggleType(t)}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${active ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"}`}>
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+            <span className="text-xs text-slate-500">Select all types this crew must cover. We’ll match crews by these types.</span>
+          </div>
           <label className="space-y-1">
             <span className="text-sm font-medium text-slate-700">Men</span>
             <input type="number" min="0" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.menCount} onChange={(e) => updateField("menCount", e.target.value)} placeholder="0" />
@@ -1819,7 +1862,7 @@ export function ResourceForm({ form, setForm, certifications, onSave, onCancel, 
 
 // ─── CrewForm ─────────────────────────────────────────────────────────────────
 
-export function CrewForm({ form, setForm, certifications, onSave, onCancel, onDelete, editing }) {
+export function CrewForm({ form, setForm, certifications, crewTypes, onSave, onCancel, onDelete, editing }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
 
   return (
@@ -1857,6 +1900,11 @@ export function CrewForm({ form, setForm, certifications, onSave, onCancel, onDe
               <p className="text-sm font-semibold text-slate-800">Deactivate Crew</p>
               <p className="text-xs text-slate-500">Hides this crew from new assignments, Crew Gantt, and Crew Utilization.</p>
             </div>
+          </label>
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-sm font-medium text-slate-700">Crew Type</span>
+            <CertificationPicker selected={form.crewType || []} onChange={(v) => updateField("crewType", v)} certifications={crewTypes || []} />
+            <span className="text-xs text-slate-500">What kind of work this crew does. Used to match crew requests.</span>
           </label>
           <label className="space-y-1 md:col-span-2">
             <span className="text-sm font-medium text-slate-700">Specialty</span>
@@ -2833,6 +2881,9 @@ export default function App() {
   const [assignmentForm, setAssignmentForm] = useState(blankAssignment);
   const [resourceForm, setResourceForm] = useState(blankResource);
   const [crewForm, setCrewForm] = useState(blankCrew);
+  const [crewTypes, setCrewTypes] = useState([]);
+  const [newCrewType, setNewCrewType] = useState("");
+  const [showCrewTypeSettings, setShowCrewTypeSettings] = useState(false);
 
   const [zoom, setZoom] = useState("Months");
   const [resourceZoom, setResourceZoom] = useState("Months");
@@ -2987,7 +3038,7 @@ export default function App() {
   useSupabaseRealtime({ setProjects, setResources, setCrews, setAssignments, setCertifications });
 
   // ── Load app users after login ─────────────────────────────────────────────
-  useEffect(() => { if (currentUser) { loadAppUsers(); loadProjectTypes(); loadSavedViews(); } }, [currentUser]);
+  useEffect(() => { if (currentUser) { loadAppUsers(); loadProjectTypes(); loadCrewTypes(); loadSavedViews(); } }, [currentUser]);
 
   useEffect(() => {
     localStorage.setItem("ggc_project_types", JSON.stringify(projectTypes));
@@ -3276,7 +3327,7 @@ export default function App() {
   const [taskForm, setTaskForm] = useState({ name: "", start: "", durationDays: "", end: "", dependsOn: "", dependencyType: "FS" });
 
   const [showTaskRequestForm, setShowTaskRequestForm] = useState(false);
-  const [taskRequestForm, setTaskRequestForm] = useState({ crewSpecialty: "", menCount: "", notes: "", taskIds: [] });
+  const [taskRequestForm, setTaskRequestForm] = useState({ crewSpecialty: "", crewTypes: [], menCount: "", notes: "", taskIds: [] });
   const [taskRequestBusy, setTaskRequestBusy] = useState(false);
 
   // Load tasks + requests for the selected project.
@@ -3388,7 +3439,7 @@ export default function App() {
   // ── Crew-type requests against tasks ──────────────────────────────────────
   function openTaskRequestForm(preselectTaskId = null) {
     setTaskRequestForm({
-      crewSpecialty: "", menCount: "", notes: "",
+      crewSpecialty: "", crewTypes: [], menCount: "", notes: "",
       taskIds: preselectTaskId ? [preselectTaskId] : [],
     });
     setShowTaskRequestForm(true);
@@ -3396,7 +3447,8 @@ export default function App() {
 
   async function submitTaskRequest() {
     if (!schedProjectId) { alert("Pick a project first."); return; }
-    if (!taskRequestForm.crewSpecialty) { alert("Choose a crew type."); return; }
+    const types = taskRequestForm.crewTypes || [];
+    if (!types.length) { alert("Choose at least one crew type."); return; }
     if (!taskRequestForm.taskIds.length) { alert("Select at least one task this crew is for."); return; }
     if (!supabase) { alert("Supabase is not connected."); return; }
     setTaskRequestBusy(true);
@@ -3405,7 +3457,8 @@ export default function App() {
       .from("task_crew_requests")
       .insert({
         project_id: schedProjectId,
-        crew_specialty: taskRequestForm.crewSpecialty,
+        crew_specialty: types.join(", "),
+        crew_types: types,
         men_count: taskRequestForm.menCount ? Number(taskRequestForm.menCount) : 0,
         notes: taskRequestForm.notes || null,
         requested_by: user.id,
@@ -3451,13 +3504,6 @@ export default function App() {
 
   // Office: approve (assign a crew) or deny. Does NOT touch mobilizations —
   // the office changes those separately, per the approval-first workflow.
-
-  // Crew specialties for the request dropdown (active crews only).
-  const schedCrewSpecialties = useMemo(() => {
-    const set = new Set();
-    activeCrews.forEach((c) => (c.specialty || []).forEach((s) => s && set.add(s)));
-    return [...set].sort();
-  }, [activeCrews]);
 
   // Map task id -> task name for showing "which tasks" on each request.
   const taskNameById = useMemo(() => {
@@ -3589,6 +3635,7 @@ export default function App() {
           projectLabel: r.projects ? `${r.projects.project_number ? r.projects.project_number + " - " : ""}${r.projects.name}` : "—",
           label: `${r.crew_specialty}${r.men_count ? ` · ${r.men_count} men` : ""}`,
           specialty: r.crew_specialty,
+          crewTypes: Array.isArray(r.crew_types) ? r.crew_types : [],
           requestedBy: r.requested_by_name,
           start: r.window_start || null, end: r.window_end || null,
           raw: r,
@@ -3603,6 +3650,7 @@ export default function App() {
         projectLabel: r.projects ? `${r.projects.project_number ? r.projects.project_number + " - " : ""}${r.projects.name}` : "—",
         label: r.role,
         role: r.role,
+        crewTypes: [],
         requestedBy: r.requested_by_name,
         start: r.start_date, end: r.end_date,
         raw: r,
@@ -3657,6 +3705,64 @@ export default function App() {
       });
       setShowAssignmentForm(true);
     }
+  }
+
+  // Map a resource type to the assignment form field it fills.
+  function roleFieldForResourceType(rt) {
+    const t = String(rt || "").toLowerCase();
+    if (t.includes("project manager")) return "projectManager";
+    if (t.includes("field engineer")) return "fieldEngineer";
+    if (t.includes("field coordinator")) return "fieldCoordinator";
+    if (t.includes("safety")) return "safety";
+    if (t.includes("super")) return "superintendent"; // super + general/assistant super
+    return null;
+  }
+
+  // From the Open Requests modal: click an available PERSON to drop them into
+  // the matching role on the Assign form (opening it on the request's project).
+  function assignResourceFromModal(resource) {
+    if (!activeRequest) return;
+    const field = roleFieldForResourceType(resource.resourceType);
+    const existing = assignments.find((a) => a.projectId === activeRequest.projectId);
+    const base = existing
+      ? { ...blankAssignment, ...existing }
+      : { ...blankAssignment, projectId: activeRequest.projectId,
+          mobilizations: [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }] };
+    // PM / field engineer / safety are assignment-level; super / field coord
+    // live on the first mobilization.
+    if (field === "projectManager" || field === "fieldEngineer" || field === "safety") {
+      base[field] = resource.name;
+    } else if (field === "superintendent" || field === "fieldCoordinator") {
+      const mobs = base.mobilizations && base.mobilizations.length ? [...base.mobilizations] : [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }];
+      mobs[0] = { ...mobs[0], [field]: resource.name };
+      base.mobilizations = mobs;
+    } else {
+      alert(`No matching assignment role for ${resource.resourceType}.`);
+      return;
+    }
+    setEditingAssignmentId(existing ? existing.id : null);
+    setAssignmentForm(base);
+    setShowRequestsModal(false);
+    setShowAssignmentForm(true);
+  }
+
+  // Click an available CREW to add it to the first mobilization of the
+  // request's project assignment.
+  function assignCrewFromModal(crew) {
+    if (!activeRequest) return;
+    const existing = assignments.find((a) => a.projectId === activeRequest.projectId);
+    const base = existing
+      ? { ...blankAssignment, ...existing }
+      : { ...blankAssignment, projectId: activeRequest.projectId,
+          mobilizations: [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }] };
+    const mobs = base.mobilizations && base.mobilizations.length ? [...base.mobilizations] : [{ id: crypto.randomUUID(), start: activeRequest.start || "", durationWeeks: "", end: activeRequest.end || "", superintendent: "", fieldCoordinator: "", crewIds: [], crewMenCounts: {}, crewOnly: false, unassignedNeeds: [] }];
+    const firstCrewIds = mobs[0].crewIds || [];
+    if (!firstCrewIds.includes(crew.id)) mobs[0] = { ...mobs[0], crewIds: [...firstCrewIds, crew.id] };
+    base.mobilizations = mobs;
+    setEditingAssignmentId(existing ? existing.id : null);
+    setAssignmentForm(base);
+    setShowRequestsModal(false);
+    setShowAssignmentForm(true);
   }
 
   // ── Role-based UI gating ───────────────────────────────────────────────────
@@ -4407,6 +4513,32 @@ export default function App() {
       if (error) { console.error(error); alert("Could not delete project type."); return; }
     }
     setProjectTypes((current) => current.filter((item) => item !== type));
+  }
+
+  async function loadCrewTypes() {
+    if (!supabase) return;
+    const { data, error } = await supabase.from("crew_types").select("name").order("name", { ascending: true });
+    if (error) { console.warn("Crew types table is not set up yet:", error); return; }
+    if (data?.length) setCrewTypes(data.map((row) => row.name));
+  }
+  async function addCrewType() {
+    const type = newCrewType.trim();
+    if (!type) return;
+    if (crewTypes.includes(type)) { setNewCrewType(""); return; }
+    if (supabase) {
+      const { error } = await supabase.from("crew_types").insert({ name: type });
+      if (error) { console.error(error); alert("Could not add crew type."); return; }
+    }
+    setCrewTypes((current) => current.includes(type) ? current : [...current, type].sort());
+    setNewCrewType("");
+  }
+  async function deleteCrewType(type) {
+    if (!confirm(`Delete crew type ${type}? Existing crews keep their saved value.`)) return;
+    if (supabase) {
+      const { error } = await supabase.from("crew_types").delete().eq("name", type);
+      if (error) { console.error(error); alert("Could not delete crew type."); return; }
+    }
+    setCrewTypes((current) => current.filter((item) => item !== type));
   }
 
   // ── Forecast helpers ───────────────────────────────────────────────────────
@@ -5591,9 +5723,28 @@ export default function App() {
                 </div>
                 <button onClick={exportCrewsExcel} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button>
                 {canWrite && <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Import CSV<input type="file" accept=".csv" onChange={importCrewsCsv} className="hidden" /></label>}
+                {canWrite && <button onClick={() => setShowCrewTypeSettings((c) => !c)} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"><Settings size={17} /> Crew Type Settings</button>}
                 {canWrite && <button onClick={openAddCrewForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800"><Plus size={17} /> Add Crew</button>}
               </div>
             </div>
+            {showCrewTypeSettings && (
+              <div className="mb-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                <h3 className="font-bold text-slate-900">Crew Types</h3>
+                <p className="text-sm text-slate-500">Types of crews (Sidewalk, Paver, Rodbuster, Wall, Foundations, …). Used to match crew requests.</p>
+                <div className="mt-3 flex gap-2">
+                  <input value={newCrewType} onChange={(e) => setNewCrewType(e.target.value)} placeholder="Add crew type" className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 outline-none focus:border-emerald-600" />
+                  <button onClick={addCrewType} className="rounded-xl bg-slate-900 px-4 py-2 font-semibold text-white">Add</button>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {crewTypes.map((type) => (
+                    <span key={type} className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm">
+                      {type}<button onClick={() => deleteCrewType(type)} className="text-red-600">×</button>
+                    </span>
+                  ))}
+                  {crewTypes.length === 0 && <span className="text-xs text-slate-400">No crew types yet.</span>}
+                </div>
+              </div>
+            )}
             <div className="overflow-x-auto rounded-xl border border-slate-200">
               <table className="w-full min-w-[850px] text-left text-sm">
                 <thead className="bg-slate-100 text-slate-600">
@@ -5602,6 +5753,7 @@ export default function App() {
                     <th onClick={() => toggleSort(setCrewSort, "foremanName")} className="cursor-pointer p-3 hover:bg-slate-200">Foreman Name</th>
                     <th className="p-3 text-center">Total Members</th>
                     <th className="p-3 text-center">Status</th>
+                    <th className="p-3">Crew Type</th>
                     <th className="p-3">Specialty</th>
                   </tr>
                 </thead>
@@ -5616,6 +5768,7 @@ export default function App() {
                           {isCrewDeactivated(crew) ? "Deactivated" : "Active"}
                         </span>
                       </td>
+                      <td className="p-3">{(crew.crewType || []).join(", ") || <span className="text-slate-300">—</span>}</td>
                       <td className="p-3">{(crew.specialty || []).join(", ")}</td>
                     </tr>
                   ))}
@@ -7506,7 +7659,7 @@ export default function App() {
           form={taskRequestForm}
           setForm={setTaskRequestForm}
           tasks={projectTasks}
-          crewSpecialties={schedCrewSpecialties}
+          crewTypeOptions={crewTypes}
           onSave={submitTaskRequest}
           onCancel={() => setShowTaskRequestForm(false)}
           busy={taskRequestBusy}
@@ -7527,8 +7680,11 @@ export default function App() {
           requests={bannerRequests}
           activeRequest={activeRequest}
           availability={activeRequest && (activeRequest.start && activeRequest.end) ? computeAvailability(activeRequest.start, activeRequest.end) : null}
+          requestedTypes={activeRequest && activeRequest.kind === "crew" ? (activeRequest.crewTypes || []) : []}
           onPick={(req) => startAssignFromRequest(req)}
           onDelete={(req) => (req.kind === "crew" ? deleteTaskRequest(req.id) : deleteStaffRequest(req.id))}
+          onAssignResource={(resource) => assignResourceFromModal(resource)}
+          onAssignCrew={(crew) => assignCrewFromModal(crew)}
           onClose={() => { setShowRequestsModal(false); setActiveRequest(null); }}
         />
       )}
@@ -7589,7 +7745,7 @@ export default function App() {
           </div>
         </div>
       )}
-      {showCrewForm && <CrewForm form={crewForm} setForm={setCrewForm} certifications={certifications} onSave={saveCrew} onCancel={() => setShowCrewForm(false)} onDelete={() => deleteCrew(editingCrewId)} editing={Boolean(editingCrewId)} />}
+      {showCrewForm && <CrewForm form={crewForm} setForm={setCrewForm} certifications={certifications} crewTypes={crewTypes} onSave={saveCrew} onCancel={() => setShowCrewForm(false)} onDelete={() => deleteCrew(editingCrewId)} editing={Boolean(editingCrewId)} />}
 
       {/* ── Forecast Settings Modal ── */}
       {showForecastSettings && (
