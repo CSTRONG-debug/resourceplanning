@@ -505,27 +505,54 @@ function projectTypeLabel(value) {
 
 // ─── StatCard ────────────────────────────────────────────────────────────────
 
-// ─── CrewRequestRow ──────────────────────────────────────────────────────────
+// ─── TaskGanttRow ────────────────────────────────────────────────────────────
 
-export function CrewRequestRow({ r, isOffice, isPM, onResolve, onWithdraw }) {
+export function TaskGanttRow({ task, timeline, striped, dependsOnName, requests, onClick }) {
+  const span = (task.start_date && task.end_date)
+    ? timelineSpanPixels(task.start_date, task.end_date, timeline)
+    : { left: 0, width: 0 };
+  // Crew specialties requested for this task (badges on the bar label).
+  const reqs = (requests || []).filter((r) =>
+    (r.task_crew_request_links || []).some((l) => l.task_id === task.id));
+  const anyApproved = reqs.some((r) => r.status === "approved");
+  const anyPending = reqs.some((r) => r.status === "pending");
+  const barColor = anyApproved ? "bg-emerald-700" : anyPending ? "bg-amber-500" : "bg-slate-400";
+
+  return (
+    <div className={`py-0.5 ${striped ? "bg-slate-100/60" : ""}`}>
+      <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
+        <button onClick={onClick} className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden hover:bg-slate-50">
+          <p className="truncate text-[12px] font-semibold text-slate-900 hover:text-emerald-700">
+            {task.name}
+            {dependsOnName ? <span className="ml-1 font-normal text-slate-400">↳ {dependsOnName}</span> : null}
+          </p>
+        </button>
+        <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
+          {span.width > 0 && (
+            <div
+              className={`absolute top-0 h-7 overflow-hidden rounded-md px-2.5 text-[11px] font-semibold leading-7 text-white shadow-sm ${barColor}`}
+              style={{ left: `${span.left}px`, width: `${span.width}px` }}
+              title={`${task.name}\n${formatDate(task.start_date)} - ${formatDate(task.end_date)}${reqs.length ? "\nCrew: " + reqs.map((r) => `${r.crew_specialty} (${r.status})`).join(", ") : ""}`}
+            >
+              {reqs.length ? reqs.map((r) => r.crew_specialty).join(", ") : task.name}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── TaskCrewRequestRow ──────────────────────────────────────────────────────
+
+export function TaskCrewRequestRow({ r, isOffice, isPM, taskNameById, crews, onApproveClick, onDeny, onWithdraw }) {
   const [busy, setBusy] = useState(false);
   const wrap = async (fn) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
 
-  const proj = r.projects;
-  const projLabel = proj
-    ? `${proj.project_number ? proj.project_number + " - " : ""}${proj.name}`
-    : "Unknown project";
-
-  const typeLabel = r.request_type === "superintendent" ? "Super"
-    : r.request_type === "both" ? "Crew + Super" : "Crew";
-  const detail = [
-    typeLabel,
-    r.crew_specialty,
-    r.men_count ? `${r.men_count} men` : null,
-    r.superintendent,
-    r.start_date ? formatDate(r.start_date) : null,
-    r.duration_weeks ? `${r.duration_weeks} wk` : null,
-  ].filter(Boolean).join(" · ");
+  const taskNames = (r.task_crew_request_links || [])
+    .map((l) => taskNameById.get(l.task_id))
+    .filter(Boolean);
+  const assignedCrew = r.assigned_crew_id ? crews.find((c) => c.id === r.assigned_crew_id) : null;
 
   const statusBadge = {
     pending: "bg-amber-100 text-amber-700",
@@ -533,115 +560,152 @@ export function CrewRequestRow({ r, isOffice, isPM, onResolve, onWithdraw }) {
     denied: "bg-red-100 text-red-700",
   }[r.status] || "bg-slate-100 text-slate-600";
 
-  const canManage = isOffice && r.status === "pending";
-
   return (
-    <div className="flex items-center gap-3 px-5 py-3">
+    <div className="flex items-start gap-3 px-5 py-3">
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-slate-900">{projLabel}</p>
-        <p className="truncate text-xs text-slate-500">
-          {detail}{isOffice && r.requested_by_name ? ` · ${r.requested_by_name}` : ""}
+        <p className="text-sm font-semibold text-slate-900">
+          {r.crew_specialty}{r.men_count ? ` · ${r.men_count} men` : ""}
+          {assignedCrew ? <span className="ml-2 font-normal text-emerald-700">→ {assignedCrew.crewName}</span> : null}
         </p>
-        {r.notes && <p className="truncate text-xs text-slate-400">{r.notes}</p>}
+        <p className="mt-0.5 text-xs text-slate-500">
+          For: {taskNames.length ? taskNames.join(", ") : "—"}
+          {isOffice && r.requested_by_name ? ` · ${r.requested_by_name}` : ""}
+        </p>
+        {r.notes && <p className="mt-0.5 text-xs text-slate-400">{r.notes}</p>}
       </div>
 
-      <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-bold capitalize ${statusBadge}`}>
-        {r.status}
-      </span>
+      <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-bold capitalize ${statusBadge}`}>{r.status}</span>
 
-      {canManage && (
+      {isOffice && r.status === "pending" && (
         <div className="flex shrink-0 gap-2">
-          <button disabled={busy} onClick={() => wrap(() => onResolve(r.id, "approved"))}
-            className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">
-            Approve
-          </button>
-          <button disabled={busy} onClick={() => wrap(() => onResolve(r.id, "denied"))}
-            className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">
-            Deny
-          </button>
+          <button disabled={busy} onClick={onApproveClick} className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">Approve</button>
+          <button disabled={busy} onClick={() => wrap(onDeny)} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">Deny</button>
         </div>
       )}
-
       {isPM && r.status === "pending" && (
-        <button disabled={busy} onClick={() => wrap(() => onWithdraw(r.id))}
-          className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">
-          Withdraw
-        </button>
+        <button disabled={busy} onClick={() => wrap(onWithdraw)} className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">Withdraw</button>
       )}
     </div>
   );
 }
 
-// ─── CrewRequestForm ─────────────────────────────────────────────────────────
+// ─── TaskForm (add/edit a project task) ──────────────────────────────────────
 
-export function CrewRequestForm({ form, setForm, projects, crewSpecialties, supers, onSave, onCancel, busy }) {
+export function TaskForm({ form, setForm, tasks, editingTaskId, onSave, onCancel, onDelete }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
-  const needsCrew = form.requestType === "crew" || form.requestType === "both";
-  const needsSuper = form.requestType === "superintendent" || form.requestType === "both";
+  // Dependency options: every other task in this project.
+  const depOptions = tasks.filter((t) => t.id !== editingTaskId);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 p-5">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">{editingTaskId ? "Edit Task" : "Add Task"}</h2>
+            <p className="text-sm text-slate-500">A task is a granular work item within this project.</p>
+          </div>
+          <button onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+        </div>
+
+        <div className="grid gap-4 p-5">
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Task Name</span>
+            <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.name} onChange={(e) => updateField("name", e.target.value)} placeholder="e.g. Form & Pour — Zone A" />
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Follows (dependency)</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.dependsOn} onChange={(e) => updateField("dependsOn", e.target.value)}>
+              <option value="">None — independent task</option>
+              {depOptions.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <span className="text-xs text-slate-500">If set and no start date is given, this task starts the day after the one it follows.</span>
+          </label>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Start Date</span>
+              <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.start} onChange={(e) => updateField("start", e.target.value)} />
+            </label>
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Duration (days)</span>
+              <input type="number" min="1" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.durationDays} onChange={(e) => updateField("durationDays", e.target.value)} placeholder="e.g. 5" />
+            </label>
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">End Date</span>
+              <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.end} onChange={(e) => updateField("end", e.target.value)} />
+            </label>
+          </div>
+          <p className="text-xs text-slate-500">Leave End blank to auto-fill from Start + Duration. End wins if both are given.</p>
+        </div>
+
+        <div className="flex justify-between gap-3 border-t border-slate-200 p-5">
+          <div>{editingTaskId && <button onClick={() => onDelete(editingTaskId)} className="rounded-xl border border-red-200 px-4 py-2 font-semibold text-red-700 hover:bg-red-50">Delete Task</button>}</div>
+          <div className="flex gap-3">
+            <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+            <button onClick={onSave} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Save Task</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── TaskCrewRequestForm (request a crew TYPE across one or more tasks) ───────
+
+export function TaskCrewRequestForm({ form, setForm, tasks, crewSpecialties, onSave, onCancel, busy }) {
+  function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
+  function toggleTask(id) {
+    setForm((c) => ({
+      ...c,
+      taskIds: c.taskIds.includes(id) ? c.taskIds.filter((x) => x !== id) : [...c.taskIds, id],
+    }));
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
       <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-slate-200 p-5">
           <div>
-            <h2 className="text-xl font-bold text-slate-900">New Request</h2>
-            <p className="text-sm text-slate-500">Ask the office for a crew or superintendent on a project.</p>
+            <h2 className="text-xl font-bold text-slate-900">Request Crew</h2>
+            <p className="text-sm text-slate-500">Request a crew type for one or more tasks. The office assigns the actual crew.</p>
           </div>
           <button onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
         </div>
 
         <div className="grid gap-4 p-5 md:grid-cols-2">
-          <label className="space-y-1 md:col-span-2">
-            <span className="text-sm font-medium text-slate-700">Project</span>
-            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.projectId} onChange={(e) => updateField("projectId", e.target.value)}>
-              <option value="">Select project…</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.projectNumber ? `${p.projectNumber} - ` : ""}{p.name}</option>
-              ))}
-            </select>
-          </label>
-
           <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Request Type</span>
-            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.requestType} onChange={(e) => updateField("requestType", e.target.value)}>
-              <option value="crew">Crew</option>
-              <option value="superintendent">Superintendent</option>
-              <option value="both">Crew + Superintendent</option>
-            </select>
+            <span className="text-sm font-medium text-slate-700">Crew Type</span>
+            <input list="ggc-sched-specialties" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.crewSpecialty} onChange={(e) => updateField("crewSpecialty", e.target.value)} placeholder="e.g. Pavers" />
+            <datalist id="ggc-sched-specialties">{crewSpecialties.map((s) => <option key={s} value={s} />)}</datalist>
           </label>
-
-          {needsCrew && (
-            <label className="space-y-1">
-              <span className="text-sm font-medium text-slate-700">Crew Type</span>
-              <input list="ggc-crew-specialties" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.crewSpecialty} onChange={(e) => updateField("crewSpecialty", e.target.value)} placeholder="e.g. Pavers" />
-              <datalist id="ggc-crew-specialties">{crewSpecialties.map((s) => <option key={s} value={s} />)}</datalist>
-            </label>
-          )}
-
-          {needsCrew && (
-            <label className="space-y-1">
-              <span className="text-sm font-medium text-slate-700">Men</span>
-              <input type="number" min="0" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.menCount} onChange={(e) => updateField("menCount", e.target.value)} placeholder="0" />
-            </label>
-          )}
-
-          {needsSuper && (
-            <label className="space-y-1">
-              <span className="text-sm font-medium text-slate-700">Superintendent</span>
-              <input list="ggc-supers" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.superintendent} onChange={(e) => updateField("superintendent", e.target.value)} placeholder="Any / name" />
-              <datalist id="ggc-supers">{supers.map((s) => <option key={s} value={s} />)}</datalist>
-            </label>
-          )}
-
           <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Start Date</span>
-            <input type="date" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.startDate} onChange={(e) => updateField("startDate", e.target.value)} />
+            <span className="text-sm font-medium text-slate-700">Men</span>
+            <input type="number" min="0" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.menCount} onChange={(e) => updateField("menCount", e.target.value)} placeholder="0" />
           </label>
 
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-slate-700">Duration (Weeks)</span>
-            <input type="number" min="0" step="0.5" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.durationWeeks} onChange={(e) => updateField("durationWeeks", e.target.value)} placeholder="1" />
-          </label>
+          <div className="space-y-1 md:col-span-2">
+            <span className="text-sm font-medium text-slate-700">Tasks this crew is for</span>
+            <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 p-2">
+              {tasks.length === 0 ? (
+                <p className="p-2 text-sm text-slate-400">No tasks yet — add tasks first.</p>
+              ) : tasks.map((t) => {
+                const checked = form.taskIds.includes(t.id);
+                return (
+                  <label key={t.id} className={`flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-sm hover:bg-slate-50 ${checked ? "bg-emerald-50" : ""}`}>
+                    <input type="checkbox" className="h-4 w-4 accent-emerald-600" checked={checked} onChange={() => toggleTask(t.id)} />
+                    <span className="flex-1 font-medium text-slate-800">{t.name}</span>
+                    <span className="text-xs text-slate-400">
+                      {t.start_date ? formatDate(t.start_date) : "—"}{t.end_date ? ` → ${formatDate(t.end_date)}` : ""}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            {form.taskIds.length > 1 && (
+              <p className="text-xs text-emerald-700">This crew will be requested for {form.taskIds.length} tasks — they’ll all show on the request.</p>
+            )}
+          </div>
 
           <label className="space-y-1 md:col-span-2">
             <span className="text-sm font-medium text-slate-700">Notes</span>
@@ -651,9 +715,7 @@ export function CrewRequestForm({ form, setForm, projects, crewSpecialties, supe
 
         <div className="flex justify-end gap-3 border-t border-slate-200 p-5">
           <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-          <button onClick={onSave} disabled={busy} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 disabled:bg-slate-300">
-            {busy ? "Sending…" : "Submit Request"}
-          </button>
+          <button onClick={onSave} disabled={busy} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 disabled:bg-slate-300">{busy ? "Sending…" : "Submit Request"}</button>
         </div>
       </div>
     </div>
@@ -3028,109 +3090,217 @@ export default function App() {
 
   const activeCrews = crews.filter((c) => !isCrewDeactivated(c));
 
-  // ── Crew & Superintendent Requests (PM → office workflow) ─────────────────
-  // PMs submit requests from the Scheduling tab; admin/manager approve them.
-  // Approval fires a DB trigger that auto-creates the mobilization, so an
-  // approved request shows up on the Gantt with no extra work here.
-  const [crewRequests, setCrewRequests] = useState([]);
-  const [showRequestForm, setShowRequestForm] = useState(false);
-  const [requestForm, setRequestForm] = useState({
-    projectId: "", requestType: "crew", crewSpecialty: "", superintendent: "",
-    menCount: "", startDate: "", durationWeeks: "", notes: "",
-  });
-  const [requestBusy, setRequestBusy] = useState(false);
+  // ── Project Task Scheduling (PM granular planning layer) ──────────────────
+  // PMs pick a project, build a dependency-aware task Gantt, and request crew
+  // TYPES per task. The office approves requests before any mobilization
+  // change. This layer is additive: mobilizations remain independently
+  // editable and never require a task schedule to exist.
+  const [schedProjectId, setSchedProjectId] = useState("");
+  const [projectTasks, setProjectTasks] = useState([]);          // tasks for selected project
+  const [taskCrewRequests, setTaskCrewRequests] = useState([]);  // requests (+ links) for selected project
+  const [schedZoom, setSchedZoom] = useState("Weeks");
 
-  const loadCrewRequests = React.useCallback(async () => {
-    if (!supabase) return;
-    // RLS scopes this: PMs get only their own rows, office sees all.
-    const { data, error } = await supabase
-      .from("crew_requests")
-      .select("*, projects ( id, project_number, name )")
-      .order("created_at", { ascending: false });
-    if (error) { console.error("Crew requests load error:", error); return; }
-    setCrewRequests(data || []);
+  const [showTaskForm, setShowTaskForm] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState(null);
+  const [taskForm, setTaskForm] = useState({ name: "", start: "", durationDays: "", end: "", dependsOn: "" });
+
+  const [showTaskRequestForm, setShowTaskRequestForm] = useState(false);
+  const [taskRequestForm, setTaskRequestForm] = useState({ crewSpecialty: "", menCount: "", notes: "", taskIds: [] });
+  const [taskRequestBusy, setTaskRequestBusy] = useState(false);
+
+  // Office-side: approving a request (assign a crew, optionally link a mob).
+  const [resolvingRequest, setResolvingRequest] = useState(null); // the request row being acted on
+  const [resolveCrewId, setResolveCrewId] = useState("");
+
+  // Load tasks + requests for the selected project.
+  const loadProjectSchedule = React.useCallback(async (projectId) => {
+    if (!supabase || !projectId) { setProjectTasks([]); setTaskCrewRequests([]); return; }
+    const [tasksRes, reqRes] = await Promise.all([
+      supabase.from("project_tasks").select("*").eq("project_id", projectId).order("sort_order", { ascending: true }),
+      supabase.from("task_crew_requests")
+        .select("*, task_crew_request_links ( task_id )")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false }),
+    ]);
+    if (tasksRes.error) console.error("Tasks load error:", tasksRes.error);
+    if (reqRes.error) console.error("Task requests load error:", reqRes.error);
+    setProjectTasks(tasksRes.data || []);
+    setTaskCrewRequests(reqRes.data || []);
   }, []);
 
-  useEffect(() => { if (currentUser) loadCrewRequests(); }, [currentUser, loadCrewRequests]);
+  useEffect(() => { if (schedProjectId) loadProjectSchedule(schedProjectId); }, [schedProjectId, loadProjectSchedule]);
 
-  // Realtime so an approval/denial shows instantly across roles.
+  // Realtime: refresh the selected project's schedule on any change.
   useEffect(() => {
-    if (!supabase || !currentUser) return;
+    if (!supabase || !schedProjectId) return;
     const channel = supabase
-      .channel("realtime:crew_requests")
-      .on("postgres_changes", { event: "*", schema: "public", table: "crew_requests" },
-        () => loadCrewRequests())
+      .channel("realtime:project_schedule")
+      .on("postgres_changes", { event: "*", schema: "public", table: "project_tasks" }, () => loadProjectSchedule(schedProjectId))
+      .on("postgres_changes", { event: "*", schema: "public", table: "task_crew_requests" }, () => loadProjectSchedule(schedProjectId))
+      .on("postgres_changes", { event: "*", schema: "public", table: "task_crew_request_links" }, () => loadProjectSchedule(schedProjectId))
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [currentUser, loadCrewRequests]);
+  }, [schedProjectId, loadProjectSchedule]);
 
-  function openRequestForm() {
-    setRequestForm({
-      projectId: "", requestType: "crew", crewSpecialty: "", superintendent: "",
-      menCount: "", startDate: "", durationWeeks: "", notes: "",
+  // Compute a task's end date from start + duration (calendar days, inclusive).
+  function taskEndFromDuration(start, durationDays) {
+    const s = toDate(start);
+    const d = parseInt(durationDays, 10);
+    if (!s || !Number.isFinite(d) || d <= 0) return "";
+    const end = addDays(s, d - 1);
+    return `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
+  }
+
+  function openAddTaskForm() {
+    setEditingTaskId(null);
+    setTaskForm({ name: "", start: "", durationDays: "", end: "", dependsOn: "" });
+    setShowTaskForm(true);
+  }
+  function openEditTaskForm(t) {
+    setEditingTaskId(t.id);
+    setTaskForm({
+      name: t.name || "",
+      start: t.start_date || "",
+      durationDays: t.duration_days || "",
+      end: t.end_date || "",
+      dependsOn: t.depends_on || "",
     });
-    setShowRequestForm(true);
+    setShowTaskForm(true);
   }
 
-  async function submitCrewRequest() {
-    if (!requestForm.projectId) { alert("Pick a project first."); return; }
+  async function saveTask() {
+    if (!schedProjectId) { alert("Pick a project first."); return; }
+    if (!taskForm.name.trim()) { alert("Task name is required."); return; }
     if (!supabase) { alert("Supabase is not connected."); return; }
-    setRequestBusy(true);
     const { data: { user } } = await supabase.auth.getUser();
-    const needsCrew = requestForm.requestType === "crew" || requestForm.requestType === "both";
-    const needsSuper = requestForm.requestType === "superintendent" || requestForm.requestType === "both";
+    // If a dependency is set and this task has no explicit start, default its
+    // start to the day after the dependency ends.
+    let start = taskForm.start || null;
+    if (!start && taskForm.dependsOn) {
+      const dep = projectTasks.find((t) => t.id === taskForm.dependsOn);
+      if (dep?.end_date) {
+        const next = addDays(toDate(dep.end_date), 1);
+        start = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`;
+      }
+    }
+    const end = taskForm.end || taskEndFromDuration(start, taskForm.durationDays) || null;
     const payload = {
-      project_id: requestForm.projectId,
-      requested_by: user.id,
-      requested_by_name: pmName,
-      request_type: requestForm.requestType,
-      crew_specialty: needsCrew ? (requestForm.crewSpecialty || null) : null,
-      superintendent: needsSuper ? (requestForm.superintendent || null) : null,
-      men_count: requestForm.menCount ? Number(requestForm.menCount) : 0,
-      start_date: requestForm.startDate || null,
-      duration_weeks: requestForm.durationWeeks ? Number(requestForm.durationWeeks) : null,
-      notes: requestForm.notes || null,
-      status: "pending",
+      project_id: schedProjectId,
+      name: taskForm.name.trim(),
+      start_date: start,
+      end_date: end,
+      duration_days: taskForm.durationDays ? Number(taskForm.durationDays) : null,
+      depends_on: taskForm.dependsOn || null,
+      created_by_name: pmName || currentUser,
+      updated_at: new Date().toISOString(),
     };
-    const { error } = await supabase.from("crew_requests").insert(payload);
-    setRequestBusy(false);
-    if (error) { console.error(error); alert(`Could not submit request: ${error.message}`); return; }
-    setShowRequestForm(false);
-    await loadCrewRequests();
+    if (editingTaskId) {
+      const { error } = await supabase.from("project_tasks").update(payload).eq("id", editingTaskId);
+      if (error) { console.error(error); alert(`Could not update task: ${error.message}`); return; }
+    } else {
+      payload.sort_order = projectTasks.length;
+      payload.created_by = user.id;
+      const { error } = await supabase.from("project_tasks").insert(payload);
+      if (error) { console.error(error); alert(`Could not add task: ${error.message}`); return; }
+    }
+    setShowTaskForm(false);
+    setEditingTaskId(null);
+    loadProjectSchedule(schedProjectId);
   }
 
-  async function resolveCrewRequest(id, status) {
-    if (!supabase) { alert("Supabase is not connected."); return; }
-    // Trigger auto-creates the mobilization on status='approved'.
-    const { error } = await supabase.from("crew_requests").update({ status }).eq("id", id);
-    if (error) { console.error(error); alert(`Could not ${status} request: ${error.message}`); return; }
-    await loadCrewRequests();
-    if (status === "approved") loadSupabaseData(); // pull the new mobilization in
+  async function deleteTask(id) {
+    if (!supabase) return;
+    if (!confirm("Delete this task? Any crew requests linked only to it stay but lose this task.")) return;
+    const { error } = await supabase.from("project_tasks").delete().eq("id", id);
+    if (error) { console.error(error); alert("Could not delete task."); return; }
+    loadProjectSchedule(schedProjectId);
   }
 
-  async function withdrawCrewRequest(id) {
+  // ── Crew-type requests against tasks ──────────────────────────────────────
+  function openTaskRequestForm(preselectTaskId = null) {
+    setTaskRequestForm({
+      crewSpecialty: "", menCount: "", notes: "",
+      taskIds: preselectTaskId ? [preselectTaskId] : [],
+    });
+    setShowTaskRequestForm(true);
+  }
+
+  async function submitTaskRequest() {
+    if (!schedProjectId) { alert("Pick a project first."); return; }
+    if (!taskRequestForm.crewSpecialty) { alert("Choose a crew type."); return; }
+    if (!taskRequestForm.taskIds.length) { alert("Select at least one task this crew is for."); return; }
     if (!supabase) { alert("Supabase is not connected."); return; }
-    if (!confirm("Withdraw this request?")) return;
-    const { error } = await supabase.from("crew_requests").delete().eq("id", id);
+    setTaskRequestBusy(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data: reqRow, error: reqErr } = await supabase
+      .from("task_crew_requests")
+      .insert({
+        project_id: schedProjectId,
+        crew_specialty: taskRequestForm.crewSpecialty,
+        men_count: taskRequestForm.menCount ? Number(taskRequestForm.menCount) : 0,
+        notes: taskRequestForm.notes || null,
+        requested_by: user.id,
+        requested_by_name: pmName || currentUser,
+        status: "pending",
+      })
+      .select()
+      .single();
+    if (reqErr) { setTaskRequestBusy(false); console.error(reqErr); alert(`Could not submit request: ${reqErr.message}`); return; }
+    const links = taskRequestForm.taskIds.map((taskId) => ({ request_id: reqRow.id, task_id: taskId }));
+    const { error: linkErr } = await supabase.from("task_crew_request_links").insert(links);
+    setTaskRequestBusy(false);
+    if (linkErr) { console.error(linkErr); alert(`Request saved but task links failed: ${linkErr.message}`); }
+    setShowTaskRequestForm(false);
+    loadProjectSchedule(schedProjectId);
+  }
+
+  async function withdrawTaskRequest(id) {
+    if (!supabase) return;
+    if (!confirm("Withdraw this crew request?")) return;
+    const { error } = await supabase.from("task_crew_requests").delete().eq("id", id);
     if (error) { console.error(error); alert("Could not withdraw request."); return; }
-    await loadCrewRequests();
+    loadProjectSchedule(schedProjectId);
+  }
+
+  // Office: approve (assign a crew) or deny. Does NOT touch mobilizations —
+  // the office changes those separately, per the approval-first workflow.
+  async function resolveTaskRequest(id, status, crewId) {
+    if (!supabase) return;
+    const patch = { status, resolved_at: new Date().toISOString() };
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) patch.resolved_by = user.id;
+    if (status === "approved" && crewId) patch.assigned_crew_id = crewId;
+    const { error } = await supabase.from("task_crew_requests").update(patch).eq("id", id);
+    if (error) { console.error(error); alert(`Could not ${status} request: ${error.message}`); return; }
+    setResolvingRequest(null);
+    setResolveCrewId("");
+    loadProjectSchedule(schedProjectId);
   }
 
   // Crew specialties for the request dropdown (active crews only).
-  const crewSpecialtyOptions = useMemo(() => {
+  const schedCrewSpecialties = useMemo(() => {
     const set = new Set();
     activeCrews.forEach((c) => (c.specialty || []).forEach((s) => s && set.add(s)));
     return [...set].sort();
   }, [activeCrews]);
 
-  const superintendentOptions = useMemo(() =>
-    resources
-      .filter((r) => (r.resourceType || "").toLowerCase().includes("super"))
-      .map((r) => r.name).sort(),
-    [resources]);
+  // Map task id -> task name for showing "which tasks" on each request.
+  const taskNameById = useMemo(() => {
+    const m = new Map();
+    projectTasks.forEach((t) => m.set(t.id, t.name));
+    return m;
+  }, [projectTasks]);
 
-  const pendingRequests = crewRequests.filter((r) => r.status === "pending");
-  const resolvedRequests = crewRequests.filter((r) => r.status !== "pending");
+  // Build a Gantt timeline scoped to the selected project's tasks.
+  const schedTimeline = useMemo(() => {
+    const items = projectTasks
+      .filter((t) => t.start_date && t.end_date)
+      .map((t) => ({ start: t.start_date, end: t.end_date }));
+    return buildTimeline(items, schedZoom);
+  }, [projectTasks, schedZoom]);
+
+  const schedPendingRequests = taskCrewRequests.filter((r) => r.status === "pending");
+  const schedResolvedRequests = taskCrewRequests.filter((r) => r.status !== "pending");
 
   // ── Role-based UI gating ───────────────────────────────────────────────────
   // canWrite = manager or admin (can create/edit/delete data).
@@ -4982,7 +5152,6 @@ export default function App() {
                 </div>
               )}
               {page === "projectDash" && canWrite && <button onClick={openAddAssignmentForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><ClipboardCheck size={18} /> Assign</button>}
-              {page === "scheduling" && (isPM || isOffice) && <button onClick={openRequestForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 font-semibold text-white shadow-sm hover:bg-emerald-800"><Plus size={18} /> New Request</button>}
               {page === "setup" && setupTab === "projects" && canWrite && (
                 <>
                   <CmicPullProjects projects={projects} onApplied={() => loadSupabaseData()} />
@@ -5407,7 +5576,7 @@ export default function App() {
         </section>
       )}
 
-      {/* ── Scheduling (PM requests + Gantt) ── */}
+      {/* ── Scheduling (PM project task builder + crew-type requests) ── */}
       {page === "scheduling" && (
         <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
           {(!userRole || !["admin", "manager", "pm", "viewer"].includes(userRole)) ? (
@@ -5420,91 +5589,182 @@ export default function App() {
             </div>
           ) : (
             <>
-              {/* Request panel */}
-              <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-                  <div className="flex items-center gap-3">
-                    <h2 className="text-xl font-bold text-slate-900">
-                      {isOffice ? "Crew & Superintendent Requests" : "Request a Crew or Superintendent"}
-                    </h2>
-                    {pendingRequests.length > 0 && (
-                      <span className="rounded-full bg-emerald-700 px-2.5 py-0.5 text-xs font-bold text-white">
-                        {pendingRequests.length} pending
-                      </span>
-                    )}
-                  </div>
-                  {(isPM || isOffice) && (
-                    <button onClick={openRequestForm} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
-                      <Plus size={16} /> New Request
-                    </button>
-                  )}
-                </div>
-
-                <div className="divide-y divide-slate-100">
-                  {crewRequests.length === 0 ? (
-                    <div className="px-5 py-6 text-sm text-slate-500">
-                      {isOffice ? "No requests yet. PM submissions will land here." : "No requests yet. Use “New Request” to ask the office for a crew or superintendent."}
-                    </div>
-                  ) : (
-                    <>
-                      {isOffice && pendingRequests.length > 0 && (
-                        <p className="px-5 pt-3 text-xs font-bold uppercase tracking-wide text-slate-500">Needs action</p>
-                      )}
-                      {pendingRequests.map((r) => (
-                        <CrewRequestRow key={r.id} r={r} isOffice={isOffice} isPM={isPM}
-                          onResolve={resolveCrewRequest} onWithdraw={withdrawCrewRequest} />
-                      ))}
-                      {resolvedRequests.length > 0 && (
-                        <p className="px-5 pt-3 text-xs font-bold uppercase tracking-wide text-slate-500">Resolved</p>
-                      )}
-                      {resolvedRequests.map((r) => (
-                        <CrewRequestRow key={r.id} r={r} isOffice={isOffice} isPM={isPM}
-                          onResolve={resolveCrewRequest} onWithdraw={withdrawCrewRequest} />
-                      ))}
-                    </>
-                  )}
-                </div>
-              </section>
-
-              {/* Schedule Gantt — same rows the Project Dashboard uses */}
-              <section id="scheduling-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <h2 className="text-xl font-bold">Schedule</h2>
-                    <p className="text-sm text-slate-500">Approved requests appear here automatically as mobilizations.</p>
-                  </div>
-                  <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                    <ZoomIn size={16} className="text-slate-500" />
-                    <span className="text-sm font-medium text-slate-700">Zoom</span>
-                    <select value={zoom} onChange={(e) => setZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">
-                      {zoomModes.map((m) => <option key={m}>{m}</option>)}
+              {/* Project picker */}
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                  <label className="block w-full max-w-md space-y-1">
+                    <span className="text-sm font-semibold text-slate-700">Project</span>
+                    <select
+                      value={schedProjectId}
+                      onChange={(e) => setSchedProjectId(e.target.value)}
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600"
+                    >
+                      <option value="">Select a project to schedule…</option>
+                      {[...projects]
+                        .sort((a, b) => String(a.projectNumber || "").localeCompare(String(b.projectNumber || ""), undefined, { numeric: true }))
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>{p.projectNumber ? `${p.projectNumber} - ` : ""}{p.name}</option>
+                        ))}
                     </select>
-                  </div>
-                </div>
-                <div className="overflow-auto rounded-xl border border-slate-200 p-4 max-h-[70vh]">
-                  <GanttHeader timeline={timeline} zoom={zoom} />
-                  <div className="relative mt-3" style={{ minWidth: `${timeline.width + 340}px` }}>
-                    <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${timeline.width}px` }}>
-                      <GanttBackdrop timeline={timeline} />
+                  </label>
+                  {schedProjectId && (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                        <ZoomIn size={16} className="text-slate-500" />
+                        <span className="text-sm font-medium text-slate-700">Zoom</span>
+                        <select value={schedZoom} onChange={(e) => setSchedZoom(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm outline-none focus:border-emerald-600">
+                          {zoomModes.map((m) => <option key={m}>{m}</option>)}
+                        </select>
+                      </div>
+                      {(isPM || isOffice) && (
+                        <>
+                          <button onClick={openAddTaskForm} className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                            <Plus size={16} /> Add Task
+                          </button>
+                          <button onClick={() => openTaskRequestForm()} disabled={!projectTasks.length} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:bg-slate-300">
+                            <Plus size={16} /> Request Crew
+                          </button>
+                        </>
+                      )}
                     </div>
-                    <div className="relative z-10">
-                      {projectGanttRows.map((row, idx) => (
-                        <div key={row.project.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
-                          <ProjectGanttRow
-                            assignment={row.assignment}
-                            project={row.project}
-                            items={row.items}
-                            timeline={timeline}
-                            crews={crews}
-                            onLabelClick={isOffice ? () => openEditAssignmentForm(row.assignment) : undefined}
-                            onDragEnd={isOffice ? handleProjectGanttDragEnd : undefined}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  )}
                 </div>
               </section>
+
+              {!schedProjectId ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">
+                  Pick a project above to build its task schedule and request crews.
+                </div>
+              ) : (
+                <>
+                  {/* Task Gantt */}
+                  <section id="scheduling-task-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="mb-4">
+                      <h2 className="text-xl font-bold">Task Schedule</h2>
+                      <p className="text-sm text-slate-500">Each row is a task. Dependencies start a task after the one it follows.</p>
+                    </div>
+                    {projectTasks.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+                        No tasks yet. Use <strong>Add Task</strong> to start building this project’s schedule.
+                      </div>
+                    ) : (
+                      <div className="overflow-auto rounded-xl border border-slate-200 p-4 max-h-[60vh]">
+                        <GanttHeader timeline={schedTimeline} zoom={schedZoom} />
+                        <div className="relative mt-3" style={{ minWidth: `${schedTimeline.width + 340}px` }}>
+                          <div className="absolute inset-y-0 z-0 pointer-events-none" style={{ left: "320px", width: `${schedTimeline.width}px` }}>
+                            <GanttBackdrop timeline={schedTimeline} />
+                          </div>
+                          <div className="relative z-10">
+                            {projectTasks.map((t, idx) => (
+                              <TaskGanttRow
+                                key={t.id}
+                                task={t}
+                                timeline={schedTimeline}
+                                striped={idx % 2 === 1}
+                                dependsOnName={t.depends_on ? taskNameById.get(t.depends_on) : null}
+                                requests={taskCrewRequests}
+                                onClick={() => (isPM || isOffice) && openEditTaskForm(t)}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </section>
+
+                  {/* Task list with per-task crew request */}
+                  {projectTasks.length > 0 && (
+                    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                      <h2 className="mb-3 text-lg font-bold">Tasks</h2>
+                      <div className="overflow-x-auto rounded-xl border border-slate-200">
+                        <table className="w-full min-w-[760px] text-left text-sm">
+                          <thead className="bg-slate-100 text-slate-600">
+                            <tr>
+                              <th className="p-3">Task</th>
+                              <th className="p-3">Start</th>
+                              <th className="p-3">End</th>
+                              <th className="p-3">Follows</th>
+                              <th className="p-3">Crew Requests</th>
+                              <th className="p-3 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {projectTasks.map((t) => {
+                              const reqsForTask = taskCrewRequests.filter((r) =>
+                                (r.task_crew_request_links || []).some((l) => l.task_id === t.id));
+                              return (
+                                <tr key={t.id} className="border-t border-slate-200 align-top">
+                                  <td className="p-3 font-semibold text-slate-900">{t.name}</td>
+                                  <td className="p-3">{t.start_date ? formatDate(t.start_date) : <span className="text-slate-300">—</span>}</td>
+                                  <td className="p-3">{t.end_date ? formatDate(t.end_date) : <span className="text-slate-300">—</span>}</td>
+                                  <td className="p-3">{t.depends_on ? (taskNameById.get(t.depends_on) || "—") : <span className="text-slate-300">—</span>}</td>
+                                  <td className="p-3">
+                                    {reqsForTask.length === 0 ? <span className="text-slate-300">None</span> : (
+                                      <div className="flex flex-wrap gap-1">
+                                        {reqsForTask.map((r) => (
+                                          <span key={r.id} className={`rounded-full px-2 py-0.5 text-xs font-bold ${r.status === "approved" ? "bg-emerald-100 text-emerald-700" : r.status === "denied" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>
+                                            {r.crew_specialty}{r.men_count ? ` (${r.men_count})` : ""}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-right">
+                                    {(isPM || isOffice) && (
+                                      <>
+                                        <button onClick={() => openTaskRequestForm(t.id)} className="mr-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">Request Crew</button>
+                                        <button onClick={() => openEditTaskForm(t)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium hover:bg-slate-50">Edit</button>
+                                        <button onClick={() => deleteTask(t.id)} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50">Delete</button>
+                                      </>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Crew requests panel */}
+                  <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <h2 className="text-xl font-bold text-slate-900">{isOffice ? "Crew Requests" : "My Crew Requests"}</h2>
+                        {schedPendingRequests.length > 0 && (
+                          <span className="rounded-full bg-emerald-700 px-2.5 py-0.5 text-xs font-bold text-white">{schedPendingRequests.length} pending</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="divide-y divide-slate-100">
+                      {taskCrewRequests.length === 0 ? (
+                        <div className="px-5 py-6 text-sm text-slate-500">No crew requests for this project yet.</div>
+                      ) : (
+                        <>
+                          {isOffice && schedPendingRequests.length > 0 && (
+                            <p className="px-5 pt-3 text-xs font-bold uppercase tracking-wide text-slate-500">Needs action</p>
+                          )}
+                          {schedPendingRequests.map((r) => (
+                            <TaskCrewRequestRow key={r.id} r={r} isOffice={isOffice} isPM={isPM}
+                              taskNameById={taskNameById} crews={activeCrews}
+                              onApproveClick={() => { setResolvingRequest(r); setResolveCrewId(""); }}
+                              onDeny={() => resolveTaskRequest(r.id, "denied")}
+                              onWithdraw={() => withdrawTaskRequest(r.id)} />
+                          ))}
+                          {schedResolvedRequests.length > 0 && (
+                            <p className="px-5 pt-3 text-xs font-bold uppercase tracking-wide text-slate-500">Resolved</p>
+                          )}
+                          {schedResolvedRequests.map((r) => (
+                            <TaskCrewRequestRow key={r.id} r={r} isOffice={isOffice} isPM={isPM}
+                              taskNameById={taskNameById} crews={activeCrews} />
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </section>
+                </>
+              )}
             </>
           )}
         </section>
@@ -6861,17 +7121,51 @@ export default function App() {
 
       {/* Forms */}
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} onDelete={() => deleteProject(editingProjectId)} editing={Boolean(editingProjectId)} certifications={certifications} projectTypes={projectTypes} />}
-      {showRequestForm && (
-        <CrewRequestForm
-          form={requestForm}
-          setForm={setRequestForm}
-          projects={projects}
-          crewSpecialties={crewSpecialtyOptions}
-          supers={superintendentOptions}
-          onSave={submitCrewRequest}
-          onCancel={() => setShowRequestForm(false)}
-          busy={requestBusy}
+      {showTaskForm && (
+        <TaskForm
+          form={taskForm}
+          setForm={setTaskForm}
+          tasks={projectTasks}
+          editingTaskId={editingTaskId}
+          onSave={saveTask}
+          onCancel={() => { setShowTaskForm(false); setEditingTaskId(null); }}
+          onDelete={(id) => { deleteTask(id); setShowTaskForm(false); setEditingTaskId(null); }}
         />
+      )}
+      {showTaskRequestForm && (
+        <TaskCrewRequestForm
+          form={taskRequestForm}
+          setForm={setTaskRequestForm}
+          tasks={projectTasks}
+          crewSpecialties={schedCrewSpecialties}
+          onSave={submitTaskRequest}
+          onCancel={() => setShowTaskRequestForm(false)}
+          busy={taskRequestBusy}
+        />
+      )}
+      {resolvingRequest && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-slate-900">Approve crew request</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {resolvingRequest.crew_specialty}{resolvingRequest.men_count ? ` · ${resolvingRequest.men_count} men` : ""}
+            </p>
+            <label className="mt-4 block space-y-1">
+              <span className="text-sm font-semibold text-slate-700">Assign crew (optional)</span>
+              <select value={resolveCrewId} onChange={(e) => setResolveCrewId(e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600">
+                <option value="">Approve without assigning a specific crew</option>
+                {activeCrews
+                  .filter((c) => !resolvingRequest.crew_specialty || (c.specialty || []).includes(resolvingRequest.crew_specialty))
+                  .map((c) => <option key={c.id} value={c.id}>{getCrewDisplayName(c)}</option>)}
+              </select>
+              <span className="text-xs text-slate-500">Approving does not change mobilizations — update those separately.</span>
+            </label>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => { setResolvingRequest(null); setResolveCrewId(""); }} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">Cancel</button>
+              <button onClick={() => resolveTaskRequest(resolvingRequest.id, "approved", resolveCrewId || null)} className="rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800">Approve</button>
+            </div>
+          </div>
+        </div>
       )}
       {showAssignmentForm && <AssignmentForm form={assignmentForm} setForm={setAssignmentForm} onSave={saveAssignment} onCancel={() => setShowAssignmentForm(false)} onDelete={async () => {
         if (!editingAssignmentId) return;
