@@ -509,7 +509,7 @@ function projectTypeLabel(value) {
 
 // ─── StaffRequestRow (read-only status; PM may withdraw) ─────────────────────
 
-export function StaffRequestRow({ r, isPM, isOffice, onWithdraw }) {
+export function StaffRequestRow({ r, isPM, isOffice, onWithdraw, onDelete }) {
   const [busy, setBusy] = useState(false);
   const wrap = async (fn) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
   const statusBadge = {
@@ -534,6 +534,9 @@ export function StaffRequestRow({ r, isPM, isOffice, onWithdraw }) {
       <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-bold capitalize ${statusBadge}`}>{r.status}</span>
       {isPM && r.status === "pending" && (
         <button disabled={busy} onClick={() => wrap(onWithdraw)} className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">Withdraw</button>
+      )}
+      {isOffice && onDelete && (
+        <button disabled={busy} onClick={() => wrap(onDelete)} title="Delete request" className="shrink-0 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">Delete</button>
       )}
     </div>
   );
@@ -588,7 +591,7 @@ export function StaffRequestForm({ form, setForm, roles, onSave, onCancel, busy 
 // Lists pending crew + staff requests. Clicking one opens the Assign tool
 // (handled by parent) and shows an availability recommendation for its window.
 
-export function RequestsModal({ requests, activeRequest, availability, onPick, onClose }) {
+export function RequestsModal({ requests, activeRequest, availability, onPick, onDelete, onClose }) {
   return (
     <div className="fixed inset-0 z-[86] flex items-center justify-center bg-slate-950/50 p-4">
       <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
@@ -607,17 +610,23 @@ export function RequestsModal({ requests, activeRequest, availability, onPick, o
             ) : requests.map((req) => {
               const active = activeRequest && activeRequest.id === req.id && activeRequest.kind === req.kind;
               return (
-                <button key={`${req.kind}-${req.id}`} onClick={() => onPick(req)}
-                  className={`block w-full border-b border-slate-100 px-5 py-3 text-left hover:bg-emerald-50 ${active ? "bg-emerald-50" : ""}`}>
-                  <div className="flex items-center gap-2">
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${req.kind === "crew" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>{req.kind}</span>
-                    <span className="text-sm font-semibold text-slate-900">{req.label}</span>
-                  </div>
-                  <p className="mt-0.5 text-xs text-slate-500">{req.projectLabel}{req.requestedBy ? ` · ${req.requestedBy}` : ""}</p>
-                  {(req.start || req.end) && (
-                    <p className="mt-0.5 text-xs text-slate-400">{req.start ? formatDate(req.start) : "—"}{req.end ? ` → ${formatDate(req.end)}` : ""}</p>
+                <div key={`${req.kind}-${req.id}`}
+                  className={`flex items-start gap-2 border-b border-slate-100 px-5 py-3 hover:bg-emerald-50 ${active ? "bg-emerald-50" : ""}`}>
+                  <button onClick={() => onPick(req)} className="min-w-0 flex-1 text-left">
+                    <div className="flex items-center gap-2">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${req.kind === "crew" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>{req.kind}</span>
+                      <span className="text-sm font-semibold text-slate-900">{req.label}</span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-slate-500">{req.projectLabel}{req.requestedBy ? ` · ${req.requestedBy}` : ""}</p>
+                    {(req.start || req.end) && (
+                      <p className="mt-0.5 text-xs text-slate-400">{req.start ? formatDate(req.start) : "—"}{req.end ? ` → ${formatDate(req.end)}` : ""}</p>
+                    )}
+                  </button>
+                  {onDelete && (
+                    <button onClick={() => onDelete(req)} title="Delete request"
+                      className="shrink-0 rounded-lg border border-red-200 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50">Delete</button>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -698,7 +707,7 @@ export function TaskGanttRow({ task, timeline, striped, dependsOnName, requests,
 
 // ─── TaskCrewRequestRow ──────────────────────────────────────────────────────
 
-export function TaskCrewRequestRow({ r, isOffice, isPM, taskNameById, crews, onApproveClick, onDeny, onWithdraw }) {
+export function TaskCrewRequestRow({ r, isOffice, isPM, taskNameById, crews, onWithdraw, onDelete }) {
   const [busy, setBusy] = useState(false);
   const wrap = async (fn) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
 
@@ -731,6 +740,9 @@ export function TaskCrewRequestRow({ r, isOffice, isPM, taskNameById, crews, onA
 
       {isPM && r.status === "pending" && (
         <button disabled={busy} onClick={() => wrap(onWithdraw)} className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">Withdraw</button>
+      )}
+      {isOffice && onDelete && (
+        <button disabled={busy} onClick={() => wrap(onDelete)} title="Delete request" className="shrink-0 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">Delete</button>
       )}
     </div>
   );
@@ -3419,6 +3431,24 @@ export default function App() {
     loadProjectSchedule(schedProjectId);
   }
 
+  // Office can permanently delete any request (any status) — clears stuck rows.
+  async function deleteTaskRequest(id) {
+    if (!supabase) return;
+    if (!confirm("Delete this crew request permanently?")) return;
+    const { error } = await supabase.from("task_crew_requests").delete().eq("id", id);
+    if (error) { console.error(error); alert("Could not delete request."); return; }
+    if (schedProjectId) loadProjectSchedule(schedProjectId);
+    loadAllRequests();
+  }
+  async function deleteStaffRequest(id) {
+    if (!supabase) return;
+    if (!confirm("Delete this staff request permanently?")) return;
+    const { error } = await supabase.from("project_staff_requests").delete().eq("id", id);
+    if (error) { console.error(error); alert("Could not delete request."); return; }
+    if (schedProjectId) loadStaffRequests(schedProjectId);
+    loadAllRequests();
+  }
+
   // Office: approve (assign a crew) or deny. Does NOT touch mobilizations —
   // the office changes those separately, per the approval-first workflow.
 
@@ -3477,7 +3507,7 @@ export default function App() {
   const loadAllRequests = React.useCallback(async () => {
     if (!supabase) return;
     const [crewRes, staffRes] = await Promise.all([
-      supabase.from("task_crew_requests")
+      supabase.from("task_crew_requests_with_window")
         .select("*, projects ( id, project_number, name ), task_crew_request_links ( task_id )")
         .order("created_at", { ascending: false }),
       supabase.from("project_staff_requests")
@@ -3560,7 +3590,7 @@ export default function App() {
           label: `${r.crew_specialty}${r.men_count ? ` · ${r.men_count} men` : ""}`,
           specialty: r.crew_specialty,
           requestedBy: r.requested_by_name,
-          start: null, end: null,
+          start: r.window_start || null, end: r.window_end || null,
           raw: r,
         };
       });
@@ -6081,21 +6111,24 @@ export default function App() {
                           {schedPendingRequests.map((r) => (
                             <TaskCrewRequestRow key={r.id} r={r} isOffice={isOffice} isPM={isPM}
                               taskNameById={taskNameById} crews={activeCrews}
-                              onWithdraw={() => withdrawTaskRequest(r.id)} />
+                              onWithdraw={() => withdrawTaskRequest(r.id)}
+                              onDelete={() => deleteTaskRequest(r.id)} />
                           ))}
                           {schedResolvedRequests.length > 0 && (
                             <p className="px-5 pt-3 text-xs font-bold uppercase tracking-wide text-slate-500">Resolved</p>
                           )}
                           {schedResolvedRequests.map((r) => (
                             <TaskCrewRequestRow key={r.id} r={r} isOffice={isOffice} isPM={isPM}
-                              taskNameById={taskNameById} crews={activeCrews} />
+                              taskNameById={taskNameById} crews={activeCrews}
+                              onDelete={() => deleteTaskRequest(r.id)} />
                           ))}
                         </>
                       )}
                       {/* Project-level staff requests */}
                       {staffRequests.map((r) => (
                         <StaffRequestRow key={r.id} r={r} isPM={isPM} isOffice={isOffice}
-                          onWithdraw={() => withdrawStaffRequest(r.id)} />
+                          onWithdraw={() => withdrawStaffRequest(r.id)}
+                          onDelete={() => deleteStaffRequest(r.id)} />
                       ))}
                     </div>
                   </section>
@@ -7495,6 +7528,7 @@ export default function App() {
           activeRequest={activeRequest}
           availability={activeRequest && (activeRequest.start && activeRequest.end) ? computeAvailability(activeRequest.start, activeRequest.end) : null}
           onPick={(req) => startAssignFromRequest(req)}
+          onDelete={(req) => (req.kind === "crew" ? deleteTaskRequest(req.id) : deleteStaffRequest(req.id))}
           onClose={() => { setShowRequestsModal(false); setActiveRequest(null); }}
         />
       )}
