@@ -33,6 +33,42 @@ import {
 } from "./db/mappers";
 
 // Override mappers locally to include includeInForecast until db/mappers.js is deployed
+// ─── Working-day helpers (weekends excluded) ─────────────────────────────────
+// Tasks are scheduled on business days only (Mon–Fri). These mirror addDays
+// from utils but skip Saturdays/Sundays.
+function isWeekendDay(d) { const day = d.getDay(); return day === 0 || day === 6; }
+function nextWorkday(d) { const r = new Date(d); while (isWeekendDay(r)) r.setDate(r.getDate() + 1); return r; }
+function prevWorkday(d) { const r = new Date(d); while (isWeekendDay(r)) r.setDate(r.getDate() - 1); return r; }
+// Add N business days to a date (negative N steps backward). N=0 snaps the date
+// to the nearest workday in the step direction's neutral sense (returns as-is if
+// already a workday).
+function addWorkDays(date, n) {
+  const r = new Date(date);
+  if (n === 0) return isWeekendDay(r) ? nextWorkday(r) : r;
+  const step = n > 0 ? 1 : -1;
+  let remaining = Math.abs(n);
+  while (remaining > 0) {
+    r.setDate(r.getDate() + step);
+    if (!isWeekendDay(r)) remaining--;
+  }
+  return r;
+}
+// Business-day span end: start + (durationDays-1) working days, start snapped
+// onto a workday first.
+function workdayEnd(start, durationDays) {
+  const s = nextWorkday(new Date(start));
+  return addWorkDays(s, Math.max(0, (Number(durationDays) || 1) - 1));
+}
+// Inclusive count of working days between two dates (weekends excluded).
+function workdayCountBetween(start, end) {
+  const s = toDate(start), e = toDate(end);
+  if (!s || !e || e < s) return null;
+  let count = 0;
+  const r = new Date(s);
+  while (r <= e) { if (!isWeekendDay(r)) count++; r.setDate(r.getDate() + 1); }
+  return count;
+}
+
 function mapProjectFromDbLocal(p) {
   return {
     id: p.id,
@@ -3584,6 +3620,7 @@ export default function App() {
   const [projectTasks, setProjectTasks] = useState([]);          // tasks for selected project
   const [taskCrewRequests, setTaskCrewRequests] = useState([]);  // requests (+ links) for selected project
   const [schedZoom, setSchedZoom] = useState("Weeks");
+  const [tasksTableCollapsed, setTasksTableCollapsed] = useState(true);
 
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
@@ -3628,7 +3665,7 @@ export default function App() {
     const s = toDate(start);
     const d = parseInt(durationDays, 10);
     if (!s || !Number.isFinite(d) || d <= 0) return "";
-    const end = addDays(s, d - 1);
+    const end = workdayEnd(s, d); // weekends excluded
     return `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
   }
 
@@ -3673,16 +3710,17 @@ export default function App() {
       const depEnd = dep?.end_date ? toDate(dep.end_date) : null;
       const type = taskForm.dependencyType || "FS";
       if (!start && !end) {
-        if (type === "FS" && depEnd) start = fmtDate(addDays(depEnd, 1 + lag));
-        else if (type === "SS" && depStart) start = fmtDate(addDays(depStart, lag));
-        else if (type === "FF" && depEnd) end = fmtDate(addDays(depEnd, lag));
-        else if (type === "SF" && depStart) end = fmtDate(addDays(depStart, lag));
+        if (type === "FS" && depEnd) start = fmtDate(nextWorkday(addWorkDays(depEnd, 1 + lag)));
+        else if (type === "SS" && depStart) start = fmtDate(nextWorkday(addWorkDays(depStart, lag)));
+        else if (type === "FF" && depEnd) end = fmtDate(prevWorkday(addWorkDays(depEnd, lag)));
+        else if (type === "SF" && depStart) end = fmtDate(prevWorkday(addWorkDays(depStart, lag)));
       }
     }
-    // If we anchored an end (FF/SF) and have a duration, back-calc the start.
+    // If we anchored an end (FF/SF) and have a duration, back-calc the start
+    // across working days.
     if (!start && end && taskForm.durationDays) {
       const e = toDate(end);
-      if (e) start = fmtDate(addDays(e, -(Number(taskForm.durationDays) - 1)));
+      if (e) start = fmtDate(addWorkDays(prevWorkday(e), -((Number(taskForm.durationDays) || 1) - 1)));
     }
     if (!end) end = taskEndFromDuration(start, taskForm.durationDays) || null;
     const isHeader = !!taskForm.isHeader;
@@ -3879,10 +3917,10 @@ export default function App() {
         const lag = Number(t.dependency_lag) || 0;
         const type = t.dependency_type || "FS";
         if (dep.start || dep.end) {
-          if (type === "FS" && dep.end) { start = addDays(dep.end, 1 + lag); end = addDays(start, dur - 1); }
-          else if (type === "SS" && dep.start) { start = addDays(dep.start, lag); end = addDays(start, dur - 1); }
-          else if (type === "FF" && dep.end) { end = addDays(dep.end, lag); start = addDays(end, -(dur - 1)); }
-          else if (type === "SF" && dep.start) { end = addDays(dep.start, lag); start = addDays(end, -(dur - 1)); }
+          if (type === "FS" && dep.end) { start = nextWorkday(addWorkDays(dep.end, 1 + lag)); end = workdayEnd(start, dur); }
+          else if (type === "SS" && dep.start) { start = nextWorkday(addWorkDays(dep.start, lag)); end = workdayEnd(start, dur); }
+          else if (type === "FF" && dep.end) { end = prevWorkday(addWorkDays(dep.end, lag)); start = addWorkDays(end, -(dur - 1)); }
+          else if (type === "SF" && dep.start) { end = prevWorkday(addWorkDays(dep.start, lag)); start = addWorkDays(end, -(dur - 1)); }
         }
       }
       visiting.delete(id);
@@ -6778,33 +6816,42 @@ export default function App() {
                   {/* Task list with per-task crew request */}
                   {projectTasks.length > 0 && (
                     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                      <h2 className="mb-3 text-lg font-bold">Tasks</h2>
+                      <button onClick={() => setTasksTableCollapsed((c) => !c)} className="mb-3 flex w-full items-center justify-between text-left">
+                        <h2 className="text-lg font-bold">Tasks <span className="ml-1 text-sm font-normal text-slate-400">({projectTasks.filter((t) => !t.is_header).length})</span></h2>
+                        <span className="flex items-center gap-1 text-sm font-semibold text-slate-500">{tasksTableCollapsed ? "Show" : "Hide"} <span className="text-xs">{tasksTableCollapsed ? "▸" : "▾"}</span></span>
+                      </button>
+                      {!tasksTableCollapsed && (
                       <div className="overflow-x-auto rounded-xl border border-slate-200">
-                        <table className="w-full min-w-[760px] text-left text-sm">
+                        <table className="w-full min-w-[860px] text-left text-sm">
                           <thead className="bg-slate-100 text-slate-600">
                             <tr>
                               <th className="p-3">Task</th>
                               <th className="p-3">Start</th>
                               <th className="p-3">End</th>
+                              <th className="p-3 text-center">Duration</th>
                               <th className="p-3">Follows</th>
                               <th className="p-3">Crew Requests</th>
                               <th className="p-3 text-right">Actions</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {projectTasks.map((t) => {
+                            {groupedTasks.map((t) => {
                               const reqsForTask = taskCrewRequests.filter((r) =>
                                 (r.task_crew_request_links || []).some((l) => l.task_id === t.id));
+                              const sd = t.eff_start || t.start_date;
+                              const ed = t.eff_end || t.end_date;
+                              const dur = (sd && ed) ? workdayCountBetween(sd, ed) : null;
                               return (
-                                <tr key={t.id} className="border-t border-slate-200 align-top">
-                                  <td className="p-3 font-semibold text-slate-900">{t.name}</td>
-                                  <td className="p-3">{t.start_date ? formatDate(t.start_date) : <span className="text-slate-300">—</span>}</td>
-                                  <td className="p-3">{t.end_date ? formatDate(t.end_date) : <span className="text-slate-300">—</span>}</td>
-                                  <td className="p-3">{t.depends_on ? (
+                                <tr key={t.id} className={`border-t border-slate-200 align-top ${t.isHeader ? "bg-slate-100" : ""}`}>
+                                  <td className={`p-3 ${t.isHeader ? "font-extrabold uppercase tracking-wide text-slate-700" : "font-semibold text-slate-900"}`} style={{ paddingLeft: `${12 + (t.depth || 0) * 18}px` }}>{t.name}</td>
+                                  <td className="p-3">{sd ? formatDate(sd) : <span className="text-slate-300">—</span>}</td>
+                                  <td className="p-3">{ed ? formatDate(ed) : <span className="text-slate-300">—</span>}</td>
+                                  <td className="p-3 text-center">{dur != null ? <span className="font-semibold">{dur}<span className="ml-0.5 text-xs font-normal text-slate-400">d</span></span> : <span className="text-slate-300">—</span>}</td>
+                                  <td className="p-3">{!t.isHeader && t.depends_on ? (
                                     <span>{taskNameById.get(t.depends_on) || "—"} <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">{depTag(t.dependency_type, t.dependency_lag)}</span></span>
                                   ) : <span className="text-slate-300">—</span>}</td>
                                   <td className="p-3">
-                                    {reqsForTask.length === 0 ? <span className="text-slate-300">None</span> : (
+                                    {t.isHeader ? <span className="text-slate-300">—</span> : reqsForTask.length === 0 ? <span className="text-slate-300">None</span> : (
                                       <div className="flex flex-wrap gap-1">
                                         {reqsForTask.map((r) => (
                                           <span key={r.id} className={`rounded-full px-2 py-0.5 text-xs font-bold ${r.status === "approved" ? "bg-emerald-100 text-emerald-700" : r.status === "denied" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>
@@ -6817,7 +6864,7 @@ export default function App() {
                                   <td className="p-3 text-right">
                                     {(isPM || isOffice) && (
                                       <>
-                                        <button onClick={() => openTaskRequestForm(t.id)} className="mr-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">Request Crew</button>
+                                        {!t.isHeader && <button onClick={() => openTaskRequestForm(t.id)} className="mr-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">Request Crew</button>}
                                         <button onClick={() => openEditTaskForm(t)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium hover:bg-slate-50">Edit</button>
                                         <button onClick={() => deleteTask(t.id)} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50">Delete</button>
                                       </>
@@ -6829,6 +6876,7 @@ export default function App() {
                           </tbody>
                         </table>
                       </div>
+                      )}
                     </section>
                   )}
 
