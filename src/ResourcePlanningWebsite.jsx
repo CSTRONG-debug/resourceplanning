@@ -4660,7 +4660,7 @@ export default function App() {
   // Generic Gantt printer (table-based, paginates cleanly, weekend bands).
   // rows: [{ label, sublabel?, depth?, isHeader?, bars:[{start,end}], extra? }]
   // opts: { title, subtitle?, showExtra?, extraHeader? }
-  function printGantt({ title, subtitle, rows, showExtra, extraHeader }) {
+  function printGantt({ title, subtitle, rows, showExtra, extraHeader, legend }) {
     const esc = (v) => String(v == null ? "" : v).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch] || ch));
     const allBars = rows.flatMap((r) => r.bars || []);
     let minD = null, maxD = null;
@@ -4687,7 +4687,10 @@ export default function App() {
     })();
 
     const rowsHtml = rows.map((r) => {
-      const bars = (r.bars || []).map((b) => `<div class="bar ${r.isHeader ? "hdrbar" : ""}" style="left:${pct(b.start)}%;width:${barW(b.start, b.end)}%"></div>`).join("");
+      const bars = (r.bars || []).map((b) => {
+        const color = b.color || (r.isHeader ? "#334155" : "#047857");
+        return `<div class="bar" style="left:${pct(b.start)}%;width:${barW(b.start, b.end)}%;background:${color}"></div>`;
+      }).join("");
       const firstStart = (r.bars && r.bars.length) ? r.bars.reduce((m, b) => (!m || toDate(b.start) < toDate(m) ? b.start : m), null) : null;
       const lastEnd = (r.bars && r.bars.length) ? r.bars.reduce((m, b) => (!m || toDate(b.end) > toDate(m) ? b.end : m), null) : null;
       const cls = r.isHeader ? "hdr" : "";
@@ -4702,12 +4705,15 @@ export default function App() {
 
     const nameW = showExtra ? 22 : 26, dateW = 9, extraW = 18, barW2 = showExtra ? 42 : 56;
     const html = `<!doctype html><html><head><title>${esc(title)}</title><style>
-      @page{size:letter landscape;margin:.4in} *{box-sizing:border-box} body{font-family:Arial,sans-serif;color:#0f172a;font-size:10px;margin:0}
+      @page{size:letter landscape;margin:.4in} *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact} body{font-family:Arial,sans-serif;color:#0f172a;font-size:10px;margin:0}
       .header{display:flex;justify-content:space-between;align-items:center;gap:18px;border-bottom:4px solid #047857;padding-bottom:10px;margin-bottom:8px}
       .header-left{display:flex;align-items:center;gap:12px}.logo{height:46px;width:auto;display:block}
       h1{font-size:18px;margin:0}.sub{color:#64748b;font-size:11px}
       .axis{position:relative;height:14px;margin:2px 0 4px;border-bottom:1px solid #cbd5e1}
       .mark{position:absolute;font-size:8px;color:#64748b;transform:translateX(2px)}
+      .legend{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 4px;font-size:9px;color:#334155}
+      .legend .lg{display:inline-flex;align-items:center;gap:4px}
+      .legend .sw{display:inline-block;width:12px;height:10px;border-radius:2px}
       table{width:100%;border-collapse:collapse;table-layout:fixed}
       th{background:#f1f5f9;text-align:left;padding:5px 6px;border-bottom:2px solid #cbd5e1;font-size:9px;text-transform:uppercase;letter-spacing:.03em}
       td{padding:5px 6px;border-bottom:1px solid #e2e8f0;vertical-align:middle}
@@ -4725,6 +4731,7 @@ export default function App() {
           <div><h1>${esc(title)}</h1><p class="sub">${esc(subtitle || "")}${minD ? " · " + esc(formatDate(minD.toISOString())) + " – " + esc(formatDate(maxD.toISOString())) : ""}</p></div></div>
         <div class="sub">Generated ${new Date().toLocaleDateString()}</div>
       </div>
+      ${(legend && legend.length) ? `<div class="legend">${legend.map((l) => `<span class="lg"><span class="sw" style="background:${l[0]}"></span>${esc(l[1])}</span>`).join("")}</div>` : ""}
       <div class="axis">${monthMarks}</div>
       <table>
         <colgroup><col class="c-name"/><col class="c-date"/><col class="c-date"/>${showExtra ? '<col class="c-assigned"/>' : ""}<col class="c-bar"/></colgroup>
@@ -4745,6 +4752,13 @@ export default function App() {
     const tasks = (groupedTasks || []).filter((t) => t.eff_start && t.eff_end);
     if (!tasks.length) { alert("This project has no dated tasks to print."); return; }
     const title = proj ? `${proj.projectNumber ? proj.projectNumber + " - " : ""}${proj.name}` : "Task Schedule";
+    const statusColor = (t) => {
+      if (t.isHeader) return "#334155";
+      const rq = (taskCrewRequests || []).filter((r) => (r.task_crew_request_links || []).some((l) => l.task_id === t.id));
+      if (rq.some((r) => r.status === "approved")) return "#047857"; // emerald
+      if (rq.some((r) => r.status === "pending")) return "#f59e0b";  // amber
+      return "#94a3b8"; // slate
+    };
     const rows = (groupedTasks || []).map((t) => {
       const has = t.eff_start && t.eff_end;
       const predName = (!t.isHeader && t.depends_on) ? (taskNameById.get(t.depends_on) || "") : "";
@@ -4754,16 +4768,21 @@ export default function App() {
         sublabel: predName ? `↳ ${predName} ${predTag}` : "",
         depth: t.depth || 0,
         isHeader: !!t.isHeader,
-        bars: has ? [{ start: t.eff_start, end: t.eff_end }] : [],
+        bars: has ? [{ start: t.eff_start, end: t.eff_end, color: statusColor(t) }] : [],
       };
     });
-    // Client-facing schedule: no assigned crew/labor info.
-    printGantt({ title, subtitle: "Task Schedule", rows, showExtra: false, extraHeader: { name: "Task / Predecessor" } });
+    // Client-facing schedule: no assigned crew/labor info. Colors match the
+    // on-screen status (emerald = approved, amber = pending, slate = none).
+    printGantt({ title, subtitle: "Task Schedule", rows, showExtra: false, extraHeader: { name: "Task / Predecessor" },
+      legend: [["#047857", "Approved"], ["#f59e0b", "Pending"], ["#94a3b8", "No crew request"]] });
   }
 
   function printProjectGantt() {
+    const usedDivs = new Set();
     const rows = (projectGanttRows || []).map((row) => {
-      const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => ({ start: i.start, end: i.end }));
+      const color = divisionSvgColors[row.project.division] || "#475569";
+      if (row.project.division) usedDivs.add(row.project.division);
+      const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => ({ start: i.start, end: i.end, color }));
       return {
         label: `${row.project.projectNumber ? row.project.projectNumber + " - " : ""}${row.project.name}`,
         sublabel: row.project.status || "",
@@ -4771,12 +4790,18 @@ export default function App() {
       };
     }).filter((r) => r.bars.length);
     if (!rows.length) { alert("Nothing to print in the Project Assignment Gantt."); return; }
-    printGantt({ title: "Project Assignment Gantt", subtitle: "Projects", rows, showExtra: false, extraHeader: { name: "Project" } });
+    const legend = [...usedDivs].map((d) => [divisionSvgColors[d] || "#475569", d]);
+    printGantt({ title: "Project Assignment Gantt", subtitle: "Projects", rows, showExtra: false, extraHeader: { name: "Project" }, legend });
   }
 
   function printResourceGantt() {
+    const usedDivs = new Set();
     const rows = (resourceGanttRowsWithUnassigned || []).map((row) => {
-      const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => ({ start: i.start, end: i.end }));
+      const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => {
+        const div = i.project && i.project.division;
+        if (div) usedDivs.add(div);
+        return { start: i.start, end: i.end, color: divisionSvgColors[div] || "#475569" };
+      });
       return {
         label: row.resource.name,
         sublabel: row.resource.resourceType || "",
@@ -4784,12 +4809,18 @@ export default function App() {
       };
     }).filter((r) => r.bars.length);
     if (!rows.length) { alert("Nothing to print in the Resource Gantt."); return; }
-    printGantt({ title: "Resource Gantt", subtitle: "Resources", rows, showExtra: false, extraHeader: { name: "Resource" } });
+    const legend = [...usedDivs].map((d) => [divisionSvgColors[d] || "#475569", d]);
+    printGantt({ title: "Resource Gantt", subtitle: "Resources", rows, showExtra: false, extraHeader: { name: "Resource" }, legend });
   }
 
   function printCrewGantt() {
+    const usedDivs = new Set();
     const rows = (crewGanttRows || []).map((row) => {
-      const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => ({ start: i.start, end: i.end }));
+      const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => {
+        const div = i.project && i.project.division;
+        if (div) usedDivs.add(div);
+        return { start: i.start, end: i.end, color: divisionSvgColors[div] || "#475569" };
+      });
       return {
         label: row.crew.crewName,
         sublabel: row.crew.foremanName || "",
@@ -4797,7 +4828,8 @@ export default function App() {
       };
     }).filter((r) => r.bars.length);
     if (!rows.length) { alert("Nothing to print in the Crew Gantt."); return; }
-    printGantt({ title: "Crew Gantt", subtitle: "Crews", rows, showExtra: false, extraHeader: { name: "Crew" } });
+    const legend = [...usedDivs].map((d) => [divisionSvgColors[d] || "#475569", d]);
+    printGantt({ title: "Crew Gantt", subtitle: "Crews", rows, showExtra: false, extraHeader: { name: "Crew" }, legend });
   }
   function exportResourceResume(resource) {
     if (!resource?.name) return;
@@ -5931,137 +5963,6 @@ export default function App() {
   // triggered. We append <script> tags to the document and resolve once each
   // library has populated its global. After the first load they stay cached
   // for the session, so subsequent exports are instant.
-  function loadScreenshotLibs() {
-    return new Promise((resolve, reject) => {
-      const needHtmlToImage = typeof window.htmlToImage === "undefined";
-      const needJsPdf = typeof window.jspdf === "undefined";
-      if (!needHtmlToImage && !needJsPdf) return resolve();
-
-      const loadScript = (src) => new Promise((res, rej) => {
-        const s = document.createElement("script");
-        s.src = src;
-        s.async = true;
-        s.onload = res;
-        s.onerror = () => rej(new Error(`Failed to load ${src}`));
-        document.head.appendChild(s);
-      });
-
-      Promise.all([
-        // html-to-image natively handles oklch(), color-mix(), lab(), and
-        // every other modern CSS function because it uses the browser's
-        // own rendering engine via SVG foreignObject. Unlike html2canvas,
-        // there is no internal CSS parser to choke on new color syntax.
-        needHtmlToImage ? loadScript("https://cdn.jsdelivr.net/npm/html-to-image@1.11.2/dist/html-to-image.min.js") : Promise.resolve(),
-        needJsPdf ? loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js") : Promise.resolve(),
-      ]).then(resolve).catch(reject);
-    });
-  }
-
-  // Screenshot-based PDF export. Captures whatever is currently visible of
-  // the named element and embeds it into a single landscape PDF page,
-  // scaled to fit while preserving aspect ratio. Used for the three Gantt
-  // charts where the user wanted a "true screenshot of what I see."
-  //
-  // Caveat: the resulting PDF is a rasterized image — text inside is not
-  // selectable or searchable. That's fine for visualizations.
-  async function exportSectionScreenshotPdf(sectionId, title) {
-    const section = document.getElementById(sectionId);
-    if (!section) { alert(`Could not find "${title}" to export.`); return; }
-
-    try {
-      await loadScreenshotLibs();
-    } catch (err) {
-      alert("Could not load PDF libraries. Check your internet connection and try again.");
-      console.error(err);
-      return;
-    }
-
-    // html-to-image uses SVG foreignObject + the browser's own rendering
-    // engine, so modern CSS color functions (oklch, color-mix, lab, lch)
-    // work natively — no sanitization needed.
-
-    let imgData, capturedWidth, capturedHeight;
-    try {
-      // Capture at 2x scale for crisp PDFs. html-to-image uses pixelRatio.
-      const pixelRatio = 2;
-      imgData = await window.htmlToImage.toPng(section, {
-        pixelRatio,
-        backgroundColor: "#ffffff",
-        // Skip the same node-walking issues html2canvas had with iframes,
-        // foreign content, and external images by allowing CORS images
-        // through and treating embedded fonts as inline.
-        cacheBust: true,
-        skipFonts: false,
-      });
-      // Build an Image to read the actual pixel dimensions so the PDF
-      // scaling math below has accurate width/height to work with.
-      const probe = await new Promise((res, rej) => {
-        const img = new Image();
-        img.onload = () => res(img);
-        img.onerror = rej;
-        img.src = imgData;
-      });
-      capturedWidth = probe.width;
-      capturedHeight = probe.height;
-    } catch (err) {
-      console.error("html-to-image error:", err);
-      alert(
-        "Could not capture the chart.\n\n" +
-        "Reason: " + (err && err.message ? err.message : String(err)) + "\n\n" +
-        "Open DevTools (F12) → Console for full details."
-      );
-      return;
-    }
-
-    const { jsPDF } = window.jspdf;
-
-    // Landscape page sized to the captured image's aspect ratio so we don't
-    // end up with awkward whitespace bands.
-    const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-
-    // Reserve a strip for the title and footer.
-    const titleStripHeight = 28;
-    const footerStripHeight = 16;
-    const horizontalMargin = 24;
-    const availableWidth = pageWidth - horizontalMargin * 2;
-    const availableHeight = pageHeight - titleStripHeight - footerStripHeight;
-
-    // Scale image to fit available area while preserving aspect ratio.
-    const imgRatio = capturedWidth / capturedHeight;
-    let drawWidth = availableWidth;
-    let drawHeight = drawWidth / imgRatio;
-    if (drawHeight > availableHeight) {
-      drawHeight = availableHeight;
-      drawWidth = drawHeight * imgRatio;
-    }
-    const drawX = (pageWidth - drawWidth) / 2;
-    const drawY = titleStripHeight + (availableHeight - drawHeight) / 2;
-
-    // Title strip
-    pdf.setFontSize(13);
-    pdf.setFont("helvetica", "bold");
-    pdf.text(title || "GGC Export", horizontalMargin, 20);
-
-    // Image
-    pdf.addImage(imgData, "PNG", drawX, drawY, drawWidth, drawHeight, undefined, "FAST");
-
-    // Footer
-    pdf.setFontSize(8);
-    pdf.setFont("helvetica", "normal");
-    pdf.setTextColor(100);
-    pdf.text(
-      `Generated ${new Date().toLocaleString()} • GGC Resource Planning`,
-      horizontalMargin,
-      pageHeight - 8
-    );
-
-    // Build a sensible filename from the title.
-    const safeTitle = (title || "GGC Export").replace(/[^a-z0-9]+/gi, "_").toLowerCase();
-    const datestamp = new Date().toISOString().slice(0, 10);
-    pdf.save(`${safeTitle}_${datestamp}.pdf`);
-  }
 
   function exportSectionPdf(sectionId, title) {
     const section = document.getElementById(sectionId);
@@ -6650,7 +6551,6 @@ export default function App() {
                 </div>
                 <button onClick={exportDashboardExcel} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button>
                 <button onClick={printProjectGantt} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Print</button>
-                <button onClick={() => exportSectionScreenshotPdf("project-assignment-gantt", "Project Assignment Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
                 <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                   <ZoomIn size={16} className="text-slate-500" />
                   <span className="text-sm font-medium text-slate-700">Zoom</span>
@@ -7060,7 +6960,6 @@ export default function App() {
                   </select>
                 </div>
                 <button onClick={printResourceGantt} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Print</button>
-                <button onClick={() => exportSectionScreenshotPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
               </div>
             </div>
             <div className="overflow-auto rounded-xl border border-slate-200 p-4 max-h-[70vh]">
@@ -7167,7 +7066,6 @@ export default function App() {
                 <p className="text-sm text-slate-500">Rows are crews. Overlapping projects stack below each other within the same crew row.</p>
               </div>
               <button onClick={printCrewGantt} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Print</button>
-                <button onClick={() => exportSectionScreenshotPdf("crew-gantt", "Crew Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
             </div>
             <div className="mb-4 flex flex-wrap gap-3 items-start">
               <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
