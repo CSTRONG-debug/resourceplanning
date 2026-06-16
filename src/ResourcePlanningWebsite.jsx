@@ -4690,28 +4690,36 @@ export default function App() {
   // Generic Gantt printer (table-based, paginates cleanly, weekend bands).
   // rows: [{ label, sublabel?, depth?, isHeader?, bars:[{start,end}], extra? }]
   // opts: { title, subtitle?, showExtra?, extraHeader? }
-  function printGantt({ title, subtitle, rows, showExtra, extraHeader, legend }) {
+  function printGantt({ title, subtitle, rows, showExtra, extraHeader, legend, windowStart, windowEnd }) {
     const esc = (v) => String(v == null ? "" : v).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch] || ch));
     const allBars = rows.flatMap((r) => r.bars || []);
-    let maxD = null;
-    allBars.forEach((b) => {
-      const e = toDate(b.end);
-      if (e && (!maxD || e > maxD)) maxD = e;
-    });
-    if (!maxD) { alert("Nothing with dates to print."); return; }
-    // Timeline starts at TODAY and runs forward. Anything already underway is
-    // clipped to begin at today so the current-and-upcoming window isn't pushed
-    // off the page. The Start/End columns still show the real dates.
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const minD = today;
-    if (maxD < minD) maxD = minD; // everything is in the past — show a thin today column
     const dayMs = 86400000;
+    // Two modes:
+    //  • Pinned window (windowStart/windowEnd given): print EXACTLY the window
+    //    being viewed — e.g. the single week the demand pop-out is showing.
+    //    Bars are clipped to both ends of that window.
+    //  • Default (no window): timeline starts at TODAY and runs to the latest bar.
+    const pinned = Boolean(windowStart && windowEnd);
+    let minD, maxD;
+    if (pinned) {
+      minD = toDate(windowStart); minD.setHours(0, 0, 0, 0);
+      maxD = toDate(windowEnd); maxD.setHours(0, 0, 0, 0);
+    } else {
+      maxD = null;
+      allBars.forEach((b) => { const e = toDate(b.end); if (e && (!maxD || e > maxD)) maxD = e; });
+      if (!maxD) { alert("Nothing with dates to print."); return; }
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      minD = today;
+      if (maxD < minD) maxD = minD;
+    }
+    if (!minD || !maxD) { alert("Nothing with dates to print."); return; }
     const totalDays = Math.max(1, Math.round((maxD - minD) / dayMs) + 1);
     const clampStart = (d) => { const x = toDate(d); return (x && x < minD) ? minD : x; };
+    const clampEnd = (d) => { const x = toDate(d); return (x && x > maxD) ? maxD : x; };
     const pct = (d) => ((clampStart(d) - minD) / dayMs) / totalDays * 100;
     const barW = (s, e) => {
-      const cs = clampStart(s), ce = toDate(e);
-      if (!cs || !ce || ce < minD) return 0; // entirely in the past → no visible bar
+      const cs = clampStart(s), ce = clampEnd(e);
+      if (!cs || !ce || ce < minD || cs > maxD) return 0; // outside the window → no bar
       return Math.max(0.6, (((ce - cs) / dayMs) + 1) / totalDays * 100);
     };
 
@@ -4791,7 +4799,7 @@ export default function App() {
     </style></head><body>
       <div class="header">
         <div class="header-left"><img id="ggc-logo" class="logo" src="${window.location.origin}/logo.png" alt="GGC" onerror="this.style.display='none';window.__logoDone&&window.__logoDone();" onload="window.__logoDone&&window.__logoDone();"/>
-          <div><h1>${esc(title)}</h1><p class="sub">${esc(subtitle || "")} · Timeline ${esc(formatDate(minD.toISOString()))} – ${esc(formatDate(maxD.toISOString()))} (today forward)</p></div></div>
+          <div><h1>${esc(title)}</h1><p class="sub">${esc(subtitle || "")} · Timeline ${esc(formatDate(minD.toISOString()))} – ${esc(formatDate(maxD.toISOString()))}${pinned ? "" : " (today forward)"}</p></div></div>
         <div class="sub">Generated ${new Date().toLocaleDateString()}</div>
       </div>
       ${(legend && legend.length) ? `<div class="legend">${legend.map((l) => `<span class="lg"><span class="sw" style="background:${l[0]}"></span>${esc(l[1])}</span>`).join("")}</div>` : ""}
@@ -7758,6 +7766,9 @@ export default function App() {
           const byResource = new Map();
           const unassignedItems = [];
           periodItems.forEach((item) => {
+            // Synthetic "unassigned need" items (unfilled slots) are unassigned by
+            // definition — they always belong in the Unassigned segment.
+            if (item.isUnassignedNeed) { unassignedItems.push(item); return; }
             const names = [];
             roleFields.forEach((rf) => {
               const n = (item[rf] || item.assignment?.[rf] || "").trim();
@@ -7794,7 +7805,7 @@ export default function App() {
               };
             }).filter((r) => r.bars.length);
             const legend = [...usedDivs].map((d) => [divisionSvgColors[d] || "#475569", d]);
-            printGantt({ title: `Demand — ${label}`, subtitle: "Projects", rows, showExtra: false, extraHeader: { name: "Project · Assigned" }, legend });
+            printGantt({ title: `Demand — ${label}`, subtitle: `Projects · ${label}`, rows, showExtra: false, extraHeader: { name: "Project · Assigned" }, legend, windowStart: periodTimeline.minDate, windowEnd: periodTimeline.maxDate });
           } else {
             const mkRows = (items) => items.filter((i) => i.start && i.end).map((i) => {
               const div = i.project?.division; if (div) usedDivs.add(div);
@@ -7815,7 +7826,7 @@ export default function App() {
             }
             if (!rows.length) { alert("Nothing to print."); return; }
             const legend = [...usedDivs].map((d) => [divisionSvgColors[d] || "#475569", d]);
-            printGantt({ title: `Demand — ${label} (Reversed)`, subtitle: `By ${filterTitle}`, rows, showExtra: false, extraHeader: { name: `${filterTitle} · Project` }, legend });
+            printGantt({ title: `Demand — ${label} (Reversed)`, subtitle: `By ${filterTitle} · ${label}`, rows, showExtra: false, extraHeader: { name: `${filterTitle} · Project` }, legend, windowStart: periodTimeline.minDate, windowEnd: periodTimeline.maxDate });
           }
         };
 
@@ -7886,23 +7897,26 @@ export default function App() {
                         {reversed.unassignedItems.length > 0 && (
                           <>
                             <div className="sticky left-0 z-20 mt-2 mb-1 bg-amber-50 px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-amber-800" style={{ width: "320px" }}>Unassigned — no {filterTitle}</div>
-                            {reversed.unassignedItems.map((item, idx) => (
+                            {reversed.unassignedItems.map((item, idx) => {
+                              const unLabel = item.isUnassignedNeed ? `${item.unassignedAbbreviation} - Unassigned` : "Unassigned";
+                              return (
                               <div key={`rev-un-${item.id}`} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
                                 <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
                                   <button
                                     type="button"
-                                    onClick={() => { setDemandPeriodDrilldown(null); setDemandDrilldownReversed(false); openEditAssignmentForm(item.assignment); }}
+                                    onClick={() => { if (!item.assignment) return; setDemandPeriodDrilldown(null); setDemandDrilldownReversed(false); openEditAssignmentForm(item.assignment); }}
                                     className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden hover:bg-slate-50"
-                                    title={`${item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}${item.project.name} — click to edit assignment`}
+                                    title={`${item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}${item.project.name}${item.assignment ? " — click to edit assignment" : " — unfilled need"}`}
                                   >
                                     <p className="truncate text-[12px] font-semibold text-amber-800">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
                                   </button>
                                   <div className="relative h-7 rounded-md" style={{ width: `${periodTimeline.width}px` }}>
-                                    <GanttSegmentBar item={item} timeline={periodTimeline} label="Unassigned" />
+                                    <GanttSegmentBar item={item} timeline={periodTimeline} label={unLabel} />
                                   </div>
                                 </div>
                               </div>
-                            ))}
+                              );
+                            })}
                           </>
                         )}
                       </>
