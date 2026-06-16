@@ -3279,12 +3279,12 @@ export default function App() {
   const [projectSort, setProjectSort] = useState({ key: "projectNumber", direction: "asc" });
   const [projectGanttSort, setProjectGanttSort] = useState("projectNumber");
   const [resourceGanttSort, setResourceGanttSort] = useState("name");
-  const [reverseResourceGantt, setReverseResourceGantt] = useState(false);
   const [crewGanttSort, setCrewGanttSort] = useState("crewName");
   const [resourceSort, setResourceSort] = useState({ key: "name", direction: "asc" });
   const [crewSort, setCrewSort] = useState({ key: "crewName", direction: "asc" });
   const [demandDrilldown, setDemandDrilldown] = useState(null);
   const [demandPeriodDrilldown, setDemandPeriodDrilldown] = useState(null);
+  const [demandDrilldownReversed, setDemandDrilldownReversed] = useState(false);
   const [showAssignments, setShowAssignments] = useState(false);
   const [showUnassignedNeedRows, setShowUnassignedNeedRows] = useState(false);
   const [certAlertModal, setCertAlertModal] = useState(null);
@@ -4552,55 +4552,6 @@ export default function App() {
     });
   })();
 
-  // ── Reverse Resource Gantt ────────────────────────────────────────────────
-  // Flips the Resource Gantt: rows become PROJECTS, and each project's bar(s)
-  // show the resource(s) of the filtered title(s) assigned to it. Projects with
-  // no resource of the filtered title are collected at the bottom under an
-  // "Unassigned" label. Honors the same division/status/search filters.
-  const reverseResourceRows = (() => {
-    if (!reverseResourceGantt) return { assigned: [], unassigned: [] };
-    const roleFields = (dashboardResourceTypeFilter || [])
-      .map((rt) => RESOURCE_TYPE_TO_ROLE[rt]).filter(Boolean);
-    const uniqueRoleFields = [...new Set(roleFields)];
-    const q = (dashboardResourceSearch || "").toLowerCase();
-    const assigned = [];
-    const unassigned = [];
-    // One row per project that has any visible mobilization in the window.
-    const byProject = new Map();
-    resourceTimelineVisibleItems.forEach((item) => {
-      const pid = item.project?.id;
-      if (!pid) return;
-      if (!byProject.has(pid)) byProject.set(pid, { project: item.project, items: [] });
-      byProject.get(pid).items.push(item);
-    });
-    [...byProject.values()].forEach(({ project, items }) => {
-      // Collect resource names of the filtered title across this project's mobs.
-      const names = new Set();
-      items.forEach((item) => {
-        uniqueRoleFields.forEach((rf) => {
-          const n = (item[rf] || item.assignment?.[rf] || "").trim();
-          if (n) {
-            // Only count names whose resource record matches the filtered title.
-            const rec = resourceByName.get(n);
-            if (!rec || dashboardResourceTypeFilter.includes(rec.resourceType)) names.add(n);
-          }
-        });
-      });
-      const projectLabel = `${project.projectNumber ? project.projectNumber + " - " : ""}${project.name}`;
-      // Apply the search box against the project label OR the assigned names.
-      if (q && !projectLabel.toLowerCase().includes(q) && ![...names].some((n) => n.toLowerCase().includes(q))) return;
-      const row = { project, items, names: [...names] };
-      if (names.size > 0) assigned.push(row); else unassigned.push(row);
-    });
-    const earliest = (row) => {
-      const ds = (row.items || []).map((i) => toDate(i.start)).filter(Boolean);
-      return ds.length ? Math.min(...ds.map((d) => d.getTime())) : Number.MAX_SAFE_INTEGER;
-    };
-    assigned.sort((a, b) => earliest(a) - earliest(b));
-    unassigned.sort((a, b) => earliest(a) - earliest(b));
-    return { assigned, unassigned };
-  })();
-
   const crewGanttRows = activeCrews
     .filter((c) => {
       if (dashboardCrewSearch) {
@@ -4910,30 +4861,6 @@ export default function App() {
 
   function printResourceGantt() {
     const usedDivs = new Set();
-    if (reverseResourceGantt) {
-      // Reversed: projects as rows, assigned resource name as the label/sublabel,
-      // with an Unassigned group at the bottom.
-      const mkRows = (list, isUn) => list.map((row) => {
-        const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => {
-          const div = i.project && i.project.division;
-          if (div) usedDivs.add(div);
-          return { start: i.start, end: i.end, color: divisionSvgColors[div] || "#475569" };
-        });
-        return {
-          label: `${row.project.projectNumber ? row.project.projectNumber + " - " : ""}${row.project.name}`,
-          sublabel: isUn ? "Unassigned" : (row.names || []).join(", "),
-          bars,
-        };
-      }).filter((r) => r.bars.length);
-      const rows = mkRows(reverseResourceRows.assigned, false);
-      const unRows = mkRows(reverseResourceRows.unassigned, true);
-      const all = [...rows];
-      if (unRows.length) { all.push({ label: `UNASSIGNED — no ${(dashboardResourceTypeFilter || []).join(" / ") || "resource"}`, isHeader: true, bars: [] }); all.push(...unRows); }
-      if (!all.length) { alert("Nothing to print."); return; }
-      const legend = [...usedDivs].map((d) => [divisionSvgColors[d] || "#475569", d]);
-      printGantt({ title: "Resource Gantt (Reversed)", subtitle: `By ${(dashboardResourceTypeFilter || []).join(" / ") || "resource"}`, rows: all, showExtra: false, extraHeader: { name: "Project · Assigned" }, legend });
-      return;
-    }
     const rows = (resourceGanttRowsWithUnassigned || []).map((row) => {
       const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => {
         const div = i.project && i.project.division;
@@ -7065,7 +6992,7 @@ export default function App() {
                   <button onClick={() => setExpandedView("resource")} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button>
                   <h2 className="text-xl font-bold">Resource Gantt View</h2>
                 </div>
-                <p className="text-sm text-slate-500">{reverseResourceGantt ? "Reversed: rows are projects. Bars show the assigned resource of the filtered title; projects with none are listed under Unassigned." : "Rows are resources. Bars show the assigned project name for each mobilization."}</p>
+                <p className="text-sm text-slate-500">Rows are resources. Bars show the assigned project name for each mobilization.</p>
               </div>
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
@@ -7097,7 +7024,6 @@ export default function App() {
                     {zoomModes.map((m) => <option key={m}>{m}</option>)}
                   </select>
                 </div>
-                <button onClick={() => setReverseResourceGantt((v) => !v)} className={`rounded-xl px-3 py-2 text-sm font-semibold ${reverseResourceGantt ? "bg-emerald-700 text-white hover:bg-emerald-800" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`} title="Flip between resources-as-rows and projects-as-rows">⇄ {reverseResourceGantt ? "Reversed" : "Reverse"}</button>
                 <button onClick={printResourceGantt} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Print</button>
               </div>
             </div>
@@ -7108,32 +7034,13 @@ export default function App() {
                   <GanttBackdrop timeline={resourceTimeline} />
                 </div>
                 <div className="relative z-10">
-                  {!reverseResourceGantt ? (
-                    resourceGanttRowsWithUnassigned.map((row, idx) => (
-                      <div key={row.resource.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
-                        {row.isUnassignedNeedRow
-                          ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} />
-                          : <ResourceGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} onResourceClick={setFocusedResource} />}
-                      </div>
-                    ))
-                  ) : (
-                    <>
-                      {reverseResourceRows.assigned.map((row, idx) => (
-                        <ReverseProjectGanttRow key={row.project.id} row={row} timeline={resourceTimeline} striped={idx % 2 === 1} onClick={() => openEditAssignmentForm(row.items[0].assignment)} />
-                      ))}
-                      {reverseResourceRows.unassigned.length > 0 && (
-                        <>
-                          <div className="sticky left-0 z-20 mt-2 bg-amber-50 px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-amber-800" style={{ width: "320px" }}>Unassigned — no {(dashboardResourceTypeFilter || []).join(" / ") || "resource"}</div>
-                          {reverseResourceRows.unassigned.map((row, idx) => (
-                            <ReverseProjectGanttRow key={row.project.id} row={row} timeline={resourceTimeline} striped={idx % 2 === 1} unassigned onClick={() => openEditAssignmentForm(row.items[0].assignment)} />
-                          ))}
-                        </>
-                      )}
-                      {reverseResourceRows.assigned.length === 0 && reverseResourceRows.unassigned.length === 0 && (
-                        <div className="p-6 text-sm text-slate-500">No projects match the current filters.</div>
-                      )}
-                    </>
-                  )}
+                  {resourceGanttRowsWithUnassigned.map((row, idx) => (
+                    <div key={row.resource.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                      {row.isUnassignedNeedRow
+                        ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} />
+                        : <ResourceGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} onResourceClick={setFocusedResource} />}
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -7840,15 +7747,95 @@ export default function App() {
       {/* Period-wide Gantt Drilldown — all assignments active in that period */}
       {demandPeriodDrilldown && (() => {
         const { label, periodItems, periodTimeline } = demandPeriodDrilldown;
+        // Role fields currently filtered on the demand graph (e.g. Superintendent).
+        const roleFields = [...new Set((demandResourceTypeFilter || []).map((rt) => RESOURCE_TYPE_TO_ROLE[rt]).filter(Boolean))];
+        const filterTitle = (demandResourceTypeFilter || []).join(" / ") || "resource";
+
+        // ── Reverse grouping: one row per RESOURCE of the filtered title, bars =
+        // their project(s) in this period. Projects with no such resource go to
+        // an Unassigned bucket at the bottom.
+        const buildReversed = () => {
+          const byResource = new Map();
+          const unassignedItems = [];
+          periodItems.forEach((item) => {
+            const names = [];
+            roleFields.forEach((rf) => {
+              const n = (item[rf] || item.assignment?.[rf] || "").trim();
+              if (n) {
+                const rec = resourceByName.get(n);
+                if (!rec || (demandResourceTypeFilter || []).includes(rec.resourceType)) names.push(n);
+              }
+            });
+            if (names.length === 0) { unassignedItems.push(item); return; }
+            [...new Set(names)].forEach((n) => {
+              if (!byResource.has(n)) byResource.set(n, { name: n, items: [] });
+              byResource.get(n).items.push(item);
+            });
+          });
+          const earliest = (row) => {
+            const ds = (row.items || []).map((i) => toDate(i.start)).filter(Boolean);
+            return ds.length ? Math.min(...ds.map((d) => d.getTime())) : Number.MAX_SAFE_INTEGER;
+          };
+          const assigned = [...byResource.values()].sort((a, b) => a.name.localeCompare(b.name));
+          return { assigned, unassignedItems: unassignedItems.sort((a, b) => earliest({ items: [a] }) - earliest({ items: [b] })) };
+        };
+        const reversed = demandDrilldownReversed ? buildReversed() : null;
+
+        // Print: respects the current orientation.
+        const handlePrint = () => {
+          const usedDivs = new Set();
+          if (!demandDrilldownReversed) {
+            const rows = periodItems.map((item) => {
+              const div = item.project?.division; if (div) usedDivs.add(div);
+              return {
+                label: `${item.project.projectNumber ? item.project.projectNumber + " - " : ""}${item.project.name}`,
+                sublabel: getAssignmentPeopleLabel(item.assignment, crews) || "",
+                bars: (item.start && item.end) ? [{ start: item.start, end: item.end, color: divisionSvgColors[div] || "#475569" }] : [],
+              };
+            }).filter((r) => r.bars.length);
+            const legend = [...usedDivs].map((d) => [divisionSvgColors[d] || "#475569", d]);
+            printGantt({ title: `Demand — ${label}`, subtitle: "Projects", rows, showExtra: false, extraHeader: { name: "Project · Assigned" }, legend });
+          } else {
+            const mkRows = (items) => items.filter((i) => i.start && i.end).map((i) => {
+              const div = i.project?.division; if (div) usedDivs.add(div);
+              return { start: i.start, end: i.end, color: divisionSvgColors[div] || "#475569" };
+            });
+            const rows = reversed.assigned.map((r) => ({
+              label: r.name,
+              sublabel: `${r.items.length} project${r.items.length === 1 ? "" : "s"}`,
+              bars: mkRows(r.items),
+            })).filter((r) => r.bars.length);
+            if (reversed.unassignedItems.length) {
+              rows.push({ label: `UNASSIGNED — no ${filterTitle}`, isHeader: true, bars: [] });
+              reversed.unassignedItems.forEach((item) => rows.push({
+                label: `${item.project.projectNumber ? item.project.projectNumber + " - " : ""}${item.project.name}`,
+                sublabel: "Unassigned",
+                bars: mkRows([item]),
+              }));
+            }
+            if (!rows.length) { alert("Nothing to print."); return; }
+            const legend = [...usedDivs].map((d) => [divisionSvgColors[d] || "#475569", d]);
+            printGantt({ title: `Demand — ${label} (Reversed)`, subtitle: `By ${filterTitle}`, rows, showExtra: false, extraHeader: { name: `${filterTitle} · Project` }, legend });
+          }
+        };
+
         return (
           <div className="fixed inset-0 z-[85] bg-slate-950/70 p-4">
             <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
               <div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white p-5">
                 <div>
                   <h2 className="text-2xl font-bold">All Assignments — {label}</h2>
-                  <p className="text-sm text-slate-500">{periodItems.length} mobilization{periodItems.length === 1 ? "" : "s"} active here. Bar shows peak concurrent demand: same-person sequential mobs count as 1, overlapping mobs count separately.</p>
+                  <p className="text-sm text-slate-500">
+                    {demandDrilldownReversed
+                      ? `Reversed: rows are ${filterTitle}. Bars show their project(s); projects with none are listed under Unassigned.`
+                      : `${periodItems.length} mobilization${periodItems.length === 1 ? "" : "s"} active here. Bar shows peak concurrent demand: same-person sequential mobs count as 1, overlapping mobs count separately.`}
+                  </p>
                 </div>
-                <button onClick={() => setDemandPeriodDrilldown(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
+                <div className="flex gap-2">
+                  <button onClick={() => setDemandDrilldownReversed((v) => !v)} className={`rounded-xl px-4 py-2 text-sm font-semibold ${demandDrilldownReversed ? "bg-emerald-700 text-white hover:bg-emerald-800" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`} title="Flip between projects-as-rows and resources-as-rows">⇄ {demandDrilldownReversed ? "Reversed" : "Reverse"}</button>
+                  <button onClick={handlePrint} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Print</button>
+                  <button onClick={() => { setDemandPeriodDrilldown(null); setDemandDrilldownReversed(false); }} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
+                </div>
               </div>
               <div className="flex-1 overflow-auto p-5">
                 <GanttHeader timeline={periodTimeline} zoom={demandZoom} />
@@ -7858,7 +7845,8 @@ export default function App() {
                   </div>
                   <div className="relative z-10">
                     {periodItems.length === 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">No assignments active in this period.</div>}
-                    {periodItems.map((item, idx) => (
+
+                    {!demandDrilldownReversed && periodItems.map((item, idx) => (
                       <div key={`period-drilldown-${item.id}`} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
                         <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
                           <button
@@ -7875,6 +7863,50 @@ export default function App() {
                         </div>
                       </div>
                     ))}
+
+                    {demandDrilldownReversed && reversed && (
+                      <>
+                        {reversed.assigned.map((row, idx) => (
+                          <div key={`rev-res-${row.name}`} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                            <div className="grid grid-cols-[320px_1fr] items-start gap-0">
+                              <div className="sticky left-0 z-20 bg-white pr-3 text-left overflow-hidden">
+                                <p className="truncate text-[12px] font-bold text-slate-900" title={row.name}>{row.name}</p>
+                                <p className="truncate text-[10px] text-slate-500 leading-tight">{row.items.length} project{row.items.length === 1 ? "" : "s"}</p>
+                              </div>
+                              <div className="relative rounded-md" style={{ width: `${periodTimeline.width}px` }}>
+                                {[...row.items].sort((a, b) => new Date(a.start) - new Date(b.start)).map((item) => (
+                                  <div key={`rev-${row.name}-${item.id}`} className="relative h-7">
+                                    <GanttSegmentBar item={item} timeline={periodTimeline} label={`${item.project.projectNumber ? item.project.projectNumber + " - " : ""}${item.project.name}`} />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        {reversed.unassignedItems.length > 0 && (
+                          <>
+                            <div className="sticky left-0 z-20 mt-2 mb-1 bg-amber-50 px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-amber-800" style={{ width: "320px" }}>Unassigned — no {filterTitle}</div>
+                            {reversed.unassignedItems.map((item, idx) => (
+                              <div key={`rev-un-${item.id}`} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                                <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
+                                  <button
+                                    type="button"
+                                    onClick={() => { setDemandPeriodDrilldown(null); setDemandDrilldownReversed(false); openEditAssignmentForm(item.assignment); }}
+                                    className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden hover:bg-slate-50"
+                                    title={`${item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}${item.project.name} — click to edit assignment`}
+                                  >
+                                    <p className="truncate text-[12px] font-semibold text-amber-800">{item.project.projectNumber ? `${item.project.projectNumber} - ` : ""}{item.project.name}</p>
+                                  </button>
+                                  <div className="relative h-7 rounded-md" style={{ width: `${periodTimeline.width}px` }}>
+                                    <GanttSegmentBar item={item} timeline={periodTimeline} label="Unassigned" />
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
