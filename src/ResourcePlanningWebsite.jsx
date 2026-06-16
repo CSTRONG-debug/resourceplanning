@@ -3238,7 +3238,7 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
 // Double-clicking a row opens the full edit pop-out for advanced options
 // (dependency type, lag, header/parent, crew requests).
 export function TaskGrid({
-  rows, allTasks, taskNameById, requestsByTaskId,
+  rows, allTasks, taskNameById, requestsByTaskId, depTag,
   onCommitRow, onAddRow, onOpenPopout, onDelete, onRequestCrew, canEdit,
 }) {
   const EDITABLE_COLS = ["name", "start", "end", "duration", "depends"];
@@ -3303,8 +3303,6 @@ export function TaskGrid({
     if (!(d.name || "").trim()) { draftRef.current = null; setDraftRowId(null); return null; }
     committingRef.current = true;
     const wasNew = d.id === NEW_ROW;
-    draftRef.current = null;
-    setDraftRowId(null);
     let newId = null;
     try {
       newId = await onCommitRow({
@@ -3316,6 +3314,13 @@ export function TaskGrid({
       }, wasNew ? null : d.id);
     } finally {
       committingRef.current = false;
+    }
+    // Clear the draft AFTER the save+reload so the typed value stays visible
+    // continuously (no blank flicker), unless we've already moved on to edit a
+    // different row in the meantime.
+    if (draftRef.current && draftRef.current.id === d.id) {
+      draftRef.current = null;
+      setDraftRowId(null);
     }
     return newId;
   }
@@ -7270,6 +7275,7 @@ export default function App() {
                           rows={groupedTasks}
                           allTasks={projectTasks}
                           taskNameById={taskNameById}
+                          depTag={depTag}
                           requestsByTaskId={(id) => taskCrewRequests.filter((r) => (r.task_crew_request_links || []).some((l) => l.task_id === id))}
                           onCommitRow={upsertTaskInline}
                           onOpenPopout={openEditTaskForm}
