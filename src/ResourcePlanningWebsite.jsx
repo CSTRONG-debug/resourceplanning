@@ -847,7 +847,7 @@ export function TaskGanttRow({ task, timeline, striped, dependsOnName, requests,
               style={{ left: `${span.left}px`, width: `${span.width}px`, top: "6px" }}
               title={`${task.name}\n${startD ? formatDate(startD) : "?"} - ${endD ? formatDate(endD) : "?"}${reqs.length ? "\nCrew: " + reqs.map((r) => `${r.crew_specialty} (${r.status})`).join(", ") : ""}`}
             >
-              {isHeader ? task.name : (reqs.length ? reqs.map((r) => r.crew_specialty).join(", ") : task.name)}
+              {task.name}
             </div>
           )}
         </div>
@@ -1623,6 +1623,21 @@ export function ProjectForm({ form, setForm, onSave, onCancel, onDelete, editing
 export function AssignmentForm({ form, setForm, onSave, onCancel, onDelete, editing, resources, projects, crews, tasks }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
 
+  // Mobilizations whose end date is in the past start collapsed automatically.
+  // Users can still expand/collapse any mobilization manually.
+  const todayMidnight = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
+  const isMobPassed = (mob) => { const e = mob && mob.end ? toDate(mob.end) : null; return !!(e && e < todayMidnight); };
+  const [collapsedMobs, setCollapsedMobs] = useState({});
+  const [mobCollapseInit, setMobCollapseInit] = useState(false);
+  useEffect(() => {
+    if (mobCollapseInit) return;
+    const init = {};
+    (form.mobilizations || []).forEach((m) => { if (isMobPassed(m)) init[m.id] = true; });
+    setCollapsedMobs(init);
+    setMobCollapseInit(true);
+  }, [form.mobilizations, mobCollapseInit]);
+  const toggleMobCollapse = (id) => setCollapsedMobs((c) => ({ ...c, [id]: !c[id] }));
+
   // Calculate end date by adding `durationWeeks` work weeks to `startDate`,
   // following GGC's specific rules:
   //
@@ -1823,14 +1838,26 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, onDelete, edit
             </div>
             <div className="space-y-4">
               {(form.mobilizations || []).map((mob, index) => (
-                <div key={mob.id} className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
-                  {/* Header row */}
+                <div key={mob.id} className={`rounded-xl border p-4 space-y-3 ${isMobPassed(mob) ? "border-slate-200 bg-slate-50" : "border-slate-200 bg-white"}`}>
+                  {/* Header row — click to collapse/expand */}
                   <div className="flex items-center justify-between">
-                    <span className="font-semibold text-slate-700">Mobilization #{index + 1}</span>
+                    <button type="button" onClick={() => toggleMobCollapse(mob.id)} className="flex items-center gap-2 text-left">
+                      <span className="text-xs">{collapsedMobs[mob.id] ? "▸" : "▾"}</span>
+                      <span className="font-semibold text-slate-700">Mobilization #{index + 1}</span>
+                      {isMobPassed(mob) && <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600">PAST</span>}
+                      {collapsedMobs[mob.id] && (
+                        <span className="text-xs font-normal text-slate-500">
+                          {mob.start ? formatDate(mob.start) : "?"}{mob.end ? ` → ${formatDate(mob.end)}` : ""}
+                          {(mob.crewIds || []).filter(Boolean).length ? ` · ${(mob.crewIds || []).filter(Boolean).length} crew` : ""}
+                          {mob.superintendent ? ` · ${mob.superintendent}` : ""}
+                        </span>
+                      )}
+                    </button>
                     {(form.mobilizations || []).length > 1 && (
                       <button type="button" onClick={() => removeMobilization(mob.id)} className="rounded-lg border border-red-200 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-50">Remove</button>
                     )}
                   </div>
+                  {!collapsedMobs[mob.id] && (<>
 
                   {/* Explicit unassigned needs by division */}
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
@@ -1943,6 +1970,7 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, onDelete, edit
                       </div>
                     ))}
                   </div>
+                  </>)}
                 </div>
               ))}
             </div>
@@ -3621,6 +3649,7 @@ export default function App() {
   const [taskCrewRequests, setTaskCrewRequests] = useState([]);  // requests (+ links) for selected project
   const [schedZoom, setSchedZoom] = useState("Weeks");
   const [tasksTableCollapsed, setTasksTableCollapsed] = useState(true);
+  const [requestsPanelCollapsed, setRequestsPanelCollapsed] = useState(true);
 
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
@@ -4628,63 +4657,25 @@ export default function App() {
 
   // Print the task schedule as a clean, paginated HTML Gantt (table-based so it
   // renders crisply and breaks across pages, rather than a screenshot).
-  function printTaskSchedule() {
-    if (!schedProjectId) { alert("Pick a project first."); return; }
-    const proj = findProject(projects, schedProjectId);
-    const tasks = (groupedTasks || []).slice(); // ordered/grouped with effective dates
-    if (!tasks.length) { alert("This project has no tasks to print."); return; }
+  // Generic Gantt printer (table-based, paginates cleanly, weekend bands).
+  // rows: [{ label, sublabel?, depth?, isHeader?, bars:[{start,end}], extra? }]
+  // opts: { title, subtitle?, showExtra?, extraHeader? }
+  function printGantt({ title, subtitle, rows, showExtra, extraHeader }) {
     const esc = (v) => String(v == null ? "" : v).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch] || ch));
-
-    // Overall date window across all dated tasks (using effective dates).
-    const dated = tasks.filter((t) => t.eff_start && t.eff_end);
+    const allBars = rows.flatMap((r) => r.bars || []);
     let minD = null, maxD = null;
-    dated.forEach((t) => {
-      const s = toDate(t.eff_start), e = toDate(t.eff_end);
+    allBars.forEach((b) => {
+      const s = toDate(b.start), e = toDate(b.end);
       if (s && (!minD || s < minD)) minD = s;
       if (e && (!maxD || e > maxD)) maxD = e;
     });
+    if (!minD || !maxD) { alert("Nothing with dates to print."); return; }
     const dayMs = 86400000;
-    const totalDays = (minD && maxD) ? Math.max(1, Math.round((maxD - minD) / dayMs) + 1) : 1;
-    const pct = (d) => minD ? ((toDate(d) - minD) / dayMs) / totalDays * 100 : 0;
-
-    const depTagLocal = (type, lag) => {
-      const t = type || "FS"; const n = Number(lag) || 0;
-      return n === 0 ? t : `${t}${n > 0 ? "+" : ""}${n}`;
-    };
-
-    const rows = tasks.map((t) => {
-      const has = t.eff_start && t.eff_end;
-      const left = has ? pct(t.eff_start) : 0;
-      const width = has ? Math.max(0.6, (((toDate(t.eff_end) - toDate(t.eff_start)) / dayMs) + 1) / totalDays * 100) : 0;
-      if (t.isHeader) {
-        return `<tr class="hdr">
-          <td class="name">${esc(t.name)}</td>
-          <td class="date">${has ? esc(formatDate(t.eff_start)) : ""}</td>
-          <td class="date">${has ? esc(formatDate(t.eff_end)) : ""}</td>
-          <td class="assigned"></td>
-          <td class="barcell"><div class="track">${has ? `<div class="bar hdrbar" style="left:${left}%;width:${width}%"></div>` : ""}</div></td>
-        </tr>`;
-      }
-      const predName = t.depends_on ? (taskNameById.get(t.depends_on) || "") : "";
-      const predTag = t.depends_on ? depTagLocal(t.dependency_type, t.dependency_lag) : "";
-      const a = assignedByTaskId.get(t.id);
-      const assignedBits = [];
-      if (a) {
-        [...a.supers].forEach((s) => assignedBits.push("Super: " + s));
-        [...a.fieldCoords].forEach((f) => assignedBits.push("FC: " + f));
-        a.crews.forEach((c) => assignedBits.push(c.name + (c.men ? ` (${c.men})` : "")));
-      }
-      return `<tr>
-        <td class="name" style="padding-left:${8 + (t.depth || 0) * 16}px">${esc(t.name)}${predName ? `<br><span class="pred">↳ ${esc(predName)} <b>${esc(predTag)}</b></span>` : ""}</td>
-        <td class="date">${has ? esc(formatDate(t.eff_start)) : "—"}</td>
-        <td class="date">${has ? esc(formatDate(t.eff_end)) : "—"}</td>
-        <td class="assigned">${assignedBits.length ? esc(assignedBits.join(" · ")) : "<span class='muted'>—</span>"}</td>
-        <td class="barcell"><div class="track">${has ? `<div class="bar" style="left:${left}%;width:${width}%"></div>` : ""}</div></td>
-      </tr>`;
-    }).join("");
+    const totalDays = Math.max(1, Math.round((maxD - minD) / dayMs) + 1);
+    const pct = (d) => ((toDate(d) - minD) / dayMs) / totalDays * 100;
+    const barW = (s, e) => Math.max(0.6, (((toDate(e) - toDate(s)) / dayMs) + 1) / totalDays * 100);
 
     const monthMarks = (() => {
-      if (!minD || !maxD) return "";
       const marks = [];
       const cur = new Date(minD.getFullYear(), minD.getMonth(), 1);
       while (cur <= maxD) {
@@ -4695,8 +4686,22 @@ export default function App() {
       return marks.join("");
     })();
 
-    const title = proj ? `${proj.projectNumber ? proj.projectNumber + " - " : ""}${proj.name}` : "Task Schedule";
-    const html = `<!doctype html><html><head><title>${esc(title)} — Task Schedule</title><style>
+    const rowsHtml = rows.map((r) => {
+      const bars = (r.bars || []).map((b) => `<div class="bar ${r.isHeader ? "hdrbar" : ""}" style="left:${pct(b.start)}%;width:${barW(b.start, b.end)}%"></div>`).join("");
+      const firstStart = (r.bars && r.bars.length) ? r.bars.reduce((m, b) => (!m || toDate(b.start) < toDate(m) ? b.start : m), null) : null;
+      const lastEnd = (r.bars && r.bars.length) ? r.bars.reduce((m, b) => (!m || toDate(b.end) > toDate(m) ? b.end : m), null) : null;
+      const cls = r.isHeader ? "hdr" : "";
+      return `<tr class="${cls}">
+        <td class="name" style="padding-left:${8 + (r.depth || 0) * 16}px">${esc(r.label)}${r.sublabel ? `<br><span class="pred">${esc(r.sublabel)}</span>` : ""}</td>
+        <td class="date">${firstStart ? esc(formatDate(firstStart)) : "—"}</td>
+        <td class="date">${lastEnd ? esc(formatDate(lastEnd)) : "—"}</td>
+        ${showExtra ? `<td class="assigned">${r.extra ? esc(r.extra) : "<span class='muted'>—</span>"}</td>` : ""}
+        <td class="barcell"><div class="track">${bars}</div></td>
+      </tr>`;
+    }).join("");
+
+    const nameW = showExtra ? 22 : 26, dateW = 9, extraW = 18, barW2 = showExtra ? 42 : 56;
+    const html = `<!doctype html><html><head><title>${esc(title)}</title><style>
       @page{size:letter landscape;margin:.4in} *{box-sizing:border-box} body{font-family:Arial,sans-serif;color:#0f172a;font-size:10px;margin:0}
       .header{display:flex;justify-content:space-between;align-items:center;gap:18px;border-bottom:4px solid #047857;padding-bottom:10px;margin-bottom:8px}
       .header-left{display:flex;align-items:center;gap:12px}.logo{height:46px;width:auto;display:block}
@@ -4707,8 +4712,8 @@ export default function App() {
       th{background:#f1f5f9;text-align:left;padding:5px 6px;border-bottom:2px solid #cbd5e1;font-size:9px;text-transform:uppercase;letter-spacing:.03em}
       td{padding:5px 6px;border-bottom:1px solid #e2e8f0;vertical-align:middle}
       tr{break-inside:avoid}
-      col.c-name{width:24%}col.c-date{width:9%}col.c-assigned{width:20%}col.c-bar{width:38%}
-      .name{font-weight:600}.pred{color:#64748b;font-weight:400;font-size:8.5px}.pred b{color:#0f172a}
+      col.c-name{width:${nameW}%}col.c-date{width:${dateW}%}col.c-assigned{width:${extraW}%}col.c-bar{width:${barW2}%}
+      .name{font-weight:600}.pred{color:#64748b;font-weight:400;font-size:8.5px}
       .date{color:#334155;white-space:nowrap}.assigned{color:#065f46;font-size:9px}.muted{color:#94a3b8}
       .barcell{padding:4px 6px}.track{position:relative;height:14px;background:#f1f5f9;border-radius:7px}
       .bar{position:absolute;top:0;height:14px;background:#047857;border-radius:7px;min-width:3px}
@@ -4717,23 +4722,83 @@ export default function App() {
     </style></head><body>
       <div class="header">
         <div class="header-left"><img id="ggc-logo" class="logo" src="${window.location.origin}/logo.png" alt="GGC" onerror="this.style.display='none';window.__logoDone&&window.__logoDone();" onload="window.__logoDone&&window.__logoDone();"/>
-          <div><h1>${esc(title)}</h1><p class="sub">Task Schedule${minD ? " · " + esc(formatDate(minD.toISOString())) + " – " + esc(formatDate(maxD.toISOString())) : ""}</p></div></div>
+          <div><h1>${esc(title)}</h1><p class="sub">${esc(subtitle || "")}${minD ? " · " + esc(formatDate(minD.toISOString())) + " – " + esc(formatDate(maxD.toISOString())) : ""}</p></div></div>
         <div class="sub">Generated ${new Date().toLocaleDateString()}</div>
       </div>
       <div class="axis">${monthMarks}</div>
       <table>
-        <colgroup><col class="c-name"/><col class="c-date"/><col class="c-date"/><col class="c-assigned"/><col class="c-bar"/></colgroup>
-        <thead><tr><th>Task / Predecessor</th><th>Start</th><th>End</th><th>Assigned</th><th>Timeline</th></tr></thead>
-        <tbody>${rows}</tbody>
+        <colgroup><col class="c-name"/><col class="c-date"/><col class="c-date"/>${showExtra ? '<col class="c-assigned"/>' : ""}<col class="c-bar"/></colgroup>
+        <thead><tr><th>${esc(extraHeader && extraHeader.name ? extraHeader.name : "Item")}</th><th>Start</th><th>End</th>${showExtra ? `<th>${esc(extraHeader && extraHeader.extra ? extraHeader.extra : "Detail")}</th>` : ""}<th>Timeline</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
       </table>
       <script>(function(){var done=false;window.__logoDone=function(){if(done)return;done=true;setTimeout(function(){window.print();},100);};setTimeout(function(){if(!done){done=true;window.print();}},2500);})();<\/script>
     </body></html>`;
     const w = window.open("", "_blank", "width=1200,height=900");
-    if (!w) { alert("Allow pop-ups to print the schedule."); return; }
+    if (!w) { alert("Allow pop-ups to print."); return; }
     w.document.write(html);
     w.document.close();
   }
 
+  function printTaskSchedule() {
+    if (!schedProjectId) { alert("Pick a project first."); return; }
+    const proj = findProject(projects, schedProjectId);
+    const tasks = (groupedTasks || []).filter((t) => t.eff_start && t.eff_end);
+    if (!tasks.length) { alert("This project has no dated tasks to print."); return; }
+    const title = proj ? `${proj.projectNumber ? proj.projectNumber + " - " : ""}${proj.name}` : "Task Schedule";
+    const rows = (groupedTasks || []).map((t) => {
+      const has = t.eff_start && t.eff_end;
+      const predName = (!t.isHeader && t.depends_on) ? (taskNameById.get(t.depends_on) || "") : "";
+      const predTag = (!t.isHeader && t.depends_on) ? depTag(t.dependency_type, t.dependency_lag) : "";
+      return {
+        label: t.name,
+        sublabel: predName ? `↳ ${predName} ${predTag}` : "",
+        depth: t.depth || 0,
+        isHeader: !!t.isHeader,
+        bars: has ? [{ start: t.eff_start, end: t.eff_end }] : [],
+      };
+    });
+    // Client-facing schedule: no assigned crew/labor info.
+    printGantt({ title, subtitle: "Task Schedule", rows, showExtra: false, extraHeader: { name: "Task / Predecessor" } });
+  }
+
+  function printProjectGantt() {
+    const rows = (projectGanttRows || []).map((row) => {
+      const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => ({ start: i.start, end: i.end }));
+      return {
+        label: `${row.project.projectNumber ? row.project.projectNumber + " - " : ""}${row.project.name}`,
+        sublabel: row.project.status || "",
+        bars,
+      };
+    }).filter((r) => r.bars.length);
+    if (!rows.length) { alert("Nothing to print in the Project Assignment Gantt."); return; }
+    printGantt({ title: "Project Assignment Gantt", subtitle: "Projects", rows, showExtra: false, extraHeader: { name: "Project" } });
+  }
+
+  function printResourceGantt() {
+    const rows = (resourceGanttRowsWithUnassigned || []).map((row) => {
+      const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => ({ start: i.start, end: i.end }));
+      return {
+        label: row.resource.name,
+        sublabel: row.resource.resourceType || "",
+        bars,
+      };
+    }).filter((r) => r.bars.length);
+    if (!rows.length) { alert("Nothing to print in the Resource Gantt."); return; }
+    printGantt({ title: "Resource Gantt", subtitle: "Resources", rows, showExtra: false, extraHeader: { name: "Resource" } });
+  }
+
+  function printCrewGantt() {
+    const rows = (crewGanttRows || []).map((row) => {
+      const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => ({ start: i.start, end: i.end }));
+      return {
+        label: row.crew.crewName,
+        sublabel: row.crew.foremanName || "",
+        bars,
+      };
+    }).filter((r) => r.bars.length);
+    if (!rows.length) { alert("Nothing to print in the Crew Gantt."); return; }
+    printGantt({ title: "Crew Gantt", subtitle: "Crews", rows, showExtra: false, extraHeader: { name: "Crew" } });
+  }
   function exportResourceResume(resource) {
     if (!resource?.name) return;
     const stats = getResourceStats(resource);
@@ -6584,6 +6649,7 @@ export default function App() {
                   <input className="outline-none text-sm w-40" placeholder="Search projects…" value={dashboardProjectSearch} onChange={(e) => setDashboardProjectSearch(e.target.value)} />
                 </div>
                 <button onClick={exportDashboardExcel} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export Excel</button>
+                <button onClick={printProjectGantt} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Print</button>
                 <button onClick={() => exportSectionScreenshotPdf("project-assignment-gantt", "Project Assignment Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
                 <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                   <ZoomIn size={16} className="text-slate-500" />
@@ -6882,14 +6948,16 @@ export default function App() {
 
                   {/* Crew requests panel */}
                   <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-                    <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                    <button onClick={() => setRequestsPanelCollapsed((c) => !c)} className="flex w-full items-center justify-between border-b border-slate-200 px-5 py-4 text-left">
                       <div className="flex items-center gap-3">
                         <h2 className="text-xl font-bold text-slate-900">{isOffice ? "Requests" : "My Requests"}</h2>
                         {schedPendingRequests.length > 0 && (
                           <span className="rounded-full bg-emerald-700 px-2.5 py-0.5 text-xs font-bold text-white">{schedPendingRequests.length} pending</span>
                         )}
                       </div>
-                    </div>
+                      <span className="flex items-center gap-1 text-sm font-semibold text-slate-500">{requestsPanelCollapsed ? "Show" : "Hide"} <span className="text-xs">{requestsPanelCollapsed ? "▸" : "▾"}</span></span>
+                    </button>
+                    {!requestsPanelCollapsed && (
                     <div className="divide-y divide-slate-100">
                       {taskCrewRequests.length === 0 && staffRequests.length === 0 ? (
                         <div className="px-5 py-6 text-sm text-slate-500">No requests for this project yet.</div>
@@ -6921,6 +6989,7 @@ export default function App() {
                           onDelete={() => deleteStaffRequest(r.id)} />
                       ))}
                     </div>
+                    )}
                   </section>
                 </>
               )}
@@ -6990,6 +7059,7 @@ export default function App() {
                     {zoomModes.map((m) => <option key={m}>{m}</option>)}
                   </select>
                 </div>
+                <button onClick={printResourceGantt} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Print</button>
                 <button onClick={() => exportSectionScreenshotPdf("resource-gantt", "Resource Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
               </div>
             </div>
@@ -7096,7 +7166,8 @@ export default function App() {
                 </div>
                 <p className="text-sm text-slate-500">Rows are crews. Overlapping projects stack below each other within the same crew row.</p>
               </div>
-              <button onClick={() => exportSectionScreenshotPdf("crew-gantt", "Crew Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
+              <button onClick={printCrewGantt} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Print</button>
+                <button onClick={() => exportSectionScreenshotPdf("crew-gantt", "Crew Gantt View")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Export PDF</button>
             </div>
             <div className="mb-4 flex flex-wrap gap-3 items-start">
               <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
