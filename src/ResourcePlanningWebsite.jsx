@@ -1521,8 +1521,14 @@ export function SearchableCrewSelect({ value, onChange, crews }) {
 
 // ─── ProjectForm ──────────────────────────────────────────────────────────────
 
-export function ProjectForm({ form, setForm, onSave, onCancel, onDelete, editing, certifications, projectTypes }) {
+export function ProjectForm({ form, setForm, onSave, onCancel, onDelete, editing, certifications, projectTypes, pmProfiles = [], canEditPMs = false }) {
   function updateField(field, value) { setForm((c) => ({ ...c, [field]: value })); }
+  function togglePm(id) {
+    setForm((c) => {
+      const cur = c.pmIds || [];
+      return { ...c, pmIds: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] };
+    });
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
@@ -1604,6 +1610,23 @@ export function ProjectForm({ form, setForm, onSave, onCancel, onDelete, editing
               <p className="text-xs text-slate-500">Show this project in the Forecast tab revenue table.</p>
             </div>
           </label>
+          <div className="md:col-span-2 space-y-1">
+            <span className="text-sm font-medium text-slate-700">Project Managers</span>
+            <p className="text-xs text-slate-500">{canEditPMs ? "Managers assigned here see this project in the Scheduling tool. Admins always see every project." : "Only an admin can change project managers."}</p>
+            <div className="mt-1 flex flex-wrap gap-2 rounded-xl border border-slate-300 p-3">
+              {pmProfiles.length === 0 && <span className="text-sm text-slate-400">No manager/admin users available.</span>}
+              {pmProfiles.map((p) => {
+                const on = (form.pmIds || []).includes(p.id);
+                return (
+                  <button type="button" key={p.id} disabled={!canEditPMs}
+                    onClick={() => togglePm(p.id)}
+                    className={`rounded-full px-3 py-1.5 text-sm font-semibold transition ${on ? "bg-emerald-700 text-white" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"} ${!canEditPMs ? "cursor-not-allowed opacity-60" : ""}`}>
+                    {p.pmName}{p.role === "admin" ? " (admin)" : ""}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         <div className="flex justify-between gap-3 border-t border-slate-200 p-5">
@@ -3208,6 +3231,234 @@ export function ResourceDemandChart({ items, timeline, zoom, totalResources, onE
 }
 
 
+// ─── TaskGrid (Smartsheet-style editable task table) ─────────────────────────
+// Inline-editable rows with keyboard navigation. Tab/Shift+Tab move between
+// editable cells; at the last cell of the last row, Tab commits and creates a
+// new blank row. Enter commits the row and drops focus to the row below.
+// Double-clicking a row opens the full edit pop-out for advanced options
+// (dependency type, lag, header/parent, crew requests).
+export function TaskGrid({
+  rows, allTasks, taskNameById, requestsByTaskId,
+  onCommitRow, onAddRow, onOpenPopout, onDelete, onRequestCrew, canEdit,
+}) {
+  const EDITABLE_COLS = ["name", "start", "end", "duration", "depends"];
+  const [draft, setDraft] = React.useState(null); // { id, name, start, end, duration, depends }
+  const [active, setActive] = React.useState({ rowId: null, col: null });
+  const inputRefs = React.useRef({}); // `${rowId}:${col}` -> element
+
+  // Build the ordered list of focusable row ids (data rows + the trailing new row).
+  const NEW_ROW = "__new__";
+  const rowOrder = [...rows.map((r) => r.id), NEW_ROW];
+
+  function startEdit(rowId, col) {
+    if (!canEdit) return;
+    const row = rows.find((r) => r.id === rowId);
+    if (rowId === NEW_ROW) {
+      setDraft({ id: NEW_ROW, name: "", start: "", end: "", duration: "", depends: "" });
+    } else if (!draft || draft.id !== rowId) {
+      setDraft({
+        id: rowId,
+        name: row?.name || "",
+        // Seed from STORED dates (not effective) so editing the name of a
+        // dependency-driven row doesn't pin its computed dates.
+        start: row?.start_date || "",
+        end: row?.end_date || "",
+        duration: row?.duration_days || "",
+        depends: row?.depends_on || "",
+      });
+    }
+    setActive({ rowId, col });
+  }
+
+  React.useEffect(() => {
+    const key = `${active.rowId}:${active.col}`;
+    const el = inputRefs.current[key];
+    if (el) { el.focus(); if (el.select) try { el.select(); } catch (e) {} }
+  }, [active]);
+
+  async function commit(d) {
+    const data = d || draft;
+    if (!data) return null;
+    if (!(data.name || "").trim()) { setDraft(null); return null; }
+    const newId = await onCommitRow({
+      name: data.name,
+      start: data.start || "",
+      end: data.end || "",
+      durationDays: data.duration || "",
+      dependsOn: data.depends || "",
+    }, data.id === NEW_ROW ? null : data.id);
+    setDraft(null);
+    return newId;
+  }
+
+  async function handleKeyDown(e, rowId, col) {
+    const colIdx = EDITABLE_COLS.indexOf(col);
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const dir = e.shiftKey ? -1 : 1;
+      let nextCol = colIdx + dir;
+      if (nextCol >= EDITABLE_COLS.length) {
+        // end of row → commit; if this was the new row, a fresh blank row opens
+        await commit();
+        if (rowId === NEW_ROW) { startEdit(NEW_ROW, "name"); }
+        else {
+          const ri = rowOrder.indexOf(rowId);
+          const nxt = rowOrder[ri + 1];
+          if (nxt) startEdit(nxt, "name");
+        }
+        return;
+      }
+      if (nextCol < 0) {
+        const ri = rowOrder.indexOf(rowId);
+        const prev = rowOrder[ri - 1];
+        if (prev) startEdit(prev, EDITABLE_COLS[EDITABLE_COLS.length - 1]);
+        return;
+      }
+      startEdit(rowId, EDITABLE_COLS[nextCol]);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      await commit();
+      const ri = rowOrder.indexOf(rowId);
+      const nxt = rowOrder[ri + 1];
+      if (nxt) startEdit(nxt, col === "depends" ? "name" : col);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setDraft(null);
+      setActive({ rowId: null, col: null });
+    }
+  }
+
+  const setField = (k, v) => setDraft((d) => ({ ...(d || {}), [k]: v }));
+  const cellRef = (rowId, col) => (el) => { if (el) inputRefs.current[`${rowId}:${col}`] = el; };
+  const isEditing = (rowId, col) => active.rowId === rowId && active.col === col && draft && draft.id === rowId;
+
+  const inputCls = "w-full bg-transparent px-2 py-1.5 text-sm outline-none focus:bg-emerald-50";
+  const cellCls = "border-r border-slate-200 align-middle";
+
+  function renderEditable(row, col, display) {
+    const rowId = row ? row.id : NEW_ROW;
+    if (isEditing(rowId, col)) {
+      if (col === "depends") {
+        return (
+          <select ref={cellRef(rowId, col)} className={inputCls} value={draft.depends || ""}
+            onChange={(e) => setField("depends", e.target.value)}
+            onKeyDown={(e) => handleKeyDown(e, rowId, col)}
+            onBlur={() => commit()}>
+            <option value="">—</option>
+            {allTasks.filter((t) => !t.is_header && t.id !== rowId).map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        );
+      }
+      const type = (col === "start" || col === "end") ? "date" : (col === "duration" ? "number" : "text");
+      const val = draft[col] != null ? draft[col] : "";
+      return (
+        <input ref={cellRef(rowId, col)} type={type} className={inputCls} value={val}
+          min={col === "duration" ? 1 : undefined}
+          onChange={(e) => setField(col, e.target.value)}
+          onKeyDown={(e) => handleKeyDown(e, rowId, col)}
+          onBlur={() => commit()} />
+      );
+    }
+    return (
+      <div className={`px-2 py-1.5 text-sm ${canEdit ? "cursor-text" : ""}`} onClick={() => startEdit(rowId, col)}>
+        {display}
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200">
+      <table className="w-full min-w-[920px] border-collapse text-left">
+        <thead className="bg-slate-100 text-slate-600">
+          <tr>
+            <th className="border-r border-slate-200 p-2 text-xs font-bold uppercase tracking-wide">Task</th>
+            <th className="border-r border-slate-200 p-2 text-xs font-bold uppercase tracking-wide w-32">Start</th>
+            <th className="border-r border-slate-200 p-2 text-xs font-bold uppercase tracking-wide w-32">End</th>
+            <th className="border-r border-slate-200 p-2 text-center text-xs font-bold uppercase tracking-wide w-20">Dur</th>
+            <th className="border-r border-slate-200 p-2 text-xs font-bold uppercase tracking-wide w-44">Predecessor</th>
+            <th className="border-r border-slate-200 p-2 text-xs font-bold uppercase tracking-wide">Crew Requests</th>
+            <th className="p-2 text-right text-xs font-bold uppercase tracking-wide w-28">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const sd = row.eff_start || row.start_date;
+            const ed = row.eff_end || row.end_date;
+            const dur = (sd && ed) ? workdayCountBetween(sd, ed) : null;
+            const reqs = requestsByTaskId(row.id);
+            if (row.isHeader) {
+              return (
+                <tr key={row.id} className="border-t border-slate-200 bg-slate-100" onDoubleClick={() => canEdit && onOpenPopout(row)}>
+                  <td className={`${cellCls} px-2 py-1.5 text-sm font-extrabold uppercase tracking-wide text-slate-700`} style={{ paddingLeft: `${8 + (row.depth || 0) * 16}px` }}>
+                    {renderEditable(row, "name", row.name)}
+                  </td>
+                  <td className={cellCls} colSpan={4}><span className="px-2 text-xs text-slate-400">Header — {(allTasks.filter((t) => t.parent_id === row.id && !t.is_header)).length} tasks</span></td>
+                  <td className={cellCls}></td>
+                  <td className="px-2 py-1.5 text-right">
+                    {canEdit && (
+                      <>
+                        <button onClick={() => onOpenPopout(row)} className="mr-1 rounded-lg border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50">Edit</button>
+                        <button onClick={() => onDelete(row.id)} className="rounded-lg border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50">✕</button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            }
+            return (
+              <tr key={row.id} className="border-t border-slate-200 hover:bg-slate-50/60" onDoubleClick={() => canEdit && onOpenPopout(row)}>
+                <td className={cellCls} style={{ paddingLeft: `${(row.depth || 0) * 16}px` }}>
+                  {renderEditable(row, "name", <span className="font-semibold text-slate-900">{row.name}</span>)}
+                </td>
+                <td className={cellCls}>{renderEditable(row, "start", sd ? <span>{formatDate(sd)}</span> : <span className="text-slate-300">—</span>)}</td>
+                <td className={cellCls}>{renderEditable(row, "end", ed ? <span>{formatDate(ed)}</span> : <span className="text-slate-300">—</span>)}</td>
+                <td className={`${cellCls} text-center`}>{renderEditable(row, "duration", dur != null ? <span className="font-semibold">{dur}<span className="ml-0.5 text-xs text-slate-400">d</span></span> : <span className="text-slate-300">—</span>)}</td>
+                <td className={cellCls}>{renderEditable(row, "depends", row.depends_on ? <span>{taskNameById.get(row.depends_on) || "—"} <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">{depTag(row.dependency_type, row.dependency_lag)}</span></span> : <span className="text-slate-300">—</span>)}</td>
+                <td className={cellCls}>
+                  {reqs.length === 0 ? <span className="px-2 text-slate-300">None</span> : (
+                    <div className="flex flex-wrap gap-1 px-2 py-1">
+                      {reqs.map((r) => (
+                        <span key={r.id} className={`rounded-full px-2 py-0.5 text-xs font-bold ${r.status === "approved" ? "bg-emerald-100 text-emerald-700" : r.status === "denied" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>
+                          {r.crew_specialty}{r.men_count ? ` (${r.men_count})` : ""}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </td>
+                <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                  {canEdit && (
+                    <>
+                      <button onClick={() => onRequestCrew(row.id)} className="mr-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-100" title="Request crew">Crew</button>
+                      <button onClick={() => onOpenPopout(row)} className="mr-1 rounded-lg border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50" title="Advanced edit">Edit</button>
+                      <button onClick={() => onDelete(row.id)} className="rounded-lg border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50" title="Delete">✕</button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+          {/* Trailing "new row" — click or tab into it to add a task */}
+          {canEdit && (
+            <tr className="border-t border-slate-200 bg-emerald-50/30">
+              <td className={cellCls}>{renderEditable(null, "name", <span className="text-slate-400">+ Add task…</span>)}</td>
+              <td className={cellCls}>{renderEditable(null, "start", <span className="text-slate-300">—</span>)}</td>
+              <td className={cellCls}>{renderEditable(null, "end", <span className="text-slate-300">—</span>)}</td>
+              <td className={`${cellCls} text-center`}>{renderEditable(null, "duration", <span className="text-slate-300">—</span>)}</td>
+              <td className={cellCls}>{renderEditable(null, "depends", <span className="text-slate-300">—</span>)}</td>
+              <td className={cellCls}></td>
+              <td className="px-2 py-1.5 text-right">
+                <button onClick={() => startEdit(NEW_ROW, "name")} className="rounded-lg border border-emerald-300 bg-emerald-600 px-2 py-1 text-xs font-bold text-white hover:bg-emerald-700">+ Row</button>
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function App() {
   const [projects, setProjects] = useState([]);
   const [assignments, setAssignments] = useState([]);
@@ -3270,6 +3521,8 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState("");
   const [userRole, setUserRole] = useState(null);
   const [pmName, setPmName] = useState(null);
+  const [pmProfiles, setPmProfiles] = useState([]); // manager/admin logins assignable as PMs
+  const [projectPmMap, setProjectPmMap] = useState({}); // { [projectId]: [profileId, ...] }
   const [authLoading, setAuthLoading] = useState(true);
   const [showUserSettings, setShowUserSettings] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ email: "", password: "" });
@@ -3339,7 +3592,7 @@ export default function App() {
   const loadSupabaseData = React.useCallback(async () => {
     if (!supabase) { console.warn("Supabase not connected. Check Vercel environment variables."); return; }
 
-    const [projectsRes, resourcesRes, crewsRes, assignmentsRes, mobilizationsRes, certsRes, forecastRes, settingsRes] = await Promise.all([
+    const [projectsRes, resourcesRes, crewsRes, assignmentsRes, mobilizationsRes, certsRes, forecastRes, settingsRes, pmProfilesRes, projectPmsRes] = await Promise.all([
       supabase.from("projects").select("*").order("created_at", { ascending: false }),
       supabase.from("resources").select("*").order("created_at", { ascending: false }),
       supabase.from("crews").select("*").order("created_at", { ascending: false }),
@@ -3348,6 +3601,8 @@ export default function App() {
       supabase.from("certifications").select("*").order("name", { ascending: true }),
       supabase.from("forecast").select("*"),
       supabase.from("forecast_settings").select("*").limit(1),
+      supabase.from("profiles").select("id, email, role, pm_name").in("role", ["manager", "admin"]),
+      supabase.from("project_pms").select("project_id, profile_id"),
     ]);
 
     if (projectsRes.error) console.error("Projects load error:", projectsRes.error);
@@ -3358,6 +3613,15 @@ export default function App() {
     if (certsRes.error) console.error("Certifications load error:", certsRes.error);
 
     setProjects((projectsRes.data || []).map(mapProjectFromDbLocal));
+    setPmProfiles((pmProfilesRes?.data || []).map((p) => ({ id: p.id, email: p.email, role: p.role, pmName: p.pm_name || p.email })));
+    {
+      const m = {};
+      (projectPmsRes?.data || []).forEach((row) => {
+        if (!m[row.project_id]) m[row.project_id] = [];
+        m[row.project_id].push(row.profile_id);
+      });
+      setProjectPmMap(m);
+    }
     setResources((resourcesRes.data || []).map(mapResourceFromDbLocal));
     const mappedCrews = (crewsRes.data || []).map(mapCrewFromDbLocal);
     setCrews(mappedCrews);
@@ -3675,10 +3939,20 @@ export default function App() {
   // change. This layer is additive: mobilizations remain independently
   // editable and never require a task schedule to exist.
   const [schedProjectId, setSchedProjectId] = useState("");
+  const currentUserId = session?.user?.id || null;
+  // Projects visible in the Scheduling tool:
+  //  • admin → every project
+  //  • manager → only projects they are a PM on
+  //  • pm/viewer → fall back to PM-on-project too (managers + pms are scoped)
+  const schedulableProjects = useMemo(() => {
+    if (userRole === "admin") return projects;
+    if (!currentUserId) return [];
+    return projects.filter((p) => (projectPmMap[p.id] || []).includes(currentUserId));
+  }, [projects, projectPmMap, userRole, currentUserId]);
   const [projectTasks, setProjectTasks] = useState([]);          // tasks for selected project
   const [taskCrewRequests, setTaskCrewRequests] = useState([]);  // requests (+ links) for selected project
   const [schedZoom, setSchedZoom] = useState("Weeks");
-  const [tasksTableCollapsed, setTasksTableCollapsed] = useState(true);
+  const [tasksTableCollapsed, setTasksTableCollapsed] = useState(false);
   const [requestsPanelCollapsed, setRequestsPanelCollapsed] = useState(true);
 
   const [showTaskForm, setShowTaskForm] = useState(false);
@@ -3706,6 +3980,13 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (schedProjectId) loadProjectSchedule(schedProjectId); }, [schedProjectId, loadProjectSchedule]);
+  // If the selected project falls outside the user's scope (e.g. PM removed),
+  // clear the selection so they don't keep viewing a project they can't see.
+  useEffect(() => {
+    if (schedProjectId && !schedulableProjects.some((p) => p.id === schedProjectId)) {
+      setSchedProjectId("");
+    }
+  }, [schedulableProjects, schedProjectId]);
 
   // Realtime: refresh the selected project's schedule on any change.
   useEffect(() => {
@@ -3809,6 +4090,67 @@ export default function App() {
     setShowTaskForm(false);
     setEditingTaskId(null);
     loadProjectSchedule(schedProjectId);
+  }
+
+  // ── Inline grid helpers (Smartsheet-style editing) ────────────────────────
+  // Compute weekend-aware start/end from whatever fields are present, mirroring
+  // saveTask's logic but for a plain values object.
+  function computeTaskDates({ start, end, durationDays, dependsOn, dependencyType, dependencyLag }) {
+    const fmtDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    let s = start || null, e = end || null;
+    if (dependsOn) {
+      const dep = projectTasks.find((t) => t.id === dependsOn);
+      const lag = Number(dependencyLag) || 0;
+      const depStart = dep?.start_date ? toDate(dep.start_date) : null;
+      const depEnd = dep?.end_date ? toDate(dep.end_date) : null;
+      const type = dependencyType || "FS";
+      if (!s && !e) {
+        if (type === "FS" && depEnd) s = fmtDate(nextWorkday(addWorkDays(depEnd, 1 + lag)));
+        else if (type === "SS" && depStart) s = fmtDate(nextWorkday(addWorkDays(depStart, lag)));
+        else if (type === "FF" && depEnd) e = fmtDate(prevWorkday(addWorkDays(depEnd, lag)));
+        else if (type === "SF" && depStart) e = fmtDate(prevWorkday(addWorkDays(depStart, lag)));
+      }
+    }
+    if (!s && e && durationDays) { const d = toDate(e); if (d) s = fmtDate(addWorkDays(prevWorkday(d), -((Number(durationDays) || 1) - 1))); }
+    if (!e) e = taskEndFromDuration(s, durationDays) || null;
+    return { start: s, end: e };
+  }
+
+  // Upsert a single task from inline grid values. Returns the row id (existing
+  // or newly created) so the grid can keep focus continuity.
+  async function upsertTaskInline(values, existingId) {
+    if (!schedProjectId || !supabase) return null;
+    const isHeader = !!values.isHeader;
+    const name = (values.name || "").trim();
+    if (!name) return null; // never persist an empty row
+    const { start, end } = isHeader ? { start: null, end: null } : computeTaskDates(values);
+    const payload = {
+      project_id: schedProjectId,
+      name,
+      is_header: isHeader,
+      parent_id: isHeader ? null : (values.parentId || null),
+      start_date: isHeader ? null : start,
+      end_date: isHeader ? null : end,
+      duration_days: isHeader ? null : (values.durationDays ? Number(values.durationDays) : null),
+      depends_on: isHeader ? null : (values.dependsOn || null),
+      dependency_type: (!isHeader && values.dependsOn) ? (values.dependencyType || "FS") : "FS",
+      dependency_lag: (!isHeader && values.dependsOn) ? (Number(values.dependencyLag) || 0) : 0,
+      updated_at: new Date().toISOString(),
+    };
+    if (existingId) {
+      const { error } = await supabase.from("project_tasks").update(payload).eq("id", existingId);
+      if (error) { console.error(error); alert(`Could not update task: ${error.message}`); return null; }
+      await loadProjectSchedule(schedProjectId);
+      return existingId;
+    }
+    const { data: { user } } = await supabase.auth.getUser();
+    payload.sort_order = projectTasks.length;
+    payload.created_by = user?.id || null;
+    payload.created_by_name = pmName || currentUser;
+    const { data, error } = await supabase.from("project_tasks").insert(payload).select().single();
+    if (error) { console.error(error); alert(`Could not add task: ${error.message}`); return null; }
+    await loadProjectSchedule(schedProjectId);
+    return data?.id || null;
   }
 
   async function deleteTask(id) {
@@ -4944,13 +5286,15 @@ export default function App() {
   }
 
   // ── CRUD: Projects ─────────────────────────────────────────────────────────
-  function openAddProjectForm() { setEditingProjectId(null); setProjectForm(blankProject); setShowProjectForm(true); }
-  function openEditProjectForm(project) { setEditingProjectId(project.id); setProjectForm({ ...blankProject, ...project }); setShowProjectForm(true); }
+  function openAddProjectForm() { setEditingProjectId(null); setProjectForm({ ...blankProject, pmIds: [] }); setShowProjectForm(true); }
+  function openEditProjectForm(project) { setEditingProjectId(project.id); setProjectForm({ ...blankProject, ...project, pmIds: projectPmMap[project.id] || [] }); setShowProjectForm(true); }
 
   async function saveProject() {
     if (!projectForm.name.trim()) { alert("Project name is required."); return; }
     if (!supabase) { alert("Supabase is not connected. Check Vercel environment variables."); return; }
     const payload = projectToDbLocal(projectForm);
+    const pmIds = projectForm.pmIds || [];
+    let savedId = editingProjectId;
     if (editingProjectId) {
       const { data, error } = await supabase.from("projects").update(payload).eq("id", editingProjectId).select().single();
       if (error) { console.error(error); alert("Could not update project."); return; }
@@ -4959,6 +5303,19 @@ export default function App() {
       const { data, error } = await supabase.from("projects").insert(payload).select().single();
       if (error) { console.error(error); alert("Could not save project."); return; }
       setProjects((current) => [mapProjectFromDbLocal(data), ...current]);
+      savedId = data.id;
+    }
+    // Persist PM assignments (admin only — RLS will reject others). Replace the
+    // full set: delete existing rows then insert the chosen ones.
+    if (isAdmin && savedId) {
+      const { error: delErr } = await supabase.from("project_pms").delete().eq("project_id", savedId);
+      if (delErr) console.error("Clear PMs error:", delErr);
+      if (pmIds.length) {
+        const rows = pmIds.map((profile_id) => ({ project_id: savedId, profile_id }));
+        const { error: insErr } = await supabase.from("project_pms").insert(rows);
+        if (insErr) console.error("Insert PMs error:", insErr);
+      }
+      setProjectPmMap((m) => ({ ...m, [savedId]: [...pmIds] }));
     }
     setShowProjectForm(false); setEditingProjectId(null); setProjectForm(blankProject);
   }
@@ -6766,7 +7123,7 @@ export default function App() {
                       className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600"
                     >
                       <option value="">Select a project to schedule…</option>
-                      {[...projects]
+                      {[...schedulableProjects]
                         .sort((a, b) => String(a.projectNumber || "").localeCompare(String(b.projectNumber || ""), undefined, { numeric: true }))
                         .map((p) => (
                           <option key={p.id} value={p.id}>{p.projectNumber ? `${p.projectNumber} - ` : ""}{p.name}</option>
@@ -6852,69 +7209,28 @@ export default function App() {
                     )}
                   </section>
 
-                  {/* Task list with per-task crew request */}
-                  {projectTasks.length > 0 && (
+                  {/* Task list — Smartsheet-style inline grid */}
+                  {(
                     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                       <button onClick={() => setTasksTableCollapsed((c) => !c)} className="mb-3 flex w-full items-center justify-between text-left">
                         <h2 className="text-lg font-bold">Tasks <span className="ml-1 text-sm font-normal text-slate-400">({projectTasks.filter((t) => !t.is_header).length})</span></h2>
                         <span className="flex items-center gap-1 text-sm font-semibold text-slate-500">{tasksTableCollapsed ? "Show" : "Hide"} <span className="text-xs">{tasksTableCollapsed ? "▸" : "▾"}</span></span>
                       </button>
                       {!tasksTableCollapsed && (
-                      <div className="overflow-x-auto rounded-xl border border-slate-200">
-                        <table className="w-full min-w-[860px] text-left text-sm">
-                          <thead className="bg-slate-100 text-slate-600">
-                            <tr>
-                              <th className="p-3">Task</th>
-                              <th className="p-3">Start</th>
-                              <th className="p-3">End</th>
-                              <th className="p-3 text-center">Duration</th>
-                              <th className="p-3">Follows</th>
-                              <th className="p-3">Crew Requests</th>
-                              <th className="p-3 text-right">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {groupedTasks.map((t) => {
-                              const reqsForTask = taskCrewRequests.filter((r) =>
-                                (r.task_crew_request_links || []).some((l) => l.task_id === t.id));
-                              const sd = t.eff_start || t.start_date;
-                              const ed = t.eff_end || t.end_date;
-                              const dur = (sd && ed) ? workdayCountBetween(sd, ed) : null;
-                              return (
-                                <tr key={t.id} className={`border-t border-slate-200 align-top ${t.isHeader ? "bg-slate-100" : ""}`}>
-                                  <td className={`p-3 ${t.isHeader ? "font-extrabold uppercase tracking-wide text-slate-700" : "font-semibold text-slate-900"}`} style={{ paddingLeft: `${12 + (t.depth || 0) * 18}px` }}>{t.name}</td>
-                                  <td className="p-3">{sd ? formatDate(sd) : <span className="text-slate-300">—</span>}</td>
-                                  <td className="p-3">{ed ? formatDate(ed) : <span className="text-slate-300">—</span>}</td>
-                                  <td className="p-3 text-center">{dur != null ? <span className="font-semibold">{dur}<span className="ml-0.5 text-xs font-normal text-slate-400">d</span></span> : <span className="text-slate-300">—</span>}</td>
-                                  <td className="p-3">{!t.isHeader && t.depends_on ? (
-                                    <span>{taskNameById.get(t.depends_on) || "—"} <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">{depTag(t.dependency_type, t.dependency_lag)}</span></span>
-                                  ) : <span className="text-slate-300">—</span>}</td>
-                                  <td className="p-3">
-                                    {t.isHeader ? <span className="text-slate-300">—</span> : reqsForTask.length === 0 ? <span className="text-slate-300">None</span> : (
-                                      <div className="flex flex-wrap gap-1">
-                                        {reqsForTask.map((r) => (
-                                          <span key={r.id} className={`rounded-full px-2 py-0.5 text-xs font-bold ${r.status === "approved" ? "bg-emerald-100 text-emerald-700" : r.status === "denied" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>
-                                            {r.crew_specialty}{r.men_count ? ` (${r.men_count})` : ""}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </td>
-                                  <td className="p-3 text-right">
-                                    {(isPM || isOffice) && (
-                                      <>
-                                        {!t.isHeader && <button onClick={() => openTaskRequestForm(t.id)} className="mr-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">Request Crew</button>}
-                                        <button onClick={() => openEditTaskForm(t)} className="mr-2 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium hover:bg-slate-50">Edit</button>
-                                        <button onClick={() => deleteTask(t.id)} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50">Delete</button>
-                                      </>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
+                      <>
+                        <p className="mb-2 text-xs text-slate-500">Click a cell to edit · Tab moves across, Enter down, a new row appears at the end · double-click a row for advanced options (dependency type, lag, header/parent).</p>
+                        <TaskGrid
+                          rows={groupedTasks}
+                          allTasks={projectTasks}
+                          taskNameById={taskNameById}
+                          requestsByTaskId={(id) => taskCrewRequests.filter((r) => (r.task_crew_request_links || []).some((l) => l.task_id === id))}
+                          onCommitRow={upsertTaskInline}
+                          onOpenPopout={openEditTaskForm}
+                          onDelete={deleteTask}
+                          onRequestCrew={openTaskRequestForm}
+                          canEdit={isPM || isOffice}
+                        />
+                      </>
                       )}
                     </section>
                   )}
@@ -8465,7 +8781,7 @@ export default function App() {
       )}
 
       {/* Forms */}
-      {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} onDelete={() => deleteProject(editingProjectId)} editing={Boolean(editingProjectId)} certifications={certifications} projectTypes={projectTypes} />}
+      {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} onDelete={() => deleteProject(editingProjectId)} editing={Boolean(editingProjectId)} certifications={certifications} projectTypes={projectTypes} pmProfiles={pmProfiles} canEditPMs={isAdmin} />}
       {showTaskForm && (
         <TaskForm
           form={taskForm}
