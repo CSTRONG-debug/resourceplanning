@@ -3242,30 +3242,44 @@ export function TaskGrid({
   onCommitRow, onAddRow, onOpenPopout, onDelete, onRequestCrew, canEdit,
 }) {
   const EDITABLE_COLS = ["name", "start", "end", "duration", "depends"];
-  const [draft, setDraft] = React.useState(null); // { id, name, start, end, duration, depends }
+  const NEW_ROW = "__new__";
   const [active, setActive] = React.useState({ rowId: null, col: null });
   const inputRefs = React.useRef({}); // `${rowId}:${col}` -> element
+  // The draft is held in a ref (not state) so navigating between cells never
+  // tears down/reloads the row mid-edit. We mirror it into state only to drive
+  // the input values for the row currently being edited.
+  const draftRef = React.useRef(null);
+  const [draftRowId, setDraftRowId] = React.useState(null);
+  const [, forceRender] = React.useState(0);
+  const focusGuard = React.useRef(false); // true while we move focus programmatically
+  const committingRef = React.useRef(false);
 
-  // Build the ordered list of focusable row ids (data rows + the trailing new row).
-  const NEW_ROW = "__new__";
   const rowOrder = [...rows.map((r) => r.id), NEW_ROW];
+
+  function seedDraft(rowId) {
+    if (rowId === NEW_ROW) return { id: NEW_ROW, name: "", start: "", end: "", duration: "", depends: "" };
+    const row = rows.find((r) => r.id === rowId);
+    return {
+      id: rowId,
+      name: row?.name || "",
+      // Seed from STORED dates (not effective) so editing a name on a
+      // dependency-driven row doesn't pin its computed dates.
+      start: row?.start_date || "",
+      end: row?.end_date || "",
+      duration: row?.duration_days || "",
+      depends: row?.depends_on || "",
+    };
+  }
 
   function startEdit(rowId, col) {
     if (!canEdit) return;
-    const row = rows.find((r) => r.id === rowId);
-    if (rowId === NEW_ROW) {
-      setDraft({ id: NEW_ROW, name: "", start: "", end: "", duration: "", depends: "" });
-    } else if (!draft || draft.id !== rowId) {
-      setDraft({
-        id: rowId,
-        name: row?.name || "",
-        // Seed from STORED dates (not effective) so editing the name of a
-        // dependency-driven row doesn't pin its computed dates.
-        start: row?.start_date || "",
-        end: row?.end_date || "",
-        duration: row?.duration_days || "",
-        depends: row?.depends_on || "",
-      });
+    // If we move to a DIFFERENT row, commit the one we are leaving first.
+    if (draftRef.current && draftRef.current.id !== rowId) {
+      commit(draftRef.current);
+    }
+    if (!draftRef.current || draftRef.current.id !== rowId) {
+      draftRef.current = seedDraft(rowId);
+      setDraftRowId(rowId);
     }
     setActive({ rowId, col });
   }
@@ -3273,64 +3287,96 @@ export function TaskGrid({
   React.useEffect(() => {
     const key = `${active.rowId}:${active.col}`;
     const el = inputRefs.current[key];
-    if (el) { el.focus(); if (el.select) try { el.select(); } catch (e) {} }
+    if (el) {
+      focusGuard.current = true;
+      el.focus();
+      if (el.select) { try { el.select(); } catch (e) {} }
+      // release the guard after the blur from the previous cell has flushed
+      setTimeout(() => { focusGuard.current = false; }, 0);
+    }
   }, [active]);
 
-  async function commit(d) {
-    const data = d || draft;
-    if (!data) return null;
-    if (!(data.name || "").trim()) { setDraft(null); return null; }
-    const newId = await onCommitRow({
-      name: data.name,
-      start: data.start || "",
-      end: data.end || "",
-      durationDays: data.duration || "",
-      dependsOn: data.depends || "",
-    }, data.id === NEW_ROW ? null : data.id);
-    setDraft(null);
+  async function commit(data) {
+    const d = data || draftRef.current;
+    if (!d) return null;
+    if (committingRef.current) return null;
+    if (!(d.name || "").trim()) { draftRef.current = null; setDraftRowId(null); return null; }
+    committingRef.current = true;
+    const wasNew = d.id === NEW_ROW;
+    draftRef.current = null;
+    setDraftRowId(null);
+    let newId = null;
+    try {
+      newId = await onCommitRow({
+        name: d.name,
+        start: d.start || "",
+        end: d.end || "",
+        durationDays: d.duration || "",
+        dependsOn: d.depends || "",
+      }, wasNew ? null : d.id);
+    } finally {
+      committingRef.current = false;
+    }
     return newId;
   }
+
+  // Blur on a cell only commits when focus is actually leaving the grid (not
+  // when we are programmatically hopping to the next cell).
+  function handleBlur() {
+    setTimeout(() => {
+      if (focusGuard.current) return; // we moved focus on purpose; ignore
+      if (draftRef.current) commit(draftRef.current);
+    }, 60);
+  }
+
+  function moveTo(rowId, col) { startEdit(rowId, col); }
 
   async function handleKeyDown(e, rowId, col) {
     const colIdx = EDITABLE_COLS.indexOf(col);
     if (e.key === "Tab") {
       e.preventDefault();
       const dir = e.shiftKey ? -1 : 1;
-      let nextCol = colIdx + dir;
+      const nextCol = colIdx + dir;
       if (nextCol >= EDITABLE_COLS.length) {
-        // end of row → commit; if this was the new row, a fresh blank row opens
-        await commit();
-        if (rowId === NEW_ROW) { startEdit(NEW_ROW, "name"); }
-        else {
+        // end of row → commit this row, then open the next (or a fresh new row)
+        focusGuard.current = true;
+        await commit(draftRef.current);
+        if (rowId === NEW_ROW) {
+          draftRef.current = seedDraft(NEW_ROW); setDraftRowId(NEW_ROW);
+          setActive({ rowId: NEW_ROW, col: "name" });
+        } else {
           const ri = rowOrder.indexOf(rowId);
-          const nxt = rowOrder[ri + 1];
-          if (nxt) startEdit(nxt, "name");
+          const nxt = rowOrder[ri + 1] || NEW_ROW;
+          moveTo(nxt, "name");
         }
         return;
       }
       if (nextCol < 0) {
         const ri = rowOrder.indexOf(rowId);
         const prev = rowOrder[ri - 1];
-        if (prev) startEdit(prev, EDITABLE_COLS[EDITABLE_COLS.length - 1]);
+        if (prev) moveTo(prev, EDITABLE_COLS[EDITABLE_COLS.length - 1]);
         return;
       }
-      startEdit(rowId, EDITABLE_COLS[nextCol]);
+      // move within the SAME row — no commit, draft stays intact
+      setActive({ rowId, col: EDITABLE_COLS[nextCol] });
     } else if (e.key === "Enter") {
       e.preventDefault();
-      await commit();
+      focusGuard.current = true;
+      await commit(draftRef.current);
       const ri = rowOrder.indexOf(rowId);
-      const nxt = rowOrder[ri + 1];
-      if (nxt) startEdit(nxt, col === "depends" ? "name" : col);
+      const nxt = rowOrder[ri + 1] || NEW_ROW;
+      moveTo(nxt, "name");
     } else if (e.key === "Escape") {
       e.preventDefault();
-      setDraft(null);
+      draftRef.current = null;
+      setDraftRowId(null);
       setActive({ rowId: null, col: null });
     }
   }
 
-  const setField = (k, v) => setDraft((d) => ({ ...(d || {}), [k]: v }));
+  const setField = (k, v) => { if (draftRef.current) { draftRef.current = { ...draftRef.current, [k]: v }; forceRender((n) => n + 1); } };
   const cellRef = (rowId, col) => (el) => { if (el) inputRefs.current[`${rowId}:${col}`] = el; };
-  const isEditing = (rowId, col) => active.rowId === rowId && active.col === col && draft && draft.id === rowId;
+  const isEditing = (rowId, col) => active.rowId === rowId && active.col === col && draftRef.current && draftRef.current.id === rowId;
 
   const inputCls = "w-full bg-transparent px-2 py-1.5 text-sm outline-none focus:bg-emerald-50";
   const cellCls = "border-r border-slate-200 align-middle";
@@ -3338,12 +3384,13 @@ export function TaskGrid({
   function renderEditable(row, col, display) {
     const rowId = row ? row.id : NEW_ROW;
     if (isEditing(rowId, col)) {
+      const d = draftRef.current || {};
       if (col === "depends") {
         return (
-          <select ref={cellRef(rowId, col)} className={inputCls} value={draft.depends || ""}
+          <select ref={cellRef(rowId, col)} className={inputCls} value={d.depends || ""}
             onChange={(e) => setField("depends", e.target.value)}
             onKeyDown={(e) => handleKeyDown(e, rowId, col)}
-            onBlur={() => commit()}>
+            onBlur={handleBlur}>
             <option value="">—</option>
             {allTasks.filter((t) => !t.is_header && t.id !== rowId).map((t) => (
               <option key={t.id} value={t.id}>{t.name}</option>
@@ -3352,13 +3399,13 @@ export function TaskGrid({
         );
       }
       const type = (col === "start" || col === "end") ? "date" : (col === "duration" ? "number" : "text");
-      const val = draft[col] != null ? draft[col] : "";
+      const val = d[col] != null ? d[col] : "";
       return (
         <input ref={cellRef(rowId, col)} type={type} className={inputCls} value={val}
           min={col === "duration" ? 1 : undefined}
           onChange={(e) => setField(col, e.target.value)}
           onKeyDown={(e) => handleKeyDown(e, rowId, col)}
-          onBlur={() => commit()} />
+          onBlur={handleBlur} />
       );
     }
     return (
