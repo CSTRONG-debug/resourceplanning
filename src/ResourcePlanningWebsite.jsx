@@ -4663,17 +4663,27 @@ export default function App() {
   function printGantt({ title, subtitle, rows, showExtra, extraHeader, legend }) {
     const esc = (v) => String(v == null ? "" : v).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch] || ch));
     const allBars = rows.flatMap((r) => r.bars || []);
-    let minD = null, maxD = null;
+    let maxD = null;
     allBars.forEach((b) => {
-      const s = toDate(b.start), e = toDate(b.end);
-      if (s && (!minD || s < minD)) minD = s;
+      const e = toDate(b.end);
       if (e && (!maxD || e > maxD)) maxD = e;
     });
-    if (!minD || !maxD) { alert("Nothing with dates to print."); return; }
+    if (!maxD) { alert("Nothing with dates to print."); return; }
+    // Timeline starts at TODAY and runs forward. Anything already underway is
+    // clipped to begin at today so the current-and-upcoming window isn't pushed
+    // off the page. The Start/End columns still show the real dates.
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const minD = today;
+    if (maxD < minD) maxD = minD; // everything is in the past — show a thin today column
     const dayMs = 86400000;
     const totalDays = Math.max(1, Math.round((maxD - minD) / dayMs) + 1);
-    const pct = (d) => ((toDate(d) - minD) / dayMs) / totalDays * 100;
-    const barW = (s, e) => Math.max(0.6, (((toDate(e) - toDate(s)) / dayMs) + 1) / totalDays * 100);
+    const clampStart = (d) => { const x = toDate(d); return (x && x < minD) ? minD : x; };
+    const pct = (d) => ((clampStart(d) - minD) / dayMs) / totalDays * 100;
+    const barW = (s, e) => {
+      const cs = clampStart(s), ce = toDate(e);
+      if (!cs || !ce || ce < minD) return 0; // entirely in the past → no visible bar
+      return Math.max(0.6, (((ce - cs) / dayMs) + 1) / totalDays * 100);
+    };
 
     const monthMarks = (() => {
       const marks = [];
@@ -4688,8 +4698,10 @@ export default function App() {
 
     const rowsHtml = rows.map((r) => {
       const bars = (r.bars || []).map((b) => {
+        const w = barW(b.start, b.end);
+        if (w <= 0) return ""; // fully in the past — table still shows real dates
         const color = b.color || (r.isHeader ? "#334155" : "#047857");
-        return `<div class="bar" style="left:${pct(b.start)}%;width:${barW(b.start, b.end)}%;background:${color}"></div>`;
+        return `<div class="bar" style="left:${pct(b.start)}%;width:${w}%;background:${color}"></div>`;
       }).join("");
       const firstStart = (r.bars && r.bars.length) ? r.bars.reduce((m, b) => (!m || toDate(b.start) < toDate(m) ? b.start : m), null) : null;
       const lastEnd = (r.bars && r.bars.length) ? r.bars.reduce((m, b) => (!m || toDate(b.end) > toDate(m) ? b.end : m), null) : null;
@@ -4703,9 +4715,9 @@ export default function App() {
       </tr>`;
     }).join("");
 
-    const nameW = showExtra ? 22 : 26, dateW = 9, extraW = 18, barW2 = showExtra ? 42 : 56;
+    const nameW = showExtra ? 20 : 24, dateW = 8, extraW = 16, barW2 = showExtra ? 48 : 60;
     const html = `<!doctype html><html><head><title>${esc(title)}</title><style>
-      @page{size:letter landscape;margin:.4in} *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact} body{font-family:Arial,sans-serif;color:#0f172a;font-size:10px;margin:0}
+      @page{size:17in 11in;margin:.4in} *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact} body{font-family:Arial,sans-serif;color:#0f172a;font-size:10px;margin:0}
       .header{display:flex;justify-content:space-between;align-items:center;gap:18px;border-bottom:4px solid #047857;padding-bottom:10px;margin-bottom:8px}
       .header-left{display:flex;align-items:center;gap:12px}.logo{height:46px;width:auto;display:block}
       h1{font-size:18px;margin:0}.sub{color:#64748b;font-size:11px}
@@ -4715,6 +4727,7 @@ export default function App() {
       .legend .lg{display:inline-flex;align-items:center;gap:4px}
       .legend .sw{display:inline-block;width:12px;height:10px;border-radius:2px}
       table{width:100%;border-collapse:collapse;table-layout:fixed}
+      thead{display:table-header-group}
       th{background:#f1f5f9;text-align:left;padding:5px 6px;border-bottom:2px solid #cbd5e1;font-size:9px;text-transform:uppercase;letter-spacing:.03em}
       td{padding:5px 6px;border-bottom:1px solid #e2e8f0;vertical-align:middle}
       tr{break-inside:avoid}
@@ -4728,7 +4741,7 @@ export default function App() {
     </style></head><body>
       <div class="header">
         <div class="header-left"><img id="ggc-logo" class="logo" src="${window.location.origin}/logo.png" alt="GGC" onerror="this.style.display='none';window.__logoDone&&window.__logoDone();" onload="window.__logoDone&&window.__logoDone();"/>
-          <div><h1>${esc(title)}</h1><p class="sub">${esc(subtitle || "")}${minD ? " · " + esc(formatDate(minD.toISOString())) + " – " + esc(formatDate(maxD.toISOString())) : ""}</p></div></div>
+          <div><h1>${esc(title)}</h1><p class="sub">${esc(subtitle || "")} · Timeline ${esc(formatDate(minD.toISOString()))} – ${esc(formatDate(maxD.toISOString()))} (today forward)</p></div></div>
         <div class="sub">Generated ${new Date().toLocaleDateString()}</div>
       </div>
       ${(legend && legend.length) ? `<div class="legend">${legend.map((l) => `<span class="lg"><span class="sw" style="background:${l[0]}"></span>${esc(l[1])}</span>`).join("")}</div>` : ""}
