@@ -2903,6 +2903,35 @@ export function UnassignedNeedGanttRow({ resource, items, timeline }) {
   );
 }
 
+// ─── ReverseProjectGanttRow ─────────────────────────────────────────────────
+// Used by the reversed Resource Gantt: one row per PROJECT, bars labeled with
+// the resource(s) of the filtered title assigned to it (or "Unassigned").
+export function ReverseProjectGanttRow({ row, timeline, striped, unassigned, onClick }) {
+  const sortedItems = [...(row.items || [])].sort((a, b) => new Date(a.start) - new Date(b.start));
+  const projectLabel = `${row.project.projectNumber ? row.project.projectNumber + " - " : ""}${row.project.name}`;
+  const nameLabel = unassigned ? "Unassigned" : (row.names || []).join(", ");
+  return (
+    <div className={`grid grid-cols-[320px_1fr] items-center gap-0 h-7 ${striped ? "bg-slate-100/60" : ""}`}>
+      <div className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden">
+        <button onClick={onClick} className="block w-full truncate text-left text-[12px] font-semibold text-slate-900 hover:text-emerald-700" title={`${projectLabel}${nameLabel ? " — " + nameLabel : ""}`}>
+          {projectLabel}
+          {nameLabel && <span className={`ml-1 font-normal text-[10px] ${unassigned ? "text-amber-700" : "text-emerald-700"}`}>· {nameLabel}</span>}
+        </button>
+      </div>
+      <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
+        {sortedItems.map((item) => (
+          <GanttSegmentBar
+            key={`rev-${row.project.id}-${item.id}`}
+            item={item}
+            timeline={timeline}
+            label={unassigned ? "Unassigned" : (row.names || []).join(", ")}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── CrewGanttRow ────────────────────────────────────────────────────────────
 
 export function CrewGanttRow({ crew, items, timeline }) {
@@ -3250,6 +3279,7 @@ export default function App() {
   const [projectSort, setProjectSort] = useState({ key: "projectNumber", direction: "asc" });
   const [projectGanttSort, setProjectGanttSort] = useState("projectNumber");
   const [resourceGanttSort, setResourceGanttSort] = useState("name");
+  const [reverseResourceGantt, setReverseResourceGantt] = useState(false);
   const [crewGanttSort, setCrewGanttSort] = useState("crewName");
   const [resourceSort, setResourceSort] = useState({ key: "name", direction: "asc" });
   const [crewSort, setCrewSort] = useState({ key: "crewName", direction: "asc" });
@@ -4522,6 +4552,55 @@ export default function App() {
     });
   })();
 
+  // ── Reverse Resource Gantt ────────────────────────────────────────────────
+  // Flips the Resource Gantt: rows become PROJECTS, and each project's bar(s)
+  // show the resource(s) of the filtered title(s) assigned to it. Projects with
+  // no resource of the filtered title are collected at the bottom under an
+  // "Unassigned" label. Honors the same division/status/search filters.
+  const reverseResourceRows = (() => {
+    if (!reverseResourceGantt) return { assigned: [], unassigned: [] };
+    const roleFields = (dashboardResourceTypeFilter || [])
+      .map((rt) => RESOURCE_TYPE_TO_ROLE[rt]).filter(Boolean);
+    const uniqueRoleFields = [...new Set(roleFields)];
+    const q = (dashboardResourceSearch || "").toLowerCase();
+    const assigned = [];
+    const unassigned = [];
+    // One row per project that has any visible mobilization in the window.
+    const byProject = new Map();
+    resourceTimelineVisibleItems.forEach((item) => {
+      const pid = item.project?.id;
+      if (!pid) return;
+      if (!byProject.has(pid)) byProject.set(pid, { project: item.project, items: [] });
+      byProject.get(pid).items.push(item);
+    });
+    [...byProject.values()].forEach(({ project, items }) => {
+      // Collect resource names of the filtered title across this project's mobs.
+      const names = new Set();
+      items.forEach((item) => {
+        uniqueRoleFields.forEach((rf) => {
+          const n = (item[rf] || item.assignment?.[rf] || "").trim();
+          if (n) {
+            // Only count names whose resource record matches the filtered title.
+            const rec = resourceByName.get(n);
+            if (!rec || dashboardResourceTypeFilter.includes(rec.resourceType)) names.add(n);
+          }
+        });
+      });
+      const projectLabel = `${project.projectNumber ? project.projectNumber + " - " : ""}${project.name}`;
+      // Apply the search box against the project label OR the assigned names.
+      if (q && !projectLabel.toLowerCase().includes(q) && ![...names].some((n) => n.toLowerCase().includes(q))) return;
+      const row = { project, items, names: [...names] };
+      if (names.size > 0) assigned.push(row); else unassigned.push(row);
+    });
+    const earliest = (row) => {
+      const ds = (row.items || []).map((i) => toDate(i.start)).filter(Boolean);
+      return ds.length ? Math.min(...ds.map((d) => d.getTime())) : Number.MAX_SAFE_INTEGER;
+    };
+    assigned.sort((a, b) => earliest(a) - earliest(b));
+    unassigned.sort((a, b) => earliest(a) - earliest(b));
+    return { assigned, unassigned };
+  })();
+
   const crewGanttRows = activeCrews
     .filter((c) => {
       if (dashboardCrewSearch) {
@@ -4685,17 +4764,32 @@ export default function App() {
       return Math.max(0.6, (((ce - cs) / dayMs) + 1) / totalDays * 100);
     };
 
+    // Month gridline marks, positioned as a % of the timeline column. Rendered
+    // inside a table cell so they line up exactly with the bars below them.
     const monthMarks = (() => {
       const marks = [];
       const cur = new Date(minD.getFullYear(), minD.getMonth(), 1);
+      // start at the first month boundary on/after today
+      if (cur < minD) cur.setMonth(cur.getMonth() + 1);
       while (cur <= maxD) {
         const p = ((cur - minD) / dayMs) / totalDays * 100;
-        if (p >= 0 && p <= 100) marks.push(`<span class="mark" style="left:${p}%">${cur.toLocaleDateString(undefined, { month: "short", year: "2-digit" })}</span>`);
+        if (p >= 0 && p <= 100) marks.push(`<span class="mark" style="left:${p}%"><span class="tick"></span><span class="lbl">${cur.toLocaleDateString(undefined, { month: "short", year: "2-digit" })}</span></span>`);
         cur.setMonth(cur.getMonth() + 1);
       }
+      // vertical gridlines behind the bars too
       return marks.join("");
     })();
 
+    const gridlines = (() => {
+      let g = "", cur = new Date(minD.getFullYear(), minD.getMonth(), 1);
+      if (cur < minD) cur.setMonth(cur.getMonth() + 1);
+      while (cur <= maxD) {
+        const p = ((cur - minD) / dayMs) / totalDays * 100;
+        if (p >= 0 && p <= 100) g += `<span class="grid" style="left:${p}%"></span>`;
+        cur.setMonth(cur.getMonth() + 1);
+      }
+      return g;
+    })();
     const rowsHtml = rows.map((r) => {
       const bars = (r.bars || []).map((b) => {
         const w = barW(b.start, b.end);
@@ -4711,7 +4805,7 @@ export default function App() {
         <td class="date">${firstStart ? esc(formatDate(firstStart)) : "—"}</td>
         <td class="date">${lastEnd ? esc(formatDate(lastEnd)) : "—"}</td>
         ${showExtra ? `<td class="assigned">${r.extra ? esc(r.extra) : "<span class='muted'>—</span>"}</td>` : ""}
-        <td class="barcell"><div class="track">${bars}</div></td>
+        <td class="barcell"><div class="track">${gridlines}${bars}</div></td>
       </tr>`;
     }).join("");
 
@@ -4721,8 +4815,13 @@ export default function App() {
       .header{display:flex;justify-content:space-between;align-items:center;gap:18px;border-bottom:4px solid #047857;padding-bottom:10px;margin-bottom:8px}
       .header-left{display:flex;align-items:center;gap:12px}.logo{height:46px;width:auto;display:block}
       h1{font-size:18px;margin:0}.sub{color:#64748b;font-size:11px}
-      .axis{position:relative;height:14px;margin:2px 0 4px;border-bottom:1px solid #cbd5e1}
-      .mark{position:absolute;font-size:8px;color:#64748b;transform:translateX(2px)}
+      .axisrow th{background:#fff;border-bottom:1px solid #cbd5e1;padding:0}
+      .axiscell{padding:0 6px !important}
+      .axis{position:relative;height:14px}
+      .mark{position:absolute;font-size:8px;color:#64748b}
+      .mark .tick{position:absolute;top:12px;left:0;width:1px;height:4px;background:#cbd5e1}
+      .mark .lbl{position:absolute;top:2px;left:2px;white-space:nowrap}
+      .grid{position:absolute;top:0;bottom:0;width:1px;background:#eef2f7}
       .legend{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 4px;font-size:9px;color:#334155}
       .legend .lg{display:inline-flex;align-items:center;gap:4px}
       .legend .sw{display:inline-block;width:12px;height:10px;border-radius:2px}
@@ -4745,10 +4844,12 @@ export default function App() {
         <div class="sub">Generated ${new Date().toLocaleDateString()}</div>
       </div>
       ${(legend && legend.length) ? `<div class="legend">${legend.map((l) => `<span class="lg"><span class="sw" style="background:${l[0]}"></span>${esc(l[1])}</span>`).join("")}</div>` : ""}
-      <div class="axis">${monthMarks}</div>
       <table>
         <colgroup><col class="c-name"/><col class="c-date"/><col class="c-date"/>${showExtra ? '<col class="c-assigned"/>' : ""}<col class="c-bar"/></colgroup>
-        <thead><tr><th>${esc(extraHeader && extraHeader.name ? extraHeader.name : "Item")}</th><th>Start</th><th>End</th>${showExtra ? `<th>${esc(extraHeader && extraHeader.extra ? extraHeader.extra : "Detail")}</th>` : ""}<th>Timeline</th></tr></thead>
+        <thead>
+          <tr><th>${esc(extraHeader && extraHeader.name ? extraHeader.name : "Item")}</th><th>Start</th><th>End</th>${showExtra ? `<th>${esc(extraHeader && extraHeader.extra ? extraHeader.extra : "Detail")}</th>` : ""}<th>Timeline</th></tr>
+          <tr class="axisrow"><th colspan="${showExtra ? 4 : 3}"></th><th class="axiscell"><div class="axis">${monthMarks}</div></th></tr>
+        </thead>
         <tbody>${rowsHtml}</tbody>
       </table>
       <script>(function(){var done=false;window.__logoDone=function(){if(done)return;done=true;setTimeout(function(){window.print();},100);};setTimeout(function(){if(!done){done=true;window.print();}},2500);})();<\/script>
@@ -4809,6 +4910,30 @@ export default function App() {
 
   function printResourceGantt() {
     const usedDivs = new Set();
+    if (reverseResourceGantt) {
+      // Reversed: projects as rows, assigned resource name as the label/sublabel,
+      // with an Unassigned group at the bottom.
+      const mkRows = (list, isUn) => list.map((row) => {
+        const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => {
+          const div = i.project && i.project.division;
+          if (div) usedDivs.add(div);
+          return { start: i.start, end: i.end, color: divisionSvgColors[div] || "#475569" };
+        });
+        return {
+          label: `${row.project.projectNumber ? row.project.projectNumber + " - " : ""}${row.project.name}`,
+          sublabel: isUn ? "Unassigned" : (row.names || []).join(", "),
+          bars,
+        };
+      }).filter((r) => r.bars.length);
+      const rows = mkRows(reverseResourceRows.assigned, false);
+      const unRows = mkRows(reverseResourceRows.unassigned, true);
+      const all = [...rows];
+      if (unRows.length) { all.push({ label: `UNASSIGNED — no ${(dashboardResourceTypeFilter || []).join(" / ") || "resource"}`, isHeader: true, bars: [] }); all.push(...unRows); }
+      if (!all.length) { alert("Nothing to print."); return; }
+      const legend = [...usedDivs].map((d) => [divisionSvgColors[d] || "#475569", d]);
+      printGantt({ title: "Resource Gantt (Reversed)", subtitle: `By ${(dashboardResourceTypeFilter || []).join(" / ") || "resource"}`, rows: all, showExtra: false, extraHeader: { name: "Project · Assigned" }, legend });
+      return;
+    }
     const rows = (resourceGanttRowsWithUnassigned || []).map((row) => {
       const bars = (row.items || []).filter((i) => i.start && i.end).map((i) => {
         const div = i.project && i.project.division;
@@ -6940,7 +7065,7 @@ export default function App() {
                   <button onClick={() => setExpandedView("resource")} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50" title="Open enlarged view">↗</button>
                   <h2 className="text-xl font-bold">Resource Gantt View</h2>
                 </div>
-                <p className="text-sm text-slate-500">Rows are resources. Bars show the assigned project name for each mobilization.</p>
+                <p className="text-sm text-slate-500">{reverseResourceGantt ? "Reversed: rows are projects. Bars show the assigned resource of the filtered title; projects with none are listed under Unassigned." : "Rows are resources. Bars show the assigned project name for each mobilization."}</p>
               </div>
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2">
@@ -6972,6 +7097,7 @@ export default function App() {
                     {zoomModes.map((m) => <option key={m}>{m}</option>)}
                   </select>
                 </div>
+                <button onClick={() => setReverseResourceGantt((v) => !v)} className={`rounded-xl px-3 py-2 text-sm font-semibold ${reverseResourceGantt ? "bg-emerald-700 text-white hover:bg-emerald-800" : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`} title="Flip between resources-as-rows and projects-as-rows">⇄ {reverseResourceGantt ? "Reversed" : "Reverse"}</button>
                 <button onClick={printResourceGantt} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Print</button>
               </div>
             </div>
@@ -6982,13 +7108,32 @@ export default function App() {
                   <GanttBackdrop timeline={resourceTimeline} />
                 </div>
                 <div className="relative z-10">
-                  {resourceGanttRowsWithUnassigned.map((row, idx) => (
-                    <div key={row.resource.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
-                      {row.isUnassignedNeedRow
-                        ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} />
-                        : <ResourceGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} onResourceClick={setFocusedResource} />}
-                    </div>
-                  ))}
+                  {!reverseResourceGantt ? (
+                    resourceGanttRowsWithUnassigned.map((row, idx) => (
+                      <div key={row.resource.id} className={`py-0.5 ${idx % 2 === 1 ? "bg-slate-100/60" : ""}`}>
+                        {row.isUnassignedNeedRow
+                          ? <UnassignedNeedGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} />
+                          : <ResourceGanttRow resource={row.resource} items={row.items} timeline={resourceTimeline} onResourceClick={setFocusedResource} />}
+                      </div>
+                    ))
+                  ) : (
+                    <>
+                      {reverseResourceRows.assigned.map((row, idx) => (
+                        <ReverseProjectGanttRow key={row.project.id} row={row} timeline={resourceTimeline} striped={idx % 2 === 1} onClick={() => openEditAssignmentForm(row.items[0].assignment)} />
+                      ))}
+                      {reverseResourceRows.unassigned.length > 0 && (
+                        <>
+                          <div className="sticky left-0 z-20 mt-2 bg-amber-50 px-3 py-1 text-xs font-extrabold uppercase tracking-wide text-amber-800" style={{ width: "320px" }}>Unassigned — no {(dashboardResourceTypeFilter || []).join(" / ") || "resource"}</div>
+                          {reverseResourceRows.unassigned.map((row, idx) => (
+                            <ReverseProjectGanttRow key={row.project.id} row={row} timeline={resourceTimeline} striped={idx % 2 === 1} unassigned onClick={() => openEditAssignmentForm(row.items[0].assignment)} />
+                          ))}
+                        </>
+                      )}
+                      {reverseResourceRows.assigned.length === 0 && reverseResourceRows.unassigned.length === 0 && (
+                        <div className="p-6 text-sm text-slate-500">No projects match the current filters.</div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -7464,7 +7609,20 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <button onClick={() => setSelectedUtilizationCrew(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
+                <div className="flex gap-2">
+                  <button onClick={() => printGantt({
+                    title: `${getCrewDisplayName(selectedUtilizationCrew)} — Utilization`,
+                    subtitle: `${utilizationStart} to ${utilizationEnd}`,
+                    rows: items.map((item) => ({
+                      label: `${item.project.projectNumber ? item.project.projectNumber + " - " : ""}${item.project.name}`,
+                      sublabel: `${getCrewMenForItem(item)} men`,
+                      bars: (item.start && item.end) ? [{ start: item.start, end: item.end, color: divisionSvgColors[item.project.division] || "#475569" }] : [],
+                    })).filter((r) => r.bars.length),
+                    showExtra: false,
+                    extraHeader: { name: "Project" },
+                  })} disabled={!validRange || items.length === 0} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Print</button>
+                  <button onClick={() => setSelectedUtilizationCrew(null)} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Close</button>
+                </div>
               </div>
               <div className="flex-1 overflow-auto p-5">
                 {!validRange && <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm font-semibold text-amber-800">Choose a valid Crew Utilization date range first.</div>}
