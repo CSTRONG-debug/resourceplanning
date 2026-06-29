@@ -6206,18 +6206,111 @@ export default function App() {
   }
 
   // CSV import for forecast
+  //
+  // Imports contract value, spread rule, AND the per-month actuals from the
+  // exported forecast layout. Month columns come from readCsvFile as
+  // alphanumeric-stripped keys: header "2026-01" -> key "202601". We detect
+  // any key matching ^\d{6}$ and rebuild the "YYYY-MM" month key.
+  //
+  // Zero-handling (per request): a 0 is only imported up to the LAST non-zero
+  // month present in that row — trailing zeros after the project's last real
+  // number are skipped so they don't flood/overwrite future months. Blank
+  // cells are always skipped. Non-zero values (including negatives) always
+  // import. Imported months are written as `actuals` (the same store inline
+  // edits use), overwriting any existing actual for that month (CSV is the
+  // source of truth). After writing each project's months we recompute the
+  // redistributed spread for remaining (non-actual, non-locked) months exactly
+  // like saveActual does, so future months still spread the remaining
+  // contract value correctly. Finishes with a completion summary alert.
   function importForecastCsv(event) {
     readCsvFile(event, async (rows) => {
+      if (!supabase) { alert("Supabase is not connected."); return; }
+
+      let projectsUpdated = 0;
+      let monthsWritten = 0;
+      const unmatched = [];
+
       for (const row of rows) {
         const projectNum = row.projectnumber || row.project || "";
-        const project = projects.find((p) => p.projectNumber === projectNum || p.name === (row.projectname || row.name || ""));
-        if (!project) continue;
+        const projectName = row.projectname || row.name || "";
+        const project = projects.find(
+          (p) => (projectNum && p.projectNumber === projectNum) || (projectName && p.name === projectName)
+        );
+        if (!project) {
+          if (projectNum || projectName) unmatched.push(projectNum || projectName);
+          continue;
+        }
+
+        // ── Contract value + spread rule ──────────────────────────────────
         const contractValue = parseFloat(row.contractvalue || row.contract || 0) || 0;
         const spreadRule = ["even", "front", "back", "scurve"].includes(row.spreadrule) ? row.spreadrule : undefined;
-        const patch = { contractValue };
+
+        // ── Collect month columns from the row ────────────────────────────
+        // Keys like "202601" -> month key "2026-01". Keep raw cell strings so
+        // we can distinguish blank ("" -> skip) from an explicit 0.
+        const monthCells = Object.keys(row)
+          .filter((k) => /^\d{6}$/.test(k))
+          .map((k) => ({
+            key: `${k.slice(0, 4)}-${k.slice(4, 6)}`,
+            raw: String(row[k] ?? "").trim(),
+          }))
+          .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+
+        // Index of the last month in this row that has a non-zero number.
+        // Zeros at or before this index import; zeros after it are skipped.
+        let lastNonZeroIdx = -1;
+        monthCells.forEach((c, i) => {
+          if (c.raw === "") return;
+          const n = Number(c.raw);
+          if (!isNaN(n) && n !== 0) lastNonZeroIdx = i;
+        });
+
+        // ── Build the new actuals map (overwrite existing) ────────────────
+        const existingRow = getForecastRow(project.id);
+        const newActuals = { ...(existingRow.actuals || {}) };
+
+        monthCells.forEach((c, i) => {
+          if (c.raw === "") return;              // blank cell -> skip
+          const n = Number(c.raw);
+          if (isNaN(n)) return;                  // non-numeric -> skip
+          if (n === 0 && i > lastNonZeroIdx) return; // trailing zero -> skip
+          newActuals[c.key] = n;                 // overwrite / set actual
+          monthsWritten++;
+        });
+
+        // ── Recompute redistributed spread for remaining months ───────────
+        // Mirrors saveActual: remaining = contract - actuals - locked base,
+        // spread across months that have no actual and aren't locked.
+        const effectiveContract = contractValue || existingRow.contractValue || 0;
+        const effectiveRule = spreadRule || existingRow.spreadRule || "even";
+        const allMonths = getProjectMonths(project.id);
+        const totalActuals = Object.values(newActuals).reduce((s, v) => s + v, 0);
+        const baseSpread = spreadRevenue(effectiveContract, allMonths, effectiveRule, project.id);
+        const lockedTotal = allMonths
+          .filter((m) => isMonthLocked(m) && newActuals[m] === undefined)
+          .reduce((s, m) => s + (baseSpread[m] || 0), 0);
+        const remaining = effectiveContract - totalActuals - lockedTotal;
+        const remainingMonths = allMonths.filter((m) => newActuals[m] === undefined && !isMonthLocked(m));
+        const redistributed = (remainingMonths.length > 0 && remaining !== 0)
+          ? spreadRevenue(remaining, remainingMonths, effectiveRule, project.id)
+          : {};
+
+        const patch = { contractValue: effectiveContract, actuals: newActuals, redistributedSpread: redistributed };
         if (spreadRule) patch.spreadRule = spreadRule;
         await saveForecastRow(project.id, patch);
+        projectsUpdated++;
       }
+
+      // Force the forecast table to re-render with the imported values.
+      setForecastKey((k) => k + 1);
+
+      // ── Completion popup ──────────────────────────────────────────────
+      let msg = `Forecast import complete.\n\n${projectsUpdated} project${projectsUpdated === 1 ? "" : "s"} updated\n${monthsWritten} monthly value${monthsWritten === 1 ? "" : "s"} imported`;
+      if (unmatched.length) {
+        const preview = unmatched.slice(0, 8).join(", ");
+        msg += `\n\n${unmatched.length} row${unmatched.length === 1 ? "" : "s"} skipped (no matching project):\n${preview}${unmatched.length > 8 ? ", …" : ""}`;
+      }
+      alert(msg);
     });
   }
 
