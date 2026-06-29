@@ -30,6 +30,27 @@ export const CMIC_FIELDS = {
                                    // frozen at job creation)
 };
 
+// ── WIP field mapping (EDIT ME) ─────────────────────────────────────────────
+//
+// Which fields on a posted JCWIP record hold the values we want. These are
+// PLACEHOLDERS — CMiC does not publish the JCWIP column names and they vary by
+// tenant. Confirm against one real record before relying on this:
+// temporarily call `await fetchWipRaw(2026, 5)` (helper below) in the console,
+// inspect a row, and set the real names here.
+//
+//   jobCode          → matches your projectNumber (same code as JobCode on jobs)
+//   contractAmount   → the WIP "Contract Amount" column (calculated)
+//   contractOverride → the manual "Override Contract Amount" column. Per CMiC's
+//                      WIP loss formula, override wins when present, else the
+//                      calculated contract amount is used.
+//   earnedRevenue    → the WIP "Earned Revenue" column for the period.
+export const WIP_FIELDS = {
+  jobCode:          "JobCode",            // commonly JobCode; sometimes JcwJobCode
+  contractAmount:   "JcwContractAmt",     // calculated WIP contract amount
+  contractOverride: "JcwContractOvrAmt",  // manual contract override (wins if set)
+  earnedRevenue:    "JcwEarnedRevAmt",    // earned revenue for the period
+};
+
 // Map CMiC's single-letter JobStatusCode to your app's status strings.
 // GGC's app does not use "In Progress" as a status — both CMiC's "I" and
 // "P" (the active/in-progress codes) collapse to "Active" here.
@@ -184,6 +205,181 @@ export async function fetchContractValueUpdates(localProjects) {
       name: p.name,
       currentValue,
       cmicValue,
+      changed,
+      error: null,
+    });
+  }
+
+  return updates;
+}
+
+// ── WIP (work-in-process) period helpers ───────────────────────────────────
+//
+// Periods line up 1:1 with calendar months (period 1 = Jan) and the fiscal
+// year = calendar year, per GGC's setup. If that ever changes, this is the
+// only place to adjust.
+
+// The current month as { year, period, monthKey } where monthKey is the
+// "YYYY-MM" string the forecast actuals map uses.
+export function currentWipPeriod(today = new Date()) {
+  const year = today.getFullYear();
+  const period = today.getMonth() + 1; // getMonth() is 0-based
+  const monthKey = `${year}-${String(period).padStart(2, "0")}`;
+  return { year, period, monthKey };
+}
+
+// The previous calendar month, with January rolling back to the prior year's
+// period 12.
+export function previousWipPeriod(today = new Date()) {
+  const d = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  const year = d.getFullYear();
+  const period = d.getMonth() + 1;
+  const monthKey = `${year}-${String(period).padStart(2, "0")}`;
+  return { year, period, monthKey };
+}
+
+// Raw WIP fetch for one period, keyed by job code. Returns a Map so both
+// public WIP functions below can match against local projects cheaply.
+// Also exported on its own (fetchWipRaw) for console introspection when
+// confirming the WIP_FIELDS names.
+export async function fetchWipRaw(year, period) {
+  const data = await callProxy(
+    `/wip?year=${encodeURIComponent(year)}&period=${encodeURIComponent(period)}`
+  );
+  const items = data.items || [];
+  const byCode = new Map(
+    items.map((w) => [String(pickField(w, WIP_FIELDS.jobCode)), w])
+  );
+  return { items, byCode, attempted: data.attempted };
+}
+
+// Pull the PREVIOUS period's posted-WIP contract value per project. Reads the
+// contract override, falling back to the WIP contract amount when no override
+// was entered. Keeps current values as the source of truth and only flags a
+// project as changed when a WIP value actually exists and differs.
+//
+// Returns the same record shape as fetchContractValueUpdates so the apply
+// UI can be a near-clone: { projectId, projectNumber, name, currentValue,
+// cmicValue, changed, error, periodLabel }.
+export async function fetchWipContractOverrides(localProjects, today = new Date()) {
+  const { year, period, monthKey } = previousWipPeriod(today);
+  const periodLabel = monthKey;
+
+  let byCode;
+  try {
+    ({ byCode } = await fetchWipRaw(year, period));
+  } catch (err) {
+    throw new Error(
+      `Could not fetch posted WIP for ${periodLabel} from CMiC: ${err.message}`
+    );
+  }
+
+  const updates = [];
+  for (const p of localProjects) {
+    if (!p.projectNumber) continue;
+
+    const wip = byCode.get(String(p.projectNumber));
+    const currentValue = p.contractValue ?? null;
+
+    if (!wip) {
+      // No posted WIP for this job this period → leave it untouched. We still
+      // return a row (unchanged, no error) so the modal can show it greyed,
+      // matching how the contract-refresh modal lists everything.
+      updates.push({
+        projectId: p.id,
+        projectNumber: p.projectNumber,
+        name: p.name,
+        currentValue,
+        cmicValue: null,
+        changed: false,
+        error: null,
+        periodLabel,
+        note: "No posted WIP this period",
+      });
+      continue;
+    }
+
+    // Override wins when present (non-null, non-empty), else WIP contract amt.
+    const overrideRaw = pickField(wip, WIP_FIELDS.contractOverride);
+    const amountRaw = pickField(wip, WIP_FIELDS.contractAmount);
+    const chosenRaw =
+      overrideRaw != null && overrideRaw !== "" ? overrideRaw : amountRaw;
+    const cmicValue = toThousands(chosenRaw);
+
+    const a = currentValue == null ? null : Number(currentValue);
+    const b = cmicValue == null ? null : Number(cmicValue);
+    const changed = cmicValue != null && a !== b;
+
+    updates.push({
+      projectId: p.id,
+      projectNumber: p.projectNumber,
+      name: p.name,
+      currentValue,
+      cmicValue,
+      changed,
+      error: null,
+      periodLabel,
+      usedOverride: overrideRaw != null && overrideRaw !== "",
+    });
+  }
+
+  return updates;
+}
+
+// Pull the CURRENT period's posted-WIP earned revenue per project. This value
+// is written into the forecast `actuals` map keyed by the current monthKey
+// (so it shows as a locked "actual" cell). Returns records carrying both the
+// value and the monthKey so the apply step knows where to write.
+//
+// Shape: { projectId, projectNumber, name, monthKey, earned, currentActual,
+// changed, error }.
+export async function fetchWipEarnedRevenue(localProjects, today = new Date()) {
+  const { year, period, monthKey } = currentWipPeriod(today);
+
+  let byCode;
+  try {
+    ({ byCode } = await fetchWipRaw(year, period));
+  } catch (err) {
+    throw new Error(
+      `Could not fetch posted WIP for ${monthKey} from CMiC: ${err.message}`
+    );
+  }
+
+  const updates = [];
+  for (const p of localProjects) {
+    if (!p.projectNumber) continue;
+
+    const wip = byCode.get(String(p.projectNumber));
+    // currentActual: whatever's already stored for this month, if anything.
+    const currentActual = p.actuals?.[monthKey] ?? null;
+
+    if (!wip) {
+      updates.push({
+        projectId: p.id,
+        projectNumber: p.projectNumber,
+        name: p.name,
+        monthKey,
+        earned: null,
+        currentActual,
+        changed: false,
+        error: null,
+        note: "No posted WIP this period",
+      });
+      continue;
+    }
+
+    const earned = toThousands(pickField(wip, WIP_FIELDS.earnedRevenue));
+    const a = currentActual == null ? null : Number(currentActual);
+    const b = earned == null ? null : Number(earned);
+    const changed = earned != null && a !== b;
+
+    updates.push({
+      projectId: p.id,
+      projectNumber: p.projectNumber,
+      name: p.name,
+      monthKey,
+      earned,
+      currentActual,
       changed,
       error: null,
     });
