@@ -1,0 +1,477 @@
+// src/lib/cmic.js
+//
+// Client-side helpers for the CMiC integration.
+// Calls the Supabase Edge Function (`cmic-proxy`) which holds CMiC creds
+// server-side. This file knows nothing about CMiC credentials — only about
+// the proxy endpoint and how to map CMiC field names to your app's schema.
+
+import { supabase } from "./supabase";
+
+// ── Field mapping (EDIT ME) ────────────────────────────────────────────────
+//
+// This map tells us which CMiC field on a JC Job corresponds to each field
+// on your local project record. These are placeholders based on the most
+// common CMiC field names — verify against one real job from your tenant
+// and adjust before going live.
+//
+// To check: temporarily call `await fetchCmicJobs()` in the console, look at
+// the raw items, and confirm that each CMiC_FIELDS value below holds the data
+// you actually use.
+export const CMIC_FIELDS = {
+  projectNumber: "JobCode",       // commonly JobCode; sometimes JobBidCode
+  name:          "JobName",
+  client:        "JobBillCustCode", // may be JobCustCode or a related Name field
+  division:      "JobBillDeptCode", // GGC may use a custom field — confirm
+  status:        "JobStatusCode",   // single letter code: A/I/O/C/etc
+  projectType:   "JobTypeCode",     // may not exist; can be left null
+  contractValue: "JobContractAmt", // current contract incl. approved change orders
+                                   // (NOT JobBillAmt — that's billed-to-date,
+                                   // and NOT JobOriginalContractAmt — that's
+                                   // frozen at job creation)
+};
+
+// ── WIP field mapping (EDIT ME) ─────────────────────────────────────────────
+//
+// Which fields on a posted JCWIP record hold the values we want. These are
+// PLACEHOLDERS — CMiC does not publish the JCWIP column names and they vary by
+// tenant. Confirm against one real record before relying on this:
+// temporarily call `await fetchWipRaw(2026, 5)` (helper below) in the console,
+// inspect a row, and set the real names here.
+//
+//   jobCode          → matches your projectNumber (same code as JobCode on jobs)
+//   contractAmount   → the WIP "Contract Amount" column (calculated)
+//   contractOverride → the manual "Override Contract Amount" column. Per CMiC's
+//                      WIP loss formula, override wins when present, else the
+//                      calculated contract amount is used.
+//   earnedRevenue    → the WIP "Earned Revenue" column for the period.
+export const WIP_FIELDS = {
+  jobCode:          "JobCode",            // commonly JobCode; sometimes JcwJobCode
+  contractAmount:   "JcwContractAmt",     // calculated WIP contract amount
+  contractOverride: "JcwContractOvrAmt",  // manual contract override (wins if set)
+  earnedRevenue:    "JcwEarnedRevAmt",    // earned revenue for the period
+};
+
+// Map CMiC's single-letter JobStatusCode to your app's status strings.
+// GGC's app does not use "In Progress" as a status — both CMiC's "I" and
+// "P" (the active/in-progress codes) collapse to "Active" here.
+const STATUS_MAP = {
+  A: "Active",
+  I: "Active",     // CMiC "In Progress" → GGC "Active"
+  O: "Open",
+  C: "Complete",
+  H: "On Hold",
+  P: "Active",     // CMiC "Posted" (also active in some tenants)
+};
+
+// Map CMiC's short division/department codes to your app's full names.
+// CMiC stores divisions as abbreviations like "CM", "HS", "IN" — we expand
+// to full names so they sort/filter correctly with the rest of your app.
+// Add/edit here if you add divisions later.
+const DIVISION_MAP = {
+  CM: "Commercial",
+  HS: "Hardscape",
+  IN: "Industrial",
+  TL: "Tilt",
+};
+
+// ── Edge Function caller ──────────────────────────────────────────────────
+
+async function callProxy(path) {
+  // supabase.functions.invoke handles auth headers & URL construction.
+  // Path is the part after the function name, e.g. "/jobs?status=active".
+  const { data, error } = await supabase.functions.invoke(
+    "cmic-proxy" + path,
+    { method: "GET" }
+  );
+
+  // When the Edge Function returns a non-2xx status, supabase-js sets
+  // `error` to a generic FunctionsHttpError with message "Edge Function
+  // returned a non-2xx status code". The actual reason is in `data.error`
+  // returned by our `json({ error }, 500)` handler. Try to dig that out
+  // first so the user sees something diagnostic, not a generic line.
+  if (error) {
+    // Try several places where the real error message may live, depending
+    // on which version of supabase-js we're on:
+    //   1. data.error (our Edge Function sets this on 500 responses)
+    //   2. error.context.body (FunctionsHttpError with response body)
+    //   3. error.message (last resort, generic)
+    let realMessage = data?.error;
+
+    if (!realMessage && error.context) {
+      try {
+        // error.context is a Response object on FunctionsHttpError
+        const bodyText = typeof error.context.text === "function"
+          ? await error.context.text()
+          : null;
+        if (bodyText) {
+          try {
+            const parsed = JSON.parse(bodyText);
+            realMessage = parsed.error || parsed.message || bodyText;
+          } catch {
+            realMessage = bodyText;
+          }
+        }
+      } catch {
+        // ignore — fall through to error.message
+      }
+    }
+
+    throw new Error(realMessage || error.message || "CMiC proxy call failed");
+  }
+
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────
+
+// Quick health check — useful for the settings page.
+export async function checkCmicConnection() {
+  return callProxy("/health");
+}
+
+// Pull the active CMiC jobs. Returns BOTH the raw CMiC items and the mapped
+// local-shape projects, so the UI can show a meaningful diff.
+export async function fetchCmicJobs({ status = "active" } = {}) {
+  const data = await callProxy(`/jobs?status=${encodeURIComponent(status)}`);
+  const items = data.items || [];
+  const mapped = items.map(mapCmicJobToProject);
+  return { raw: items, mapped, count: data.count };
+}
+
+// Convert raw CMiC dollar amount to thousands (the unit your forecast uses).
+// CMiC sends $1,500,000 as 1500000.00; your forecast stores 1500. Round to
+// the nearest whole thousand to avoid noise from cents in the diff.
+function toThousands(rawAmount) {
+  if (rawAmount == null || rawAmount === "") return null;
+  const n = Number(rawAmount);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n / 1000);
+}
+
+// Refresh contract values for the projects that originated from CMiC.
+// Strategy: ONE bulk call to fetch all CMiC jobs, then match locally by
+// JobCode === projectNumber. This is much faster than per-project calls
+// and avoids the path-format problem (CMiC's single-record GET expects
+// JobVUuid, not JobCode).
+//
+// Returns an array of { projectId, projectNumber, name, currentValue,
+// cmicValue, changed, error } — one entry per local project.
+export async function fetchContractValueUpdates(localProjects) {
+  // Single bulk call — same one the Pull Projects button uses, just with
+  // status=all so we don't lose visibility on jobs that may have moved
+  // status since the last pull (we still want to refresh those values).
+  let cmicJobsByCode;
+  try {
+    const data = await callProxy(`/jobs?status=all`);
+    const items = data.items || [];
+    cmicJobsByCode = new Map(
+      items.map((j) => [String(pickField(j, CMIC_FIELDS.projectNumber)), j])
+    );
+  } catch (err) {
+    // If the bulk call itself fails, propagate as a single error so the
+    // UI can surface it once instead of 91 times.
+    throw new Error(`Could not fetch jobs from CMiC: ${err.message}`);
+  }
+
+  const updates = [];
+  for (const p of localProjects) {
+    if (!p.projectNumber) continue;
+
+    const job = cmicJobsByCode.get(String(p.projectNumber));
+    if (!job) {
+      updates.push({
+        projectId: p.id,
+        projectNumber: p.projectNumber,
+        name: p.name,
+        currentValue: p.contractValue ?? null,
+        cmicValue: null,
+        changed: false,
+        error: "Not found in CMiC",
+      });
+      continue;
+    }
+
+    const cmicValue = toThousands(pickField(job, CMIC_FIELDS.contractValue));
+    const currentValue = p.contractValue ?? null;
+    // Compare as numbers to avoid 1000 vs "1000" false positives.
+    const a = currentValue == null ? null : Number(currentValue);
+    const b = cmicValue == null ? null : Number(cmicValue);
+    const changed = a !== b;
+
+    updates.push({
+      projectId: p.id,
+      projectNumber: p.projectNumber,
+      name: p.name,
+      currentValue,
+      cmicValue,
+      changed,
+      error: null,
+    });
+  }
+
+  return updates;
+}
+
+// ── WIP (work-in-process) period helpers ───────────────────────────────────
+//
+// Periods line up 1:1 with calendar months (period 1 = Jan) and the fiscal
+// year = calendar year, per GGC's setup. If that ever changes, this is the
+// only place to adjust.
+
+// The current month as { year, period, monthKey } where monthKey is the
+// "YYYY-MM" string the forecast actuals map uses.
+export function currentWipPeriod(today = new Date()) {
+  const year = today.getFullYear();
+  const period = today.getMonth() + 1; // getMonth() is 0-based
+  const monthKey = `${year}-${String(period).padStart(2, "0")}`;
+  return { year, period, monthKey };
+}
+
+// The previous calendar month, with January rolling back to the prior year's
+// period 12.
+export function previousWipPeriod(today = new Date()) {
+  const d = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  const year = d.getFullYear();
+  const period = d.getMonth() + 1;
+  const monthKey = `${year}-${String(period).padStart(2, "0")}`;
+  return { year, period, monthKey };
+}
+
+// Raw WIP fetch for one period, keyed by job code. Returns a Map so both
+// public WIP functions below can match against local projects cheaply.
+// Also exported on its own (fetchWipRaw) for console introspection when
+// confirming the WIP_FIELDS names.
+export async function fetchWipRaw(year, period) {
+  const data = await callProxy(
+    `/wip?year=${encodeURIComponent(year)}&period=${encodeURIComponent(period)}`
+  );
+  const items = data.items || [];
+  const byCode = new Map(
+    items.map((w) => [String(pickField(w, WIP_FIELDS.jobCode)), w])
+  );
+  return { items, byCode, attempted: data.attempted };
+}
+
+// Introspection helper — fetches a few unfiltered WIP rows and returns the
+// sorted list of column names present, plus the raw sample. Run this in the
+// browser console FIRST to discover the real JCWIP field names, then set
+// WIP_FIELDS above (and the proxy's CMIC_WIP_*_FIELD secrets) to match:
+//   const x = await fetchWipFields(); console.log(x.sampleFields);
+export async function fetchWipFields() {
+  const data = await callProxy(`/wip?introspect=1`);
+  return {
+    path: data.path,
+    sampleFields: data.sampleFields || [],
+    items: data.items || [],
+  };
+}
+
+// Pull the PREVIOUS period's posted-WIP contract value per project. Reads the
+// contract override, falling back to the WIP contract amount when no override
+// was entered. Keeps current values as the source of truth and only flags a
+// project as changed when a WIP value actually exists and differs.
+//
+// Returns the same record shape as fetchContractValueUpdates so the apply
+// UI can be a near-clone: { projectId, projectNumber, name, currentValue,
+// cmicValue, changed, error, periodLabel }.
+export async function fetchWipContractOverrides(localProjects, today = new Date()) {
+  const { year, period, monthKey } = previousWipPeriod(today);
+  const periodLabel = monthKey;
+
+  let byCode;
+  try {
+    ({ byCode } = await fetchWipRaw(year, period));
+  } catch (err) {
+    throw new Error(
+      `Could not fetch posted WIP for ${periodLabel} from CMiC: ${err.message}`
+    );
+  }
+
+  const updates = [];
+  for (const p of localProjects) {
+    if (!p.projectNumber) continue;
+
+    const wip = byCode.get(String(p.projectNumber));
+    const currentValue = p.contractValue ?? null;
+
+    if (!wip) {
+      // No posted WIP for this job this period → leave it untouched. We still
+      // return a row (unchanged, no error) so the modal can show it greyed,
+      // matching how the contract-refresh modal lists everything.
+      updates.push({
+        projectId: p.id,
+        projectNumber: p.projectNumber,
+        name: p.name,
+        currentValue,
+        cmicValue: null,
+        changed: false,
+        error: null,
+        periodLabel,
+        note: "No posted WIP this period",
+      });
+      continue;
+    }
+
+    // Override wins when present (non-null, non-empty), else WIP contract amt.
+    const overrideRaw = pickField(wip, WIP_FIELDS.contractOverride);
+    const amountRaw = pickField(wip, WIP_FIELDS.contractAmount);
+    const chosenRaw =
+      overrideRaw != null && overrideRaw !== "" ? overrideRaw : amountRaw;
+    const cmicValue = toThousands(chosenRaw);
+
+    const a = currentValue == null ? null : Number(currentValue);
+    const b = cmicValue == null ? null : Number(cmicValue);
+    const changed = cmicValue != null && a !== b;
+
+    updates.push({
+      projectId: p.id,
+      projectNumber: p.projectNumber,
+      name: p.name,
+      currentValue,
+      cmicValue,
+      changed,
+      error: null,
+      periodLabel,
+      usedOverride: overrideRaw != null && overrideRaw !== "",
+    });
+  }
+
+  return updates;
+}
+
+// Pull the CURRENT period's posted-WIP earned revenue per project. This value
+// is written into the forecast `actuals` map keyed by the current monthKey
+// (so it shows as a locked "actual" cell). Returns records carrying both the
+// value and the monthKey so the apply step knows where to write.
+//
+// Shape: { projectId, projectNumber, name, monthKey, earned, currentActual,
+// changed, error }.
+export async function fetchWipEarnedRevenue(localProjects, today = new Date()) {
+  const { year, period, monthKey } = currentWipPeriod(today);
+
+  let byCode;
+  try {
+    ({ byCode } = await fetchWipRaw(year, period));
+  } catch (err) {
+    throw new Error(
+      `Could not fetch posted WIP for ${monthKey} from CMiC: ${err.message}`
+    );
+  }
+
+  const updates = [];
+  for (const p of localProjects) {
+    if (!p.projectNumber) continue;
+
+    const wip = byCode.get(String(p.projectNumber));
+    // currentActual: whatever's already stored for this month, if anything.
+    const currentActual = p.actuals?.[monthKey] ?? null;
+
+    if (!wip) {
+      updates.push({
+        projectId: p.id,
+        projectNumber: p.projectNumber,
+        name: p.name,
+        monthKey,
+        earned: null,
+        currentActual,
+        changed: false,
+        error: null,
+        note: "No posted WIP this period",
+      });
+      continue;
+    }
+
+    const earned = toThousands(pickField(wip, WIP_FIELDS.earnedRevenue));
+    const a = currentActual == null ? null : Number(currentActual);
+    const b = earned == null ? null : Number(earned);
+    const changed = earned != null && a !== b;
+
+    updates.push({
+      projectId: p.id,
+      projectNumber: p.projectNumber,
+      name: p.name,
+      monthKey,
+      earned,
+      currentActual,
+      changed,
+      error: null,
+    });
+  }
+
+  return updates;
+}
+
+// ── Mapping ───────────────────────────────────────────────────────────────
+
+// CMiC sometimes nests fields or returns single-item containers. Be defensive.
+function pickField(job, fieldName) {
+  if (!job || !fieldName) return null;
+  // Single-item GET responses come back as { items: [job] } sometimes.
+  if (job.items && Array.isArray(job.items) && job.items[0]) {
+    return job.items[0][fieldName] ?? null;
+  }
+  return job[fieldName] ?? null;
+}
+
+function mapStatus(cmicStatus) {
+  return STATUS_MAP[cmicStatus] || cmicStatus || "Active";
+}
+
+function mapDivision(cmicDivision) {
+  if (!cmicDivision) return "";
+  // Try the lookup first; if there's no match, return the original code so
+  // we don't lose info. Add the new code to DIVISION_MAP if this happens.
+  return DIVISION_MAP[cmicDivision] || cmicDivision;
+}
+
+// Convert a CMiC job object to your local project shape. Keep CMiC's raw
+// JobCode in projectNumber so the contract-refresh button can find it later.
+export function mapCmicJobToProject(job) {
+  return {
+    projectNumber: pickField(job, CMIC_FIELDS.projectNumber),
+    name:          pickField(job, CMIC_FIELDS.name),
+    client:        pickField(job, CMIC_FIELDS.client) || "",
+    division:      mapDivision(pickField(job, CMIC_FIELDS.division)),
+    status:        mapStatus(pickField(job, CMIC_FIELDS.status)),
+    projectType:   pickField(job, CMIC_FIELDS.projectType) || "",
+    contractValue: toThousands(pickField(job, CMIC_FIELDS.contractValue)),
+    // Default to true so newly-imported projects show up in the Forecast
+    // tab automatically — this is what GGC wants per the user request.
+    includeInForecast: true,
+    // Mark provenance so we can show a CMiC badge in the UI.
+    source: "cmic",
+  };
+}
+
+// Compute a diff between CMiC jobs and existing local projects, matched by
+// projectNumber. Returns three buckets: toCreate, toUpdate, unchanged.
+export function diffCmicAgainstLocal(cmicMapped, localProjects) {
+  const localByNumber = new Map(
+    localProjects.filter((p) => p.projectNumber).map((p) => [String(p.projectNumber), p])
+  );
+
+  const toCreate = [];
+  const toUpdate = [];
+  const unchanged = [];
+
+  for (const incoming of cmicMapped) {
+    if (!incoming.projectNumber) continue;
+    const existing = localByNumber.get(String(incoming.projectNumber));
+    if (!existing) {
+      toCreate.push(incoming);
+      continue;
+    }
+    const changes = {};
+    for (const key of ["name", "client", "division", "status", "projectType"]) {
+      const a = existing[key];
+      const b = incoming[key];
+      // Loose comparison so "" vs null doesn't trigger a noisy update.
+      if ((a ?? "") !== (b ?? "")) changes[key] = { from: a, to: b };
+    }
+    if (Object.keys(changes).length === 0) unchanged.push({ existing, incoming });
+    else toUpdate.push({ existing, incoming, changes });
+  }
+
+  return { toCreate, toUpdate, unchanged };
+}
