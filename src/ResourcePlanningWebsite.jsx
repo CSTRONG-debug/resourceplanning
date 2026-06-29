@@ -4,6 +4,8 @@ import { supabase } from "./lib/supabase";
 import ClaudeAssistant from "./components/ClaudeAssistant";
 import CmicPullProjects from "./components/CmicPullProjects";
 import CmicRefreshContracts from "./components/CmicRefreshContracts";
+import CmicApplyWipOverrides from "./components/CmicApplyWipOverrides";
+import CmicPullWipEarned from "./components/CmicPullWipEarned";
 
 import {
   divisions, statuses, resourceTypes, defaultDashboardResourceTypes, zoomModes,
@@ -8611,6 +8613,8 @@ export default function App() {
               <button onClick={exportForecastCsv} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">Export CSV</button>
               <button onClick={exportForecastPdf} className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm">Export PDF</button>
               {canWrite && <CmicRefreshContracts projects={projects} forecastData={forecastData} onApplied={() => loadSupabaseData()} />}
+              {canWrite && <CmicApplyWipOverrides projects={projects} forecastData={forecastData} onApplied={() => loadSupabaseData()} />}
+              {canWrite && <CmicPullWipEarned projects={projects} forecastData={forecastData} onApplied={() => loadSupabaseData()} />}
               {canWrite && <button onClick={recalculateAll} className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 shadow-sm">↻ Recalculate</button>}
               {canWrite && <label className="rounded-xl border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 shadow-sm cursor-pointer">
                 Import CSV<input type="file" accept=".csv" onChange={importForecastCsv} className="hidden" />
