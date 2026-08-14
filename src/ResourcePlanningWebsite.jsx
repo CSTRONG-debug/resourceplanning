@@ -288,6 +288,9 @@ function mapAssignmentFromDbLocal(assignment, mobilizations) {
       // page reload and crew-only items can be identified by the
       // ganttItems augmentation.
       crewOnly: raw.crew_only != null ? !!raw.crew_only : !!mob.crewOnly,
+      // Penciled-in / tentative placement: renders distinctly and is excluded
+      // from conflict detection until confirmed.
+      tentative: raw.tentative != null ? !!raw.tentative : !!mob.tentative,
       // Which project tasks this mobilization covers (for the "which task"
       // display on the assignment + the task-schedule details row).
       taskIds: Array.isArray(raw.task_ids) ? raw.task_ids : (Array.isArray(mob.taskIds) ? mob.taskIds : []),
@@ -312,6 +315,7 @@ function mobilizationToDbLocal(mobilization, assignmentId) {
     ...mobilizationToDb(mobilization, assignmentId),
     unassigned_needs: normalizeUnassignedNeeds(mobilization.unassignedNeeds),
     crew_only: !!mobilization.crewOnly,
+    tentative: !!mobilization.tentative,
     task_ids: Array.isArray(mobilization.taskIds) ? mobilization.taskIds.filter(Boolean) : [],
   };
 }
@@ -1965,6 +1969,15 @@ export function AssignmentForm({ form, setForm, onSave, onCancel, onDelete, edit
                     <span className="text-xs text-slate-400">(no superintendent — crew appears in Crew Gantt only)</span>
                   </label>
 
+                  {/* Penciled-in / tentative toggle */}
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" className="h-4 w-4 accent-amber-500 rounded"
+                      checked={mob.tentative || false}
+                      onChange={(e) => updateMobilization(mob.id, "tentative", e.target.checked)} />
+                    <span className="text-xs font-semibold text-slate-700">Penciled in (tentative)</span>
+                    <span className="text-xs text-slate-400">(soft placement — shows dashed and won't create conflicts)</span>
+                  </label>
+
                   {/* Crews */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
@@ -2363,6 +2376,7 @@ export function GanttBackdrop({ timeline }) {
 export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
   const project = item.project;
   const isUnassigned = !!item.isUnassignedNeed;
+  const isTentative = !!item.isTentative;
   const barDivision = isUnassigned ? (item.unassignedDivision || project.division) : project.division;
   const colorClass = isUnassigned || project.status === "Pending Award"
     ? pendingDivisionStyles[barDivision] || "bg-slate-300"
@@ -2378,12 +2392,20 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
     backgroundImage: "repeating-linear-gradient(135deg, transparent 0 8px, rgba(220,38,38,.95) 8px 10px)",
     backgroundSize: "14px 14px",
   } : {};
+  // Penciled-in / tentative: dashed white outline + slight translucency so it
+  // reads as "not set in stone." Skipped when the bar is a conflict (red wins).
+  const tentativeStyle = (isTentative && !conflict) ? {
+    outline: "2px dashed rgba(255,255,255,.9)",
+    outlineOffset: "-3px",
+    opacity: 0.7,
+  } : {};
   const tooltip = [
     project.projectNumber ? `${project.projectNumber} - ${project.name}` : project.name,
     `${isUnassigned ? (item.unassignedDivision || project.division) : project.division} • ${project.status}`,
     `${formatDate(item.start)} - ${formatDate(item.end)}`,
     label ? `Assignment: ${label}` : item.isUnassignedNeed ? `${item.unassignedAbbreviation} - Unassigned` : "Unassigned",
     conflict ? "Conflict detected" : "",
+    isTentative ? "Penciled in (tentative)" : "",
   ].filter(Boolean).join("\n");
 
   // If the bar starts to the LEFT of the visible chart area (because it
@@ -2406,7 +2428,7 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
   return (
     <div
       className={`absolute top-0 h-7 rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm ${isUnassigned ? "text-slate-900" : "text-white"} ${tooNarrow ? "overflow-visible" : "overflow-hidden px-2.5"}`}
-      style={{ left: `${left}px`, width: `${width}px`, ...patternStyle, ...conflictStyle }}
+      style={{ left: `${left}px`, width: `${width}px`, ...patternStyle, ...conflictStyle, ...tentativeStyle }}
       title={tooltip}
     >
       {tooNarrow ? (
@@ -2420,6 +2442,7 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
             style={labelOffset ? { paddingLeft: `${labelOffset}px` } : undefined}
           >{label || "Unassigned"}</span>
           {conflict && <span className="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-white">conflict</span>}
+          {isTentative && !conflict && <span className="ml-2 rounded bg-white/85 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-700">penciled</span>}
         </>
       )}
     </div>
@@ -2609,11 +2632,18 @@ export function DraggableGanttBar({ item, timeline, label, fullLabel, showLabel 
     backgroundSize: "14px 14px",
   } : null;
 
+  // Penciled-in / tentative: dashed white outline + translucency.
+  const tentativeOverlayStyle = item.isTentative ? {
+    outline: "2px dashed rgba(255,255,255,.9)",
+    outlineOffset: "-3px",
+    opacity: 0.72,
+  } : null;
+
   return (
     <div
       ref={containerRef}
       className={`absolute h-7 overflow-visible rounded-md ${colorClass} text-[11px] font-semibold leading-7 shadow-sm ${(needsCrew || isUnassigned) ? "text-slate-900" : "text-white"} ${dragState ? "ring-2 ring-emerald-400 ring-offset-1" : ""}`}
-      style={{ left: `${left}px`, top: `${laneTop}px`, width: `${width}px`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none", ...(crewOnlyOverlayStyle || {}), ...(needsCrewOverlayStyle || {}), ...(unassignedOverlayStyle || {}) }}
+      style={{ left: `${left}px`, top: `${laneTop}px`, width: `${width}px`, cursor: dragState?.mode === "middle" ? "grabbing" : "grab", touchAction: "none", ...(crewOnlyOverlayStyle || {}), ...(needsCrewOverlayStyle || {}), ...(unassignedOverlayStyle || {}), ...(tentativeOverlayStyle || {}) }}
       onPointerDown={(e) => onPointerDown("middle", e)}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -2874,9 +2904,11 @@ export function ResourceGanttRow({ resource, items, timeline, onResourceClick })
   const conflictIds = new Set();
 
   sortedItems.forEach((item, i) => {
+    if (item.isTentative) return; // penciled-in placements never flag as conflicts
     const itemStart = toDate(item.start);
     const itemEnd = toDate(item.end);
     const hasEarlierOverlap = sortedItems.slice(0, i).some((prev) => {
+      if (prev.isTentative) return false; // ...and don't collide with tentative ones
       const previousStart = toDate(prev.start);
       const previousEnd = toDate(prev.end);
       return rangesOverlap(itemStart, addDays(itemEnd, 1), previousStart, addDays(previousEnd, 1));
@@ -3511,6 +3543,94 @@ export function TaskGrid({
   );
 }
 
+// ─── ProjectRoleRequestForm ──────────────────────────────────────────────────
+// Project Dashboard "Request Resources" form. One request lists how many of
+// each role (super / field engineer / safety / field coordinator / crew) are
+// needed, a date window, and the project type, so the office can fill it later
+// from the Requests tab.
+export function ProjectRoleRequestForm({ form, setForm, projects, projectTypes, onSave, onCancel, busy }) {
+  const set = (k, v) => setForm((c) => ({ ...c, [k]: v }));
+  const roles = [
+    ["superCount", "Superintendent"],
+    ["fieldEngineerCount", "Field Engineer"],
+    ["safetyCount", "Safety"],
+    ["fieldCoordinatorCount", "Field Coordinator"],
+    ["crewCount", "Crew"],
+  ];
+  const totalRequested = roles.reduce((s, [k]) => s + (Number(form[k]) || 0), 0);
+  const selProject = projects.find((p) => p.id === form.projectId);
+  const Stepper = ({ k, label }) => (
+    <div className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3">
+      <span className="text-sm font-semibold text-slate-700">{label}</span>
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={() => set(k, Math.max(0, (Number(form[k]) || 0) - 1))} className="h-7 w-7 rounded-lg border border-slate-300 text-lg font-bold leading-none text-slate-600 hover:bg-slate-50">−</button>
+        <input type="number" min={0} value={form[k] ?? 0} onChange={(e) => set(k, Math.max(0, parseInt(e.target.value, 10) || 0))} className="w-14 rounded-lg border border-slate-300 px-2 py-1 text-center text-sm" />
+        <button type="button" onClick={() => set(k, (Number(form[k]) || 0) + 1)} className="h-7 w-7 rounded-lg border border-slate-300 text-lg font-bold leading-none text-slate-600 hover:bg-slate-50">+</button>
+      </div>
+    </div>
+  );
+  return (
+    <div className="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-slate-950/70 p-4">
+      <div className="mt-8 w-full max-w-2xl rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 p-5">
+          <div>
+            <h2 className="text-xl font-bold">Request Resources</h2>
+            <p className="text-sm text-slate-500">Create a staffing request for a project. It lands in the Requests tab for the office to fill.</p>
+          </div>
+          <button onClick={onCancel} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="space-y-4 p-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Project</span>
+              <select value={form.projectId || ""} onChange={(e) => {
+                const p = projects.find((x) => x.id === e.target.value);
+                setForm((c) => ({ ...c, projectId: e.target.value, projectType: p?.projectType || c.projectType }));
+              }} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm">
+                <option value="">Select a project…</option>
+                {[...projects].sort((a, b) => String(a.projectNumber || "").localeCompare(String(b.projectNumber || ""), undefined, { numeric: true }))
+                  .map((p) => <option key={p.id} value={p.id}>{p.projectNumber ? `${p.projectNumber} - ` : ""}{p.name}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Project Type</span>
+              <select value={form.projectType || ""} onChange={(e) => set("projectType", e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm">
+                <option value="">{selProject?.projectType || "Select a type…"}</option>
+                {(projectTypes || []).map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">Start Date</span>
+              <input type="date" value={form.startDate || ""} onChange={(e) => set("startDate", e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+            </label>
+            <label className="space-y-1">
+              <span className="text-sm font-medium text-slate-700">End Date</span>
+              <input type="date" value={form.endDate || ""} onChange={(e) => set("endDate", e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+            </label>
+          </div>
+          <div>
+            <p className="mb-2 text-sm font-semibold text-slate-800">Roles needed <span className="font-normal text-slate-400">({totalRequested} total)</span></p>
+            <div className="grid gap-2 md:grid-cols-2">
+              {roles.map(([k, label]) => <Stepper key={k} k={k} label={label} />)}
+            </div>
+          </div>
+          <label className="space-y-1 block">
+            <span className="text-sm font-medium text-slate-700">Notes</span>
+            <textarea value={form.notes || ""} onChange={(e) => set("notes", e.target.value)} rows={2} placeholder="Any context to help fill this request…" className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+          </label>
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-slate-200 p-5">
+          <button onClick={onCancel} className="rounded-xl border border-slate-300 px-4 py-2 font-semibold hover:bg-slate-50">Cancel</button>
+          <button onClick={onSave} disabled={busy || !form.projectId || totalRequested === 0}
+            className="rounded-xl bg-emerald-700 px-5 py-2 font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">
+            {busy ? "Submitting…" : "Submit Request"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [projects, setProjects] = useState([]);
   const [assignments, setAssignments] = useState([]);
@@ -3575,6 +3695,9 @@ export default function App() {
   const [pmName, setPmName] = useState(null);
   const [pmProfiles, setPmProfiles] = useState([]); // manager/admin logins assignable as PMs
   const [projectPmMap, setProjectPmMap] = useState({}); // { [projectId]: [profileId, ...] }
+  const [roleRequests, setRoleRequests] = useState([]); // project-level multi-role requests
+  const [showRoleRequestForm, setShowRoleRequestForm] = useState(false);
+  const [roleRequestForm, setRoleRequestForm] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [showUserSettings, setShowUserSettings] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ email: "", password: "" });
@@ -3644,7 +3767,7 @@ export default function App() {
   const loadSupabaseData = React.useCallback(async () => {
     if (!supabase) { console.warn("Supabase not connected. Check Vercel environment variables."); return; }
 
-    const [projectsRes, resourcesRes, crewsRes, assignmentsRes, mobilizationsRes, certsRes, forecastRes, settingsRes, pmProfilesRes, projectPmsRes] = await Promise.all([
+    const [projectsRes, resourcesRes, crewsRes, assignmentsRes, mobilizationsRes, certsRes, forecastRes, settingsRes, pmProfilesRes, projectPmsRes, roleRequestsRes] = await Promise.all([
       supabase.from("projects").select("*").order("created_at", { ascending: false }),
       supabase.from("resources").select("*").order("created_at", { ascending: false }),
       supabase.from("crews").select("*").order("created_at", { ascending: false }),
@@ -3655,6 +3778,7 @@ export default function App() {
       supabase.from("forecast_settings").select("*").limit(1),
       supabase.from("profiles").select("id, email, role, pm_name").in("role", ["manager", "admin"]),
       supabase.from("project_pms").select("project_id, profile_id"),
+      supabase.from("project_role_requests").select("*").order("created_at", { ascending: false }),
     ]);
 
     if (projectsRes.error) console.error("Projects load error:", projectsRes.error);
@@ -3674,6 +3798,7 @@ export default function App() {
       });
       setProjectPmMap(m);
     }
+    setRoleRequests(roleRequestsRes?.data || []);
     setResources((resourcesRes.data || []).map(mapResourceFromDbLocal));
     const mappedCrews = (crewsRes.data || []).map(mapCrewFromDbLocal);
     setCrews(mappedCrews);
@@ -3795,6 +3920,7 @@ export default function App() {
         start: mob.start,
         end: mob.end,
         isCrewOnly: true,
+        isTentative: !!mob.tentative,
       });
     });
   });
@@ -3804,13 +3930,12 @@ export default function App() {
     // so the bar renderer applies the hatched overlay regardless of
     // whether the item came from the helper or our synth.
     return augmented.map((item) => {
-      if (item.isCrewOnly) return item;
       if (!item.assignment || !item.mobilizationId) return item;
       const sourceMob = (item.assignment.mobilizations || []).find((m) => m.id === item.mobilizationId);
-      if (sourceMob && sourceMob.crewOnly) {
-        return { ...item, isCrewOnly: true };
-      }
-      return item;
+      let out = item;
+      if (sourceMob && sourceMob.crewOnly && !out.isCrewOnly) out = { ...out, isCrewOnly: true };
+      if (sourceMob && sourceMob.tentative && !out.isTentative) out = { ...out, isTentative: true };
+      return out;
     });
   })();
 
@@ -4585,6 +4710,7 @@ export default function App() {
     ganttItems.forEach((item) => {
       const is = toDate(item.start), ie = toDate(item.end);
       if (!is || !ie) return;
+      if (item.isTentative) return; // penciled-in placements stay "available"
       if (!rangesOverlap(is, addDays(ie, 1), s, addDays(e, 1))) return;
       [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety]
         .filter(Boolean).forEach((n) => busyResourceNames.add(n));
@@ -4710,6 +4836,8 @@ export default function App() {
     const m = new Map();
     ganttItems.forEach((item) => {
       if (!item.assignment || !item.start || !item.end) return;
+      // Penciled-in / tentative mobilizations don't create conflicts.
+      if (item.isTentative) return;
       ROLE_FIELDS.forEach((field) => {
         const name = item.assignment[field];
         if (!name) return;
@@ -5340,6 +5468,59 @@ export default function App() {
   // ── CRUD: Projects ─────────────────────────────────────────────────────────
   function openAddProjectForm() { setEditingProjectId(null); setProjectForm({ ...blankProject, pmIds: [] }); setShowProjectForm(true); }
   function openEditProjectForm(project) { setEditingProjectId(project.id); setProjectForm({ ...blankProject, ...project, pmIds: projectPmMap[project.id] || [] }); setShowProjectForm(true); }
+
+  // ── Project role requests (Project Dashboard → Requests tab) ───────────────
+  const blankRoleRequest = {
+    projectId: "", projectType: "", startDate: "", endDate: "",
+    superCount: 0, fieldEngineerCount: 0, safetyCount: 0, fieldCoordinatorCount: 0, crewCount: 0,
+    notes: "",
+  };
+  function openRoleRequestForm(prefillProjectId) {
+    const p = prefillProjectId ? findProject(projects, prefillProjectId) : null;
+    setRoleRequestForm({ ...blankRoleRequest, projectId: prefillProjectId || "", projectType: p?.projectType || "" });
+    setShowRoleRequestForm(true);
+  }
+  async function saveRoleRequest() {
+    if (!roleRequestForm?.projectId) { alert("Pick a project."); return; }
+    if (!supabase) { alert("Supabase is not connected."); return; }
+    setBusy(true);
+    const payload = {
+      project_id: roleRequestForm.projectId,
+      project_type: roleRequestForm.projectType || null,
+      start_date: roleRequestForm.startDate || null,
+      end_date: roleRequestForm.endDate || null,
+      super_count: Number(roleRequestForm.superCount) || 0,
+      field_engineer_count: Number(roleRequestForm.fieldEngineerCount) || 0,
+      safety_count: Number(roleRequestForm.safetyCount) || 0,
+      field_coordinator_count: Number(roleRequestForm.fieldCoordinatorCount) || 0,
+      crew_count: Number(roleRequestForm.crewCount) || 0,
+      notes: roleRequestForm.notes || null,
+      status: "pending",
+      requested_by_name: pmName || currentUser,
+    };
+    const { data, error } = await supabase.from("project_role_requests").insert(payload).select().single();
+    setBusy(false);
+    if (error) { console.error(error); alert(`Could not submit request: ${error.message}`); return; }
+    setRoleRequests((cur) => [data, ...cur]);
+    setShowRoleRequestForm(false);
+    setRoleRequestForm(null);
+  }
+  async function updateRoleRequestStatus(id, status, fillNotes) {
+    if (!supabase) return;
+    const patch = { status, updated_at: new Date().toISOString() };
+    if (status === "filled" || status === "partial") { patch.resolved_at = new Date().toISOString(); }
+    if (fillNotes != null) patch.fill_notes = fillNotes;
+    const { error } = await supabase.from("project_role_requests").update(patch).eq("id", id);
+    if (error) { console.error(error); alert("Could not update request."); return; }
+    setRoleRequests((cur) => cur.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }
+  async function deleteRoleRequest(id) {
+    if (!supabase) return;
+    if (!window.confirm("Delete this resource request?")) return;
+    const { error } = await supabase.from("project_role_requests").delete().eq("id", id);
+    if (error) { console.error(error); alert("Could not delete request."); return; }
+    setRoleRequests((cur) => cur.filter((r) => r.id !== id));
+  }
 
   async function saveProject() {
     if (!projectForm.name.trim()) { alert("Project name is required."); return; }
@@ -7009,12 +7190,91 @@ export default function App() {
       {/* ── Project Dashboard ── */}
       {page === "projectDash" && (
         <section className="mx-auto max-w-[1700px] space-y-6 px-4 py-6">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-bold text-slate-900">Project Dashboard</h1>
+            <button onClick={() => openRoleRequestForm("")} className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800">
+              <Plus className="h-4 w-4" /> Request Resources
+            </button>
+          </div>
           <div className="grid gap-4 md:grid-cols-4">
             <StatCard icon={BriefcaseBusiness} label="Total Projects" value={projects.length} />
             <StatCard icon={ClipboardCheck} label="Assignments" value={assignments.length} />
             <StatCard icon={Users} label="Resources" value={resources.length} />
             <StatCard icon={FolderKanban} label="Crews" value={crews.length} />
           </div>
+
+          {/* Resource Requests — created via "Request Resources"; office fills them */}
+          {roleRequests.length > 0 && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-lg font-bold">Resource Requests <span className="ml-1 text-sm font-normal text-slate-400">({roleRequests.filter((r) => r.status === "pending" || r.status === "partial").length} open)</span></h2>
+              </div>
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full min-w-[900px] text-left text-sm">
+                  <thead className="bg-slate-100 text-slate-600">
+                    <tr>
+                      <th className="p-3">Project</th>
+                      <th className="p-3">Type</th>
+                      <th className="p-3">Dates</th>
+                      <th className="p-3">Roles Needed</th>
+                      <th className="p-3">Requested By</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...roleRequests].sort((a, b) => {
+                      const rank = (s) => (s === "pending" ? 0 : s === "partial" ? 1 : 2);
+                      return rank(a.status) - rank(b.status);
+                    }).map((r) => {
+                      const proj = findProject(projects, r.project_id);
+                      const roleBits = [
+                        r.super_count ? `${r.super_count} Super` : "",
+                        r.field_engineer_count ? `${r.field_engineer_count} Field Eng` : "",
+                        r.safety_count ? `${r.safety_count} Safety` : "",
+                        r.field_coordinator_count ? `${r.field_coordinator_count} Field Coord` : "",
+                        r.crew_count ? `${r.crew_count} Crew` : "",
+                      ].filter(Boolean);
+                      const statusStyle = r.status === "filled" ? "bg-emerald-100 text-emerald-700"
+                        : r.status === "denied" ? "bg-red-100 text-red-700"
+                        : r.status === "partial" ? "bg-blue-100 text-blue-700"
+                        : "bg-amber-100 text-amber-700";
+                      return (
+                        <tr key={r.id} className="border-t border-slate-200 align-top">
+                          <td className="p-3 font-semibold text-slate-900">{proj ? `${proj.projectNumber ? proj.projectNumber + " - " : ""}${proj.name}` : "—"}</td>
+                          <td className="p-3">{r.project_type || <span className="text-slate-300">—</span>}</td>
+                          <td className="p-3 whitespace-nowrap">{r.start_date ? formatDate(r.start_date) : "—"}{r.end_date ? ` → ${formatDate(r.end_date)}` : ""}</td>
+                          <td className="p-3">
+                            <div className="flex flex-wrap gap-1">
+                              {roleBits.length === 0 ? <span className="text-slate-300">—</span> : roleBits.map((b, i) => (
+                                <span key={i} className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{b}</span>
+                              ))}
+                            </div>
+                            {r.notes && <p className="mt-1 text-xs text-slate-500">{r.notes}</p>}
+                            {r.fill_notes && <p className="mt-1 text-xs font-semibold text-emerald-700">Filled: {r.fill_notes}</p>}
+                          </td>
+                          <td className="p-3 text-slate-600">{r.requested_by_name || "—"}</td>
+                          <td className="p-3"><span className={`rounded-full px-2 py-0.5 text-xs font-bold uppercase ${statusStyle}`}>{r.status}</span></td>
+                          <td className="p-3 text-right whitespace-nowrap">
+                            {isOffice && r.status !== "filled" && (
+                              <>
+                                <button onClick={() => { const who = window.prompt("Who is filling this? (names / notes)"); if (who != null) updateRoleRequestStatus(r.id, "filled", who); }} className="mr-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">Fill</button>
+                                <button onClick={() => updateRoleRequestStatus(r.id, "denied")} className="mr-1 rounded-lg border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50">Deny</button>
+                              </>
+                            )}
+                            {isOffice && r.status === "filled" && (
+                              <button onClick={() => updateRoleRequestStatus(r.id, "pending", "")} className="mr-1 rounded-lg border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50">Reopen</button>
+                            )}
+                            <button onClick={() => deleteRoleRequest(r.id)} className="rounded-lg border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50">✕</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
 
           {/* Project Assignment Gantt */}
           <section id="project-assignment-gantt" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -8841,6 +9101,7 @@ export default function App() {
 
       {/* Forms */}
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} onDelete={() => deleteProject(editingProjectId)} editing={Boolean(editingProjectId)} certifications={certifications} projectTypes={projectTypes} pmProfiles={pmProfiles} canEditPMs={isAdmin} />}
+      {showRoleRequestForm && roleRequestForm && <ProjectRoleRequestForm form={roleRequestForm} setForm={setRoleRequestForm} projects={projects} projectTypes={projectTypes} onSave={saveRoleRequest} onCancel={() => { setShowRoleRequestForm(false); setRoleRequestForm(null); }} busy={busy} />}
       {showTaskForm && (
         <TaskForm
           form={taskForm}
