@@ -116,6 +116,7 @@ function mapCrewFromDbLocal(c) {
     totalMembers: c.total_members || 0,
     specialty: c.specialty || [],
     crewType: c.crew_type || [],
+    level: c.level || null,
     deactivated: c.deactivated || false,
   };
 }
@@ -126,6 +127,7 @@ function crewToDbLocal(crew) {
     total_members: crew.totalMembers || 0,
     specialty: crew.specialty || [],
     crew_type: crew.crewType || [],
+    level: crew.level ? Number(crew.level) : null,
     deactivated: crew.deactivated || false,
   };
 }
@@ -146,10 +148,10 @@ function normalizeResourceCertifications(value) {
 }
 function mapResourceFromDbLocal(r) {
   const mapped = mapResourceFromDb(r);
-  return { ...mapped, certifications: normalizeResourceCertifications(mapped.certifications || r.certifications) };
+  return { ...mapped, level: r.level || null, certifications: normalizeResourceCertifications(mapped.certifications || r.certifications) };
 }
 function resourceToDbLocal(resource) {
-  return { ...resourceToDb({ ...resource, certifications: normalizeResourceCertifications(resource.certifications) }), certifications: normalizeResourceCertifications(resource.certifications) };
+  return { ...resourceToDb({ ...resource, certifications: normalizeResourceCertifications(resource.certifications) }), level: resource.level ? Number(resource.level) : null, certifications: normalizeResourceCertifications(resource.certifications) };
 }
 function formatCertificationRecord(cert) {
   const c = typeof cert === "string" ? { name: cert } : cert || {};
@@ -2102,6 +2104,15 @@ export function ResourceForm({ form, setForm, certifications, onSave, onCancel, 
             </select>
           </label>
           <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Level</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.level || ""} onChange={(e) => updateField("level", e.target.value ? Number(e.target.value) : null)}>
+              <option value="">—</option>
+              <option value="1">Level 1</option>
+              <option value="2">Level 2</option>
+              <option value="3">Level 3</option>
+            </select>
+          </label>
+          <label className="space-y-1">
             <span className="text-sm font-medium text-slate-700">Phone</span>
             <input className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.phone} onChange={(e) => updateField("phone", e.target.value)} />
           </label>
@@ -2249,6 +2260,15 @@ export function CrewForm({ form, setForm, certifications, crewTypes, onSave, onC
           <label className="space-y-1">
             <span className="text-sm font-medium text-slate-700">Total Crew Members</span>
             <input type="number" min="0" step="1" className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.totalMembers || ""} placeholder="0" onChange={(e) => updateField("totalMembers", Number(e.target.value) || 0)} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-slate-700">Level</span>
+            <select className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-emerald-600" value={form.level || ""} onChange={(e) => updateField("level", e.target.value ? Number(e.target.value) : null)}>
+              <option value="">—</option>
+              <option value="1">Level 1</option>
+              <option value="2">Level 2</option>
+              <option value="3">Level 3</option>
+            </select>
           </label>
           <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 cursor-pointer hover:bg-slate-100">
             <input
@@ -2919,7 +2939,7 @@ export function ResourceGanttRow({ resource, items, timeline, onResourceClick })
   return (
     <div className="grid grid-cols-[320px_1fr] items-center gap-0 h-7">
       <div className="sticky left-0 z-20 h-7 bg-white pr-3 text-left overflow-hidden">
-        <button onClick={() => onResourceClick?.(resource)} className="block w-full truncate text-left text-[12px] font-semibold text-slate-900 hover:text-emerald-700" title={`${resource.name} — ${resource.resourceType} • ${resource.homeDivision} • ${items.length} assignment${items.length === 1 ? "" : "s"}${ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}`}>{resource.name}</button>
+        <button onClick={() => onResourceClick?.(resource)} className="block w-full truncate text-left text-[12px] font-semibold text-slate-900 hover:text-emerald-700" title={`${resource.name} — ${resource.resourceType} • ${resource.homeDivision}${resource.level ? ` • Level ${resource.level}` : ""} • ${items.length} assignment${items.length === 1 ? "" : "s"}${ptoItems.length ? ` • ${ptoItems.length} PTO` : ""}`}>{resource.name}{resource.level ? <span className="ml-1 rounded bg-slate-700 px-1 py-0.5 text-[9px] font-bold text-white align-middle">L{resource.level}</span> : null}</button>
       </div>
       <div className="relative h-7 rounded-md" style={{ width: `${timeline.width}px` }}>
         {sortedItems.map((item) => (
@@ -3551,18 +3571,27 @@ export function TaskGrid({
 export function ProjectRoleRequestForm({ form, setForm, projects, projectTypes, onSave, onCancel, busy }) {
   const set = (k, v) => setForm((c) => ({ ...c, [k]: v }));
   const roles = [
-    ["superCount", "Superintendent"],
+    ["superCount", "Superintendent", "superMinLevel"],
     ["fieldEngineerCount", "Field Engineer"],
     ["safetyCount", "Safety"],
     ["fieldCoordinatorCount", "Field Coordinator"],
-    ["crewCount", "Crew"],
+    ["crewCount", "Crew", "crewMinLevel"],
   ];
   const totalRequested = roles.reduce((s, [k]) => s + (Number(form[k]) || 0), 0);
   const selProject = projects.find((p) => p.id === form.projectId);
-  const Stepper = ({ k, label }) => (
+  const Stepper = ({ k, label, levelKey }) => (
     <div className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3">
       <span className="text-sm font-semibold text-slate-700">{label}</span>
       <div className="flex items-center gap-2">
+        {levelKey && (Number(form[k]) || 0) > 0 && (
+          <select value={form[levelKey] || ""} onChange={(e) => set(levelKey, e.target.value ? Number(e.target.value) : null)}
+            className="rounded-lg border border-slate-300 px-1.5 py-1 text-xs" title="Minimum level">
+            <option value="">Any lvl</option>
+            <option value="1">Min L1</option>
+            <option value="2">Min L2</option>
+            <option value="3">Min L3</option>
+          </select>
+        )}
         <button type="button" onClick={() => set(k, Math.max(0, (Number(form[k]) || 0) - 1))} className="h-7 w-7 rounded-lg border border-slate-300 text-lg font-bold leading-none text-slate-600 hover:bg-slate-50">−</button>
         <input type="number" min={0} value={form[k] ?? 0} onChange={(e) => set(k, Math.max(0, parseInt(e.target.value, 10) || 0))} className="w-14 rounded-lg border border-slate-300 px-2 py-1 text-center text-sm" />
         <button type="button" onClick={() => set(k, (Number(form[k]) || 0) + 1)} className="h-7 w-7 rounded-lg border border-slate-300 text-lg font-bold leading-none text-slate-600 hover:bg-slate-50">+</button>
@@ -3611,7 +3640,7 @@ export function ProjectRoleRequestForm({ form, setForm, projects, projectTypes, 
           <div>
             <p className="mb-2 text-sm font-semibold text-slate-800">Roles needed <span className="font-normal text-slate-400">({totalRequested} total)</span></p>
             <div className="grid gap-2 md:grid-cols-2">
-              {roles.map(([k, label]) => <Stepper key={k} k={k} label={label} />)}
+              {roles.map(([k, label, levelKey]) => <Stepper key={k} k={k} label={label} levelKey={levelKey} />)}
             </div>
           </div>
           <label className="space-y-1 block">
@@ -3976,6 +4005,16 @@ export default function App() {
   const crewTimeline = useMemo(() => buildTimeline(visibleItems, crewZoom), [visibleItems, crewZoom]);
   const timelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, timeline));
   const resourceTimelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, resourceTimeline));
+  // Resource-oriented views (Resource Gantt, unassigned-need rows) must scope by
+  // the RESOURCE's home division / the NEED's division — NOT the project's
+  // division. An Industrial project needing a Hardscape super should appear
+  // under Hardscape. So we build a division-agnostic base (status + resource
+  // type only) and apply division logic per-row below.
+  const resourceScopedItems = ganttItems.filter((item) =>
+    statusFilter.includes(item.project.status) &&
+    assignmentMatchesDashboardResourceType(item.assignment)
+  );
+  const resourceScopedTimelineItems = resourceScopedItems.filter((item) => itemOverlapsTimeline(item.start, item.end, resourceTimeline));
   const crewTimelineVisibleItems = visibleItems.filter((item) => itemOverlapsTimeline(item.start, item.end, crewTimeline));
   function getUnassignedNeedsForItem(item) {
     const direct = normalizeUnassignedNeeds(item.assignment?.unassignedNeeds || item.assignment?._unassignedNeeds);
@@ -4003,18 +4042,21 @@ export default function App() {
   // Same set, but scoped to the resource gantt's independent timeline.
   // The Resource Gantt uses this when rendering unassigned-need rows so
   // that toggling the resource zoom narrows those rows accordingly.
-  const resourceUnassignedNeedItems = resourceTimelineVisibleItems.flatMap((item) =>
-    getUnassignedNeedsForItem(item).map((division) => {
-      const abbr = getDivisionAbbreviation(division);
-      return {
-        ...item,
-        id: `${item.id}-unassigned-${abbr}`,
-        isUnassignedNeed: true,
-        unassignedDivision: division,
-        unassignedAbbreviation: abbr,
-        assignment: { ...item.assignment, superintendent: `${abbr} - Unassigned` },
-      };
-    })
+  const resourceUnassignedNeedItems = resourceScopedTimelineItems.flatMap((item) =>
+    getUnassignedNeedsForItem(item)
+      // Filter by the NEED's division, not the project's.
+      .filter((division) => divisionFilter.includes(division))
+      .map((division) => {
+        const abbr = getDivisionAbbreviation(division);
+        return {
+          ...item,
+          id: `${item.id}-unassigned-${abbr}`,
+          isUnassignedNeed: true,
+          unassignedDivision: division,
+          unassignedAbbreviation: abbr,
+          assignment: { ...item.assignment, superintendent: `${abbr} - Unassigned` },
+        };
+      })
   );
   // Demand chart uses its own independent timeline scoped to demandZoom
   const demandTimeline = useMemo(() => buildTimeline(visibleItems, demandZoom), [visibleItems, demandZoom]);
@@ -4053,7 +4095,26 @@ export default function App() {
   // matches the home-division filter AND the user has "Superintendent" in
   // their resource-type filter (unassigned needs are synthesized as
   // unfilled superintendent slots — see line ~1959 above).
-  const demandFilteredItems = [...visibleItems, ...unassignedNeedItems]
+  // Division-agnostic base for the demand chart: status-filtered only, so a
+  // resource/need whose division matches the home-division filter shows up even
+  // when its PROJECT is in another division.
+  const demandScopedBase = ganttItems.filter((item) => statusFilter.includes(item.project.status));
+  const demandScopedUnassignedNeeds = demandScopedBase
+    .filter((item) => itemOverlapsTimeline(item.start, item.end, demandTimeline))
+    .flatMap((item) =>
+      getUnassignedNeedsForItem(item).map((division) => {
+        const abbr = getDivisionAbbreviation(division);
+        return {
+          ...item,
+          id: `${item.id}-unassigned-${abbr}`,
+          isUnassignedNeed: true,
+          unassignedDivision: division,
+          unassignedAbbreviation: abbr,
+          assignment: { ...item.assignment, superintendent: `${abbr} - Unassigned` },
+        };
+      })
+    );
+  const demandFilteredItems = [...demandScopedBase, ...demandScopedUnassignedNeeds]
     .filter((item) => itemOverlapsTimeline(item.start, item.end, demandTimeline))
     .filter((item) => {
       // Unassigned-need items have their own filter rule.
@@ -5011,7 +5072,11 @@ export default function App() {
       const q = dashboardResourceSearch.toLowerCase();
       if (!resource.name.toLowerCase().includes(q)) return null;
     }
-    const items = resourceTimelineVisibleItems.filter((item) =>
+    // Only show this resource when its HOME division is selected (not the
+    // project's division) — a Hardscape super on an Industrial job still shows
+    // under Hardscape.
+    if (!divisionFilter.includes(resource.homeDivision)) return null;
+    const items = resourceScopedTimelineItems.filter((item) =>
       [item.assignment.projectManager, item.assignment.superintendent, item.assignment.fieldCoordinator, item.assignment.fieldEngineer, item.assignment.safety].includes(resource.name)
     );
     if (!items.length) return null;
@@ -5474,6 +5539,7 @@ export default function App() {
   const blankRoleRequest = {
     projectId: "", projectType: "", startDate: "", endDate: "",
     superCount: 0, fieldEngineerCount: 0, safetyCount: 0, fieldCoordinatorCount: 0, crewCount: 0,
+    superMinLevel: null, crewMinLevel: null,
     notes: "",
   };
   function openRoleRequestForm(prefillProjectId) {
@@ -5495,6 +5561,8 @@ export default function App() {
       safety_count: Number(roleRequestForm.safetyCount) || 0,
       field_coordinator_count: Number(roleRequestForm.fieldCoordinatorCount) || 0,
       crew_count: Number(roleRequestForm.crewCount) || 0,
+      super_min_level: roleRequestForm.superMinLevel || null,
+      crew_min_level: roleRequestForm.crewMinLevel || null,
       notes: roleRequestForm.notes || null,
       status: "pending",
       requested_by_name: pmName || currentUser,
@@ -6390,16 +6458,54 @@ export default function App() {
   // CSV import for forecast
   function importForecastCsv(event) {
     readCsvFile(event, async (rows) => {
+      let imported = 0, skipped = 0;
       for (const row of rows) {
-        const projectNum = row.projectnumber || row.project || "";
-        const project = projects.find((p) => p.projectNumber === projectNum || p.name === (row.projectname || row.name || ""));
-        if (!project) continue;
-        const contractValue = parseFloat(row.contractvalue || row.contract || 0) || 0;
-        const spreadRule = ["even", "front", "back", "scurve"].includes(row.spreadrule) ? row.spreadrule : undefined;
+        // readCsvFile lowercases headers and strips non-alphanumerics, so
+        // "Project #" -> "project", "Contract Value" -> "contractvalue", and a
+        // month header like "2026-01" -> "202601". Build tolerant lookups.
+        const get = (...keys) => {
+          for (const k of keys) {
+            if (row[k] != null && row[k] !== "") return row[k];
+          }
+          return "";
+        };
+        const projectNum = String(get("projectnumber", "project", "projectno", "projectnum")).trim();
+        const projectName = String(get("projectname", "name")).trim();
+        const project = projects.find(
+          (p) => (projectNum && String(p.projectNumber).trim() === projectNum)
+              || (projectName && p.name.trim() === projectName)
+        );
+        if (!project) { skipped++; continue; }
+
+        const contractRaw = get("contractvalue", "contract");
+        const contractValue = parseFloat(String(contractRaw).replace(/[$,]/g, "")) || 0;
+        const spreadRaw = String(get("spreadrule")).toLowerCase();
+        const spreadRule = ["even", "front", "back", "scurve"].includes(spreadRaw) ? spreadRaw : undefined;
+
+        // Pull monthly actuals from any column whose (normalized) header encodes
+        // a YYYY-MM month — e.g. "202601", "2026 01", "jan26" won't match but the
+        // exported "2026-01" -> "202601" will. We reconstruct the month key.
+        const monthActuals = {};
+        Object.keys(row).forEach((rawKey) => {
+          const m = String(rawKey).match(/^(\d{4})[-_ ]?(\d{2})$/);
+          if (!m) return;
+          const monthKey = `${m[1]}-${m[2]}`;
+          const val = parseFloat(String(row[rawKey]).replace(/[$,]/g, ""));
+          if (!isNaN(val) && val !== 0) monthActuals[monthKey] = val;
+        });
+
+        const existing = getForecastRow(project.id);
         const patch = { contractValue };
         if (spreadRule) patch.spreadRule = spreadRule;
+        // Merge imported monthly actuals over any existing ones.
+        if (Object.keys(monthActuals).length > 0) {
+          patch.actuals = { ...(existing.actuals || {}), ...monthActuals };
+        }
         await saveForecastRow(project.id, patch);
+        imported++;
       }
+      // Recalculate spreads so the redistributed values reflect the new actuals.
+      alert(`Forecast import complete: ${imported} project${imported === 1 ? "" : "s"} updated${skipped ? `, ${skipped} row${skipped === 1 ? "" : "s"} skipped (no matching project).` : "."}`);
     });
   }
 
@@ -6982,6 +7088,7 @@ export default function App() {
                     <th onClick={() => toggleSort(setCrewSort, "crewName")} className="cursor-pointer p-3 hover:bg-slate-200">Crew Name</th>
                     <th onClick={() => toggleSort(setCrewSort, "foremanName")} className="cursor-pointer p-3 hover:bg-slate-200">Foreman Name</th>
                     <th className="p-3 text-center">Total Members</th>
+                    <th className="p-3 text-center">Level</th>
                     <th className="p-3 text-center">Status</th>
                     <th className="p-3">Crew Type</th>
                     <th className="p-3">Specialty</th>
@@ -6993,6 +7100,7 @@ export default function App() {
                       <td className="p-3 font-medium">{crew.crewName}</td>
                       <td className="p-3">{crew.foremanName}</td>
                       <td className="p-3 text-center font-semibold">{crew.totalMembers || <span className="text-slate-300">—</span>}</td>
+                      <td className="p-3 text-center">{crew.level ? <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs font-bold text-white">L{crew.level}</span> : <span className="text-slate-300">—</span>}</td>
                       <td className="p-3 text-center">
                         <span className={`rounded-full px-2 py-1 text-xs font-bold ${isCrewDeactivated(crew) ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>
                           {isCrewDeactivated(crew) ? "Deactivated" : "Active"}
@@ -7074,6 +7182,7 @@ export default function App() {
                     <th onClick={() => toggleSort(setResourceSort, "name")} className="cursor-pointer p-3 hover:bg-slate-200">Name</th>
                     <th onClick={() => toggleSort(setResourceSort, "resourceType")} className="cursor-pointer p-3 hover:bg-slate-200">Resource Type</th>
                     <th onClick={() => toggleSort(setResourceSort, "homeDivision")} className="cursor-pointer p-3 hover:bg-slate-200">Home Division</th>
+                    <th className="p-3 text-center">Level</th>
                     <th className="p-3">Phone</th><th className="p-3">Email</th>
                     <th className="p-3">Certifications</th>
                   </tr>
@@ -7084,6 +7193,7 @@ export default function App() {
                       <td className="p-3 font-medium">{resource.name}</td>
                       <td className="p-3">{resource.resourceType}</td>
                       <td className="p-3">{resource.homeDivision}</td>
+                      <td className="p-3 text-center">{resource.level ? <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs font-bold text-white">L{resource.level}</span> : <span className="text-slate-300">—</span>}</td>
                       <td className="p-3">{resource.phone}</td>
                       <td className="p-3">{resource.email}</td>
                       <td className="p-3">{normalizeResourceCertifications(resource.certifications).map(formatCertificationRecord).join("; ")}</td>
@@ -7230,11 +7340,11 @@ export default function App() {
                     }).map((r) => {
                       const proj = findProject(projects, r.project_id);
                       const roleBits = [
-                        r.super_count ? `${r.super_count} Super` : "",
+                        r.super_count ? `${r.super_count} Super${r.super_min_level ? ` (≥L${r.super_min_level})` : ""}` : "",
                         r.field_engineer_count ? `${r.field_engineer_count} Field Eng` : "",
                         r.safety_count ? `${r.safety_count} Safety` : "",
                         r.field_coordinator_count ? `${r.field_coordinator_count} Field Coord` : "",
-                        r.crew_count ? `${r.crew_count} Crew` : "",
+                        r.crew_count ? `${r.crew_count} Crew${r.crew_min_level ? ` (≥L${r.crew_min_level})` : ""}` : "",
                       ].filter(Boolean);
                       const statusStyle = r.status === "filled" ? "bg-emerald-100 text-emerald-700"
                         : r.status === "denied" ? "bg-red-100 text-red-700"
