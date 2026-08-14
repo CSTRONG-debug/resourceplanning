@@ -2397,7 +2397,10 @@ export function GanttSegmentBar({ item, timeline, label, conflict = false }) {
   const project = item.project;
   const isUnassigned = !!item.isUnassignedNeed;
   const isTentative = !!item.isTentative;
-  const barDivision = isUnassigned ? (item.unassignedDivision || project.division) : project.division;
+  // Bar color always follows the PROJECT's division (a commercial project's
+  // unfilled hardscape need still shows in the commercial color). The diagonal
+  // hatch + dark border below is what marks it as an unfilled need.
+  const barDivision = project.division;
   const colorClass = isUnassigned || project.status === "Pending Award"
     ? pendingDivisionStyles[barDivision] || "bg-slate-300"
     : divisionStyles[barDivision] || "bg-slate-700";
@@ -2529,8 +2532,9 @@ export function DraggableGanttBar({ item, timeline, label, fullLabel, showLabel 
   // a crew" — the visual inverse of a crew-only bar (which keeps its fill).
   const needsCrew = !item.isCrewOnly && hasSuper && mobCrewIds.length === 0;
   const isUnassigned = !!item.isUnassignedNeed;
-  // Division to color an unassigned-need bar by (the need's own division).
-  const unassignedDiv = item.unassignedDivision || project.division;
+  // Unassigned-need bars follow the PROJECT's division color; the hatch/border
+  // is what marks them as unfilled.
+  const unassignedDiv = project.division;
 
   const colorClass = isUnassigned
     ? (pendingDivisionStyles[unassignedDiv] || "bg-slate-300")
