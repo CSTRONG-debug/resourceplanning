@@ -3698,6 +3698,7 @@ export default function App() {
   const [roleRequests, setRoleRequests] = useState([]); // project-level multi-role requests
   const [showRoleRequestForm, setShowRoleRequestForm] = useState(false);
   const [roleRequestForm, setRoleRequestForm] = useState(null);
+  const [roleRequestBusy, setRoleRequestBusy] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [showUserSettings, setShowUserSettings] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ email: "", password: "" });
@@ -5483,7 +5484,7 @@ export default function App() {
   async function saveRoleRequest() {
     if (!roleRequestForm?.projectId) { alert("Pick a project."); return; }
     if (!supabase) { alert("Supabase is not connected."); return; }
-    setBusy(true);
+    setRoleRequestBusy(true);
     const payload = {
       project_id: roleRequestForm.projectId,
       project_type: roleRequestForm.projectType || null,
@@ -5499,7 +5500,7 @@ export default function App() {
       requested_by_name: pmName || currentUser,
     };
     const { data, error } = await supabase.from("project_role_requests").insert(payload).select().single();
-    setBusy(false);
+    setRoleRequestBusy(false);
     if (error) { console.error(error); alert(`Could not submit request: ${error.message}`); return; }
     setRoleRequests((cur) => [data, ...cur]);
     setShowRoleRequestForm(false);
@@ -9101,7 +9102,7 @@ export default function App() {
 
       {/* Forms */}
       {showProjectForm && <ProjectForm form={projectForm} setForm={setProjectForm} onSave={saveProject} onCancel={() => setShowProjectForm(false)} onDelete={() => deleteProject(editingProjectId)} editing={Boolean(editingProjectId)} certifications={certifications} projectTypes={projectTypes} pmProfiles={pmProfiles} canEditPMs={isAdmin} />}
-      {showRoleRequestForm && roleRequestForm && <ProjectRoleRequestForm form={roleRequestForm} setForm={setRoleRequestForm} projects={projects} projectTypes={projectTypes} onSave={saveRoleRequest} onCancel={() => { setShowRoleRequestForm(false); setRoleRequestForm(null); }} busy={busy} />}
+      {showRoleRequestForm && roleRequestForm && <ProjectRoleRequestForm form={roleRequestForm} setForm={setRoleRequestForm} projects={projects} projectTypes={projectTypes} onSave={saveRoleRequest} onCancel={() => { setShowRoleRequestForm(false); setRoleRequestForm(null); }} busy={roleRequestBusy} />}
       {showTaskForm && (
         <TaskForm
           form={taskForm}
